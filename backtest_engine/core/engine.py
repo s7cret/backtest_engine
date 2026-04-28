@@ -192,15 +192,39 @@ class BacktestEngine:
 
     def _matching_open_trades(self, from_entry:str|None)->list[Trade]:
         return [t for t in self.open_trades if from_entry is None or t.entry_id==from_entry]
-    def _reserved_exit_qty(self, from_entry:str|None)->float:
-        groups:dict[str,float]={}
+    def _reserved_qty_by_entry(self, exclude_order:Order|None=None)->dict[str,float]:
+        groups:dict[str,tuple[str|None,float]]={}
+        exclude_key=(exclude_order.parent_exit_id or exclude_order.id) if exclude_order is not None else None
         for o in self.orders:
-            if o.kind=='exit' and o.status in ('pending','active') and o.from_entry==from_entry:
+            if o is exclude_order or (exclude_key is not None and (o.parent_exit_id or o.id)==exclude_key): continue
+            if o.kind=='exit' and o.status in ('pending','active'):
                 key=o.parent_exit_id or o.id
-                groups[key]=max(groups.get(key,0.0), o.reserved_qty or o.qty)
-        return sum(groups.values())
-    def _available_exit_qty(self, from_entry:str|None)->float:
-        return max(0.0, sum(t.qty for t in self._matching_open_trades(from_entry))-self._reserved_exit_qty(from_entry))
+                qty=o.reserved_qty or o.qty
+                prev=groups.get(key)
+                if prev is None or qty>prev[1]: groups[key]=(o.from_entry,qty)
+        reserved:dict[str,float]={}
+        unreserved={id(t):t.qty for t in self.open_trades}
+        by_entry={t.entry_id:t for t in self.open_trades}
+        for entry,qty in groups.values():
+            if entry is not None:
+                tr=by_entry.get(entry)
+                if tr is None: continue
+                q=min(qty,unreserved.get(id(tr),0.0)); reserved[entry]=reserved.get(entry,0.0)+q; unreserved[id(tr)]=max(0.0,unreserved.get(id(tr),0.0)-q)
+        for entry,qty in groups.values():
+            if entry is not None: continue
+            remaining=qty
+            for tr in self.open_trades:
+                if remaining<=0: break
+                q=min(remaining,unreserved.get(id(tr),0.0))
+                if q<=0: continue
+                reserved[tr.entry_id]=reserved.get(tr.entry_id,0.0)+q; unreserved[id(tr)]-=q; remaining-=q
+        return reserved
+    def _reserved_exit_qty(self, from_entry:str|None, exclude_order:Order|None=None)->float:
+        by_entry=self._reserved_qty_by_entry(exclude_order)
+        if from_entry is None: return sum(by_entry.values())
+        return by_entry.get(from_entry,0.0)
+    def _available_exit_qty(self, from_entry:str|None, exclude_order:Order|None=None)->float:
+        return max(0.0, sum(t.qty for t in self._matching_open_trades(from_entry))-self._reserved_exit_qty(from_entry,exclude_order))
     def _exit_base_price(self, from_entry:str|None)->float:
         trades=self._matching_open_trades(from_entry); qty=sum(t.qty for t in trades)
         return (sum(t.entry_price*t.qty for t in trades)/qty) if qty else self.position.avg_price
@@ -269,9 +293,11 @@ class BacktestEngine:
         return path
 
     def _fill(self,o:Order,bar:Bar,i:int,price:float,point:str)->None:
-        if o.kind=='exit' and o.from_entry is not None:
-            avail=sum(t.qty for t in self._matching_open_trades(o.from_entry))
-            if avail<=0: self._diag('ORDER_REJECTED_NO_MATCHING_ENTRY','reduce order has no matching from_entry','warning',i,bar.time,o.id); return
+        if o.kind=='exit':
+            avail=self._available_exit_qty(o.from_entry,exclude_order=o)
+            if avail<=0:
+                code='ORDER_REJECTED_NO_MATCHING_ENTRY' if o.from_entry is not None else 'ORDER_REJECTED_NO_AVAILABLE_POSITION_QTY'
+                self._diag(code,'reduce order has no matching unreserved qty','warning',i,bar.time,o.id); return
             o.qty=min(o.qty,avail)
         slip=slippage_value(price,o.side,o.position_effect,self.config.slippage,self.config.slippage_type,self.config.mintick); fprice=round_to_step(price+slip,self.config.mintick,self.config.price_rounding)
         before=self.position.direction; com=calculate_commission(fprice,o.qty,self.config.commission_type,self.config.commission_value)
@@ -294,16 +320,21 @@ class BacktestEngine:
         targets=[t for t in self.open_trades if o.from_entry is None or t.entry_id==o.from_entry]
         if not targets:
             self._diag('ORDER_REJECTED_NO_MATCHING_ENTRY','reduce order has no matching from_entry','warning',i,bar.time,o.id); return self.position.direction
-        qty_close=min(qty_close,sum(t.qty for t in targets))
+        reserved=self._reserved_qty_by_entry(exclude_order=o)
+        target_caps={id(t):max(0.0,t.qty-(reserved.get(t.entry_id,0.0) if o.from_entry is None else 0.0)) for t in targets}
+        targets=[t for t in targets if target_caps[id(t)]>0]
+        if not targets:
+            self._diag('ORDER_REJECTED_NO_AVAILABLE_POSITION_QTY','reduce order has no matching unreserved qty','warning',i,bar.time,o.id); return self.position.direction
+        qty_close=min(qty_close,sum(target_caps[id(t)] for t in targets))
         gross=0.0; rem_for_profit=qty_close
         for trp in targets:
             if rem_for_profit<=0: break
-            q=min(trp.qty,rem_for_profit); gross+=self.instrument.pnl(trp.entry_price,price,q,trp.direction); rem_for_profit-=q
+            q=min(target_caps[id(trp)],rem_for_profit); gross+=self.instrument.pnl(trp.entry_price,price,q,trp.direction); rem_for_profit-=q
         profit=gross-commission; self.cash+=profit; self.position.realized_profit+=profit
         remaining=qty_close
         for tr in list(targets):
             if remaining<=0: break
-            q=min(tr.qty,remaining); p=self.instrument.pnl(tr.entry_price,price,q,tr.direction)-commission*(q/qty_close); closed=replace(tr,exit_id=o.id,exit_time=bar.time,exit_bar_index=i,exit_price=price,qty=q,commission_exit=commission*(q/qty_close),profit=p,profit_percent=(p/(tr.entry_price*q)*100 if tr.entry_price*q else 0.0),exit_reason=o.id,bars_held=i-tr.entry_bar_index,is_open=False)
+            q=min(target_caps[id(tr)],remaining); p=self.instrument.pnl(tr.entry_price,price,q,tr.direction)-commission*(q/qty_close); closed=replace(tr,exit_id=o.id,exit_time=bar.time,exit_bar_index=i,exit_price=price,qty=q,commission_exit=commission*(q/qty_close),profit=p,profit_percent=(p/(tr.entry_price*q)*100 if tr.entry_price*q else 0.0),exit_reason=o.id,bars_held=i-tr.entry_bar_index,is_open=False)
             self.closed_trades.append(closed); self._cb('on_trade_close',closed); tr.qty-=q; remaining-=q
             if tr.qty<=1e-12: self.open_trades.remove(tr)
         self.position.size+=signed
@@ -403,8 +434,10 @@ class BacktestEngine:
             rets=[(equity_curve[n].equity-equity_curve[n-1].equity)/equity_curve[n-1].equity for n in range(1,len(equity_curve)) if equity_curve[n-1].equity]
             r.sharpe_ratio=sharpe_ratio(rets); r.sortino_ratio=sortino_ratio(rets)
         for metric in self.config.required_metrics:
-            if metric=='sharpe': r.available_outputs.add('sharpe_ratio')
-            elif metric=='sortino': r.available_outputs.add('sortino_ratio')
+            if metric=='sharpe':
+                if r.sharpe_ratio is not None: r.available_outputs.add('sharpe_ratio')
+            elif metric=='sortino':
+                if r.sortino_ratio is not None: r.available_outputs.add('sortino_ratio')
             elif metric not in {'sharpe','sortino'}: self._diag('REQUIRED_METRIC_UNSUPPORTED',f'required metric {metric} is unsupported','error')
         if 'sharpe' in self.config.required_metrics and r.sharpe_ratio is None: self._diag('REQUIRED_METRIC_UNAVAILABLE','sharpe requires at least two non-constant equity returns','error')
         if 'sortino' in self.config.required_metrics and r.sortino_ratio is None: self._diag('REQUIRED_METRIC_UNAVAILABLE','sortino requires at least one downside return','error')

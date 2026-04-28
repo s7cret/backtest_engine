@@ -80,6 +80,38 @@ class BuyAndDrop:
         if bar_index==0: self.ctx.entry('L','long',qty=1)
 
 
+class ReserveFirstThenGlobalExit:
+    def __init__(self, params, runtime, ctx): self.ctx=ctx
+    def _process_bar(self, bar, bar_index):
+        if bar_index==0:
+            self.ctx.entry('L1','long',qty=1)
+            self.ctx.entry('L2','long',qty=1)
+        if bar_index==2:
+            self.ctx.exit('X1',from_entry='L1',qty=1,limit=20,stop=5)
+            self.ctx.exit('XALL',qty=2,loss=1)
+
+
+class DoNothing:
+    def __init__(self, params, runtime, ctx): pass
+    def _process_bar(self, bar, bar_index): pass
+
+
+def test_global_exit_does_not_consume_entry_reserved_by_specific_exit():
+    bars=[Bar(1,10,10,10,10),Bar(2,10,10,10,10),Bar(3,10,10,10,10),Bar(4,10,10,9,9)]
+    r=BacktestEngine(cfg(pyramiding=2)).run(ReserveFirstThenGlobalExit,bars=bars)
+    assert [(t.entry_id,t.exit_id,t.qty) for t in r.closed_trades]==[('L2','XALL:S',1.0)]
+    assert [(t.entry_id,t.qty) for t in r.open_trades]==[('L1',1.0)]
+
+
+def test_unavailable_required_metrics_are_not_marked_available_on_flat_equity():
+    bars=[Bar(1,10,10,10,10),Bar(2,10,10,10,10),Bar(3,10,10,10,10)]
+    r=BacktestEngine(cfg(required_metrics={'sharpe','sortino'})).run(DoNothing,bars=bars)
+    assert r.sharpe_ratio is None and r.sortino_ratio is None
+    assert 'sharpe_ratio' not in r.available_outputs
+    assert 'sortino_ratio' not in r.available_outputs
+    assert {d.code for d in r.errors} >= {'REQUIRED_METRIC_UNAVAILABLE'}
+
+
 def test_early_stop_still_calls_end_bar_and_callback():
     runtime=RuntimeProbe(); ended=[]
     bars=[Bar(1,10,10,10,10),Bar(2,10,10,1,1)]
@@ -109,3 +141,12 @@ def test_cli_benchmark_and_batch(tmp_path: Path):
     assert report['bars_per_sec']>0 and report['wall_time_sec']>=0 and 'peak_memory_bytes' in report
     assert cli_main(['batch','--strategy',str(strat),'--class','S','--bars',str(bars),'--jobs',str(jobs),'--symbol','S','--timeframe','1D','--output',str(batch_out),'--backend','thread'])==0
     assert set(json.loads(batch_out.read_text()))=={'j1','j2'}
+
+
+def test_cli_batch_process_backend_loads_strategy_module(tmp_path: Path):
+    strat=tmp_path/'process_strategy.py'; bars=tmp_path/'bars.json'; jobs=tmp_path/'jobs.json'; out=tmp_path/'batch-process.json'
+    strat.write_text('class S:\n    def __init__(self, params, runtime, ctx): self.ctx=ctx\n    def _process_bar(self, bar, bar_index):\n        if bar_index==0: self.ctx.entry("L","long",qty=1)\n')
+    bars.write_text(json.dumps([{'time':1,'open':10,'high':10,'low':10,'close':10},{'time':2,'open':11,'high':11,'low':11,'close':11}]))
+    jobs.write_text(json.dumps([{'job_id':'p1','params':{}},{'job_id':'p2','params':{}}]))
+    assert cli_main(['batch','--strategy',str(strat),'--class','S','--bars',str(bars),'--jobs',str(jobs),'--symbol','S','--timeframe','1D','--output',str(out),'--backend','process','--max-workers','2'])==0
+    assert set(json.loads(out.read_text()))=={'p1','p2'}

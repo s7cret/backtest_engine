@@ -1,5 +1,5 @@
 from __future__ import annotations
-import argparse, json
+import argparse, json, sys
 from pathlib import Path
 from importlib.util import spec_from_file_location, module_from_spec
 from backtest_engine import BacktestConfig, BacktestEngine, BarSeries
@@ -11,7 +11,13 @@ from backtest_engine.batch import BatchBacktestRunner, BacktestJob
 
 
 def _load_class(path:str, name:str):
-    spec=spec_from_file_location('backtest_strategy', path); mod=module_from_spec(spec); assert spec and spec.loader; spec.loader.exec_module(mod); return getattr(mod,name)
+    strategy_path=Path(path).resolve()
+    module_name=strategy_path.stem
+    parent=str(strategy_path.parent)
+    if parent not in sys.path: sys.path.insert(0,parent)
+    spec=spec_from_file_location(module_name, strategy_path); mod=module_from_spec(spec); assert spec and spec.loader
+    sys.modules[module_name]=mod
+    spec.loader.exec_module(mod); return getattr(mod,name)
 
 def _load_bars(path:str):
     rows=json.loads(Path(path).read_text())
