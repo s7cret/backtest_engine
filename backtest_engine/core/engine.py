@@ -10,7 +10,9 @@ from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.broker.slippage import slippage_value
 from backtest_engine.broker.rounding import round_to_step
 from backtest_engine.broker.fill_simulator import build_price_path, limit_reached, stop_reached
-from backtest_engine.core.validation import validate_bars, data_fingerprint
+from backtest_engine.core.deterministic_hash import sha256_obj
+from backtest_engine.core.state_snapshot import BrokerSnapshot, build_resume_state
+from backtest_engine.core.validation import data_fingerprint, validate_bars
 from backtest_engine.results import BacktestResult
 from backtest_engine.results.statistics import summarize
 
@@ -36,7 +38,6 @@ class BacktestEngine:
 
     def run(self, strategy_class:type, params:dict|None=None, bars:BarSeries|list[Bar]|None=None, callbacks:BacktestCallbacks|None=None, resume_state:BacktestResumeState|None=None)->BacktestResult:
         t0=time.perf_counter(); params=params or {}; self.callbacks=callbacks or BacktestCallbacks(); self._callbacks_disabled=False; self._reset_state(); self._validate_config()
-        if resume_state is not None: raise ResumeUnsupportedError('resume requires external strategy/runtime state serializers')
         series=self._resolve_bars(bars)
         series=self._slice_range(series)
         if self.config.validate_bars: series,_=validate_bars(series,self.config.duplicate_bar_policy)
@@ -48,9 +49,12 @@ class BacktestEngine:
         ctx=StrategyContext(self.config,self.state); runtime=self.config.runtime or _NoopRuntime()
         try: strategy=strategy_class(params=params,runtime=runtime,ctx=ctx)
         except TypeError: strategy=strategy_class(params,runtime); strategy.ctx=ctx
+        start_index=0
+        if resume_state is not None:
+            start_index=self._restore_resume_state(resume_state,strategy,runtime,ctx)
         equity_curve=[] if self._want('equity_curve') or self.config.collect_equity_curve else None
         status='completed'; early_reason=None
-        for i in range(len(series)):
+        for i in range(start_index,len(series)):
             bar=series.get_bar(i)
             self._cb('on_bar_start',bar,i)
             for o in self.orders:
@@ -71,7 +75,7 @@ class BacktestEngine:
                 if self.config.max_bars_without_trade is not None and self.last_trade_bar is not None and i-self.last_trade_bar>=self.config.max_bars_without_trade: status='early_stopped'; early_reason='max_bars_without_trade'; break
             runtime.end_bar(); self._cb('on_bar_end',bar,i,self.state)
         if self.config.force_close_on_end and self.position.direction!='flat' and len(series): self._force_close(series.get_bar(len(series)-1), len(series)-1)
-        result=self._result(series,equity_curve,status,early_reason,(time.perf_counter()-t0)*1000)
+        result=self._result(series,equity_curve,status,early_reason,(time.perf_counter()-t0)*1000,strategy,runtime)
         return result
 
     def _validate_config(self)->None:
@@ -292,7 +296,46 @@ class BacktestEngine:
                 if self.config.callback_error_policy=='raise': raise
                 self.warnings.append(Diagnostic('CALLBACK_ERROR',str(e),'warning'))
                 if self.config.callback_error_policy=='disable_callbacks': self._callbacks_disabled=True
-    def _result(self,series:BarSeries,equity_curve:list[EquityPoint]|None,status:str,reason:str|None,ms:float)->BacktestResult:
+
+    def _config_hash(self)->str:
+        snapshot=self.config.snapshot()
+        snapshot.pop('export_resume_state',None)
+        return sha256_obj(snapshot)
+
+    def _restore_resume_state(self,resume_state:BacktestResumeState,strategy:Any,runtime:Any,ctx:StrategyContext)->int:
+        if resume_state.broker_state is None:
+            raise ResumeUnsupportedError('resume_state is missing broker_state; use BacktestEngine export_resume_state or provide a compatible snapshot')
+        expected_hash=self._config_hash()
+        if resume_state.config_snapshot_hash != expected_hash:
+            msg='resume state config hash does not match current config snapshot'
+            if self.config.resume_validation_policy=='strict': raise ResumeUnsupportedError(msg)
+            self._diag('RESUME_CONFIG_MISMATCH',msg,'warning')
+        broker=resume_state.broker_state
+        if not isinstance(broker,BrokerSnapshot):
+            raise ResumeUnsupportedError('resume_state.broker_state must be a BrokerSnapshot from core.state_snapshot')
+        self.cash=broker.cash; self.equity=broker.equity; self.peak_equity=broker.peak_equity; self.max_drawdown=broker.max_drawdown; self.max_drawdown_percent=broker.max_drawdown_percent; self.position=broker.position; self.orders=broker.orders; self.fills=broker.fills; self.closed_trades=broker.closed_trades; self.open_trades=broker.open_trades; self.last_trade_bar=broker.last_trade_bar
+        self.state=StrategyStateView(initial_capital=self.config.initial_capital,cash=self.cash,equity=self.equity,_open_trades_ref=self.open_trades,_closed_trades_ref=self.closed_trades); ctx.state=self.state; self._update_state()
+        if resume_state.runtime_state is not None:
+            restore=getattr(runtime,'restore_state',None)
+            if not callable(restore): raise ResumeUnsupportedError('runtime_state is present but runtime does not implement restore_state(state)')
+            restore(resume_state.runtime_state)
+        if resume_state.strategy_state is not None:
+            restore=getattr(strategy,'restore_state',None)
+            if not callable(restore): raise ResumeUnsupportedError('strategy_state is present but strategy does not implement restore_state(state)')
+            restore(resume_state.strategy_state)
+        return max(0,resume_state.bar_index+1)
+
+    def _export_resume_state(self,bar_index:int,strategy:Any|None=None,runtime:Any|None=None)->BacktestResumeState:
+        strategy_export=getattr(strategy,'export_state',None) if strategy is not None else None
+        runtime_export=getattr(runtime,'export_state',None) if runtime is not None else None
+        strategy_state=strategy_export() if callable(strategy_export) else None
+        runtime_state=runtime_export() if callable(runtime_export) else None
+        if strategy is not None and strategy_state is None:
+            self._diag('RESUME_STRATEGY_STATE_UNAVAILABLE','strategy does not implement export_state(); resume snapshot contains engine/runtime state only','warning')
+        broker=BrokerSnapshot(self.cash,self.equity,self.peak_equity,self.max_drawdown,self.max_drawdown_percent,self.position,self.orders,self.fills,self.closed_trades,self.open_trades,self.last_trade_bar)
+        return build_resume_state(bar_index=bar_index,config_snapshot_hash=self._config_hash(),broker_state=broker,strategy_state=strategy_state,runtime_state=runtime_state,metadata={'resume_contract':'engine-broker-snapshot-v1'})
+
+    def _result(self,series:BarSeries,equity_curve:list[EquityPoint]|None,status:str,reason:str|None,ms:float,strategy:Any|None=None,runtime:Any|None=None)->BacktestResult:
         profits=[t.profit for t in self.closed_trades]; stats=summarize(profits,self.config.initial_capital,self.equity)
         r=BacktestResult(trades=(self.closed_trades+self.open_trades if self.config.collect_trade_details else None),closed_trades=(self.closed_trades if self._want('closed_trades') or self.config.collect_trade_details else None),open_trades=(self.open_trades if self._want('open_trades') or self.config.collect_trade_details else None),equity_curve=equity_curve,available_outputs=set(),initial_capital=self.config.initial_capital,final_equity=self.equity,bars_processed=len(series),execution_time_ms=ms,status=status,early_stop_reason=reason,config_snapshot=self.config.snapshot(),warnings=self.warnings,errors=self.errors,events=(self.events if self.config.collect_events or self._want('order_events') else None),data_fingerprint=self.config.data_fingerprint or data_fingerprint(series),strategy_fingerprint=self.config.strategy_fingerprint,runtime_fingerprint=self.config.runtime_fingerprint)
         for k,v in stats.items(): setattr(r,k,v)
@@ -302,5 +345,7 @@ class BacktestEngine:
         if r.equity_curve is not None: r.available_outputs.add('equity_curve')
         if r.events is not None: r.available_outputs.add('order_events')
         r.available_outputs.add('summary_metrics')
+        if self.config.export_resume_state:
+            r.resume_state=self._export_resume_state(len(series)-1,strategy,runtime)
         if self.config.content_hash_enabled: r.content_hash_value=r.content_hash(self.config.content_hash_include_equity_curve,self.config.content_hash_include_events)
         return r
