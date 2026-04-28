@@ -4,7 +4,7 @@ from dataclasses import replace
 from typing import Any
 from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext, StrategyStateView
-from backtest_engine.errors import BarMagnifierUnavailableError, ProviderError, ResumeUnsupportedError, StrategyRuntimeError
+from backtest_engine.errors import BarMagnifierUnavailableError, ConfigError, ProviderError, ResumeUnsupportedError, StrategyRuntimeError
 from backtest_engine.models import Bar, BarSeries, Order, Fill, Position, Trade, EquityPoint, Diagnostic, BacktestCallbacks, BacktestResumeState, InstrumentModel
 from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.broker.slippage import slippage_value
@@ -22,17 +22,25 @@ class BacktestEngine:
     def __init__(self, config: BacktestConfig):
         self.config=config
         self.instrument=config.instrument_model or InstrumentModel()
-        self.position=Position(); self.cash=config.initial_capital; self.equity=config.initial_capital; self.peak_equity=config.initial_capital
+        self.callbacks=BacktestCallbacks()
+        self._callbacks_disabled=False
+        self._reset_state()
+
+    def _reset_state(self)->None:
+        self.position=Position(); self.cash=self.config.initial_capital; self.equity=self.config.initial_capital; self.peak_equity=self.config.initial_capital
+        self.max_drawdown=0.0; self.max_drawdown_percent=0.0
         self.orders:list[Order]=[]; self.fills:list[Fill]=[]; self.closed_trades:list[Trade]=[]; self.open_trades:list[Trade]=[]
-        self.events:list[Diagnostic]=[]; self.warnings:list[Diagnostic]=[]; self.errors:list[Diagnostic]=[]; self.state=StrategyStateView(initial_capital=config.initial_capital,cash=config.initial_capital,equity=config.initial_capital)
-        self.callbacks=BacktestCallbacks(); self.last_trade_bar:int|None=None
+        self.events:list[Diagnostic]=[]; self.warnings:list[Diagnostic]=[]; self.errors:list[Diagnostic]=[]
+        self.state=StrategyStateView(initial_capital=self.config.initial_capital,cash=self.config.initial_capital,equity=self.config.initial_capital,_open_trades_ref=self.open_trades,_closed_trades_ref=self.closed_trades)
+        self.last_trade_bar:int|None=None
 
     def run(self, strategy_class:type, params:dict|None=None, bars:BarSeries|list[Bar]|None=None, callbacks:BacktestCallbacks|None=None, resume_state:BacktestResumeState|None=None)->BacktestResult:
-        t0=time.perf_counter(); params=params or {}; self.callbacks=callbacks or BacktestCallbacks()
+        t0=time.perf_counter(); params=params or {}; self.callbacks=callbacks or BacktestCallbacks(); self._callbacks_disabled=False; self._reset_state(); self._validate_config()
         if resume_state is not None: raise ResumeUnsupportedError('resume requires external strategy/runtime state serializers')
         series=self._resolve_bars(bars)
+        series=self._slice_range(series)
         if self.config.validate_bars: series,_=validate_bars(series,self.config.duplicate_bar_policy)
-        if self.config.use_bar_magnifier and not self.config.bar_magnifier_lower_tf:
+        if self.config.use_bar_magnifier and (not self.config.bar_magnifier_lower_tf or not self.config.data_provider or not hasattr(self.config.data_provider,'get_lower_tf_bars')):
             if self.config.bar_magnifier_missing_policy=='error': raise BarMagnifierUnavailableError('bar magnifier lower timeframe/provider unavailable')
             self._diag('BAR_MAGNIFIER_FALLBACK','bar magnifier unavailable; using OHLC path','warning')
         if self.config.calc_on_every_tick and not self.config.experimental_intrabar_strategy_mode:
@@ -51,10 +59,12 @@ class BacktestEngine:
             runtime.begin_bar(bar,i)
             self._call_strategy(strategy,bar,i); self._flush(ctx,bar,i)
             self._process_bar_fills(strategy,ctx,bar,i)
-            self._update_open_profit(bar.close); self._update_state()
-            dd=max(0.0,self.peak_equity-self.equity); ddp=dd/self.peak_equity*100 if self.peak_equity else 0.0
-            if equity_curve is not None: equity_curve.append(EquityPoint(i,bar.time,self.equity,self.cash,self.position.size,self.position.avg_price if self.position.direction!='flat' else None,self.position.open_profit,self.position.realized_profit,dd,ddp))
+            self._update_open_profit(bar.close); self._update_trade_excursions(bar); self._update_state()
             if self.equity>self.peak_equity: self.peak_equity=self.equity
+            dd=max(0.0,self.peak_equity-self.equity); ddp=dd/self.peak_equity*100 if self.peak_equity else 0.0
+            self.max_drawdown=max(self.max_drawdown,dd); self.max_drawdown_percent=max(self.max_drawdown_percent,ddp); self._update_state()
+            if equity_curve is not None:
+                point=EquityPoint(i,bar.time,self.equity,self.cash,self.position.size,self.position.avg_price if self.position.direction!='flat' else None,self.position.open_profit,self.position.realized_profit,dd,ddp); equity_curve.append(point); self._cb('on_equity',point)
             if self.config.early_stop_enabled:
                 if self.config.min_equity_stop is not None and self.equity <= self.config.min_equity_stop: status='early_stopped'; early_reason='min_equity_stop'; break
                 if self.config.max_drawdown_stop_percent is not None and ddp >= self.config.max_drawdown_stop_percent: status='early_stopped'; early_reason='max_drawdown_stop_percent'; break
@@ -63,6 +73,26 @@ class BacktestEngine:
         if self.config.force_close_on_end and self.position.direction!='flat' and len(series): self._force_close(series.get_bar(len(series)-1), len(series)-1)
         result=self._result(series,equity_curve,status,early_reason,(time.perf_counter()-t0)*1000)
         return result
+
+    def _validate_config(self)->None:
+        if self.config.margin_long != 100.0 or self.config.margin_short != 100.0:
+            if self.config.unsupported_margin_policy=='error': raise ConfigError('margin/liquidation model is unsupported')
+            if self.config.unsupported_margin_policy=='warn': self._diag('MARGIN_UNSUPPORTED','margin settings are recorded but liquidation is unsupported','warning')
+        if self.config.tradingview_compare_mode=='streaming' and self.config.execution_mode!='debug':
+            raise ConfigError('streaming TradingView compare requires execution_mode=debug')
+        if 'equity_curve' in self.config.required_outputs and not self.config.collect_equity_curve:
+            self.config.collect_equity_curve=True
+        if 'order_lifecycle' in self.config.required_outputs or 'order_events' in self.config.required_outputs:
+            self.config.collect_events=True
+        if 'mfe_mae' in self.config.required_outputs:
+            self.config.collect_mfe_mae=True; self.config.collect_trade_details=True
+
+    def _slice_range(self,series:BarSeries)->BarSeries:
+        start=self.config.start_time; end=self.config.end_time
+        idx=[i for i,t in enumerate(series.time) if int(t)>=start and int(t)<=end]
+        if not idx: return BarSeries([],[],[],[],[],[])
+        first=max(0,idx[0]-max(0,self.config.max_bars_back)); last=idx[-1]+1
+        return BarSeries(series.time[first:last],series.open[first:last],series.high[first:last],series.low[first:last],series.close[first:last],None if series.volume is None else series.volume[first:last])
 
     def _resolve_bars(self,bars:BarSeries|list[Bar]|None)->BarSeries:
         src=bars if bars is not None else self.config.preloaded_bars
@@ -143,14 +173,17 @@ class BacktestEngine:
         recalc=0
         while True:
             filled=False
-            path=[(bar.close,'close')] if self.config.fill_model=='close_only' else build_price_path(bar)
+            path=self._price_path(bar)
             for price,point in path:
                 for o in list(self.orders):
                     if o.status!='active': continue
-                    if o.order_type=='market' and ((point=='open' and o.created_bar_index < i) or (point=='close' and (self.config.process_orders_on_close or o.immediately))): pass
+                    is_open_point = point == 'open' or point.endswith('.open')
+                    is_close_point = point == 'close' or point.endswith('.close')
+                    if o.order_type=='market' and ((is_open_point and o.created_bar_index < i) or (is_close_point and (self.config.process_orders_on_close or o.immediately))): pass
                     elif o.order_type=='limit' and limit_reached(o,price,bar,self.config.mintick,self.config.backtest_fill_limits_assumption_ticks): price=o.limit_price or price
                     elif o.order_type=='stop' and stop_reached(o,price):
                         if self.config.stop_gap_fill_policy=='stop_price': price=o.stop_price or price
+                        elif not is_open_point and not self.config.fill_worse_stop_at_path_price: price=o.stop_price or price
                     elif o.order_type=='stop_limit':
                         if not o.stop_limit_activated and stop_reached(o,price): o.stop_limit_activated=True; self._event('STOP_LIMIT_ACTIVATED',f'stop-limit {o.id} activated',i,bar.time,o.id)
                         if not (o.stop_limit_activated and limit_reached(o,price,bar,self.config.mintick,self.config.backtest_fill_limits_assumption_ticks)): continue
@@ -162,6 +195,30 @@ class BacktestEngine:
                         if recalc>self.config.max_recalc_depth: self._diag('MAX_RECALC_DEPTH_REACHED','max recalc depth reached','warning',i,bar.time); return
                         self._call_strategy(strategy,bar,i); self._flush(ctx,bar,i)
             if not (self.config.calc_on_order_fills and filled): break
+
+    def _price_path(self,bar:Bar)->list[tuple[float,str]]:
+        if self.config.fill_model=='close_only': return [(bar.close,'close')]
+        if not self.config.use_bar_magnifier: return build_price_path(bar)
+        provider=self.config.data_provider
+        if not provider or not self.config.bar_magnifier_lower_tf or not hasattr(provider,'get_lower_tf_bars'):
+            return build_price_path(bar)
+        try:
+            lower=provider.get_lower_tf_bars(self.config.symbol,self.config.timeframe,self.config.bar_magnifier_lower_tf,bar)
+            lower_series=lower if isinstance(lower,BarSeries) else BarSeries.from_bars(lower)
+        except Exception as e:
+            if self.config.bar_magnifier_missing_policy=='error': raise BarMagnifierUnavailableError(str(e)) from e
+            self._diag('BAR_MAGNIFIER_FALLBACK','lower timeframe bars unavailable; using OHLC path','warning')
+            return build_price_path(bar)
+        if len(lower_series)==0:
+            if self.config.bar_magnifier_missing_policy=='error': raise BarMagnifierUnavailableError('empty lower timeframe bars')
+            self._diag('BAR_MAGNIFIER_FALLBACK','empty lower timeframe bars; using OHLC path','warning')
+            return build_price_path(bar)
+        path:list[tuple[float,str]]=[]
+        for j in range(len(lower_series)):
+            lb=lower_series.get_bar(j)
+            for price,point in build_price_path(lb):
+                path.append((price,f'lower[{j}].{point}'))
+        return path
 
     def _fill(self,o:Order,bar:Bar,i:int,price:float,point:str)->None:
         slip=slippage_value(price,o.side,o.position_effect,self.config.slippage,self.config.slippage_type,self.config.mintick); fprice=round_to_step(price+slip,self.config.mintick,self.config.price_rounding)
@@ -176,23 +233,35 @@ class BacktestEngine:
         dir=o.direction; signed=o.qty if o.side=='buy' else -o.qty
         if self.position.direction=='flat' or (self.position.size==0):
             self.position.size=signed; self.position.direction='long' if signed>0 else 'short'; self.position.avg_price=price
-            self.open_trades.append(Trade(o.id,o.id,None,self.position.direction,bar.time,i,price,None,None,None,abs(signed),commission,0.0,-commission,0.0,is_open=True)); return self.position.direction
+            tr=Trade(o.id,o.id,None,self.position.direction,bar.time,i,price,None,None,None,abs(signed),commission,0.0,-commission,0.0,is_open=True); self.open_trades.append(tr); self._cb('on_trade_open',tr); return self.position.direction
         cur_sign=1 if self.position.direction=='long' else -1
         if signed*cur_sign>0:
             newabs=abs(self.position.size)+abs(signed); self.position.avg_price=(self.position.avg_price*abs(self.position.size)+price*abs(signed))/newabs; self.position.size+=signed
-            self.open_trades.append(Trade(o.id,o.id,None,self.position.direction,bar.time,i,price,None,None,None,abs(signed),commission,0.0,-commission,0.0,is_open=True)); return self.position.direction
+            tr=Trade(o.id,o.id,None,self.position.direction,bar.time,i,price,None,None,None,abs(signed),commission,0.0,-commission,0.0,is_open=True); self.open_trades.append(tr); self._cb('on_trade_open',tr); return self.position.direction
         qty_close=min(abs(signed),abs(self.position.size)); profit=self.instrument.pnl(self.position.avg_price,price,qty_close,self.position.direction)-commission; self.cash+=profit; self.position.realized_profit+=profit
         remaining=qty_close
         for tr in list(self.open_trades):
             if remaining<=0: break
             q=min(tr.qty,remaining); p=self.instrument.pnl(tr.entry_price,price,q,tr.direction)-commission*(q/qty_close); closed=replace(tr,exit_id=o.id,exit_time=bar.time,exit_bar_index=i,exit_price=price,qty=q,commission_exit=commission*(q/qty_close),profit=p,profit_percent=(p/(tr.entry_price*q)*100 if tr.entry_price*q else 0.0),exit_reason=o.id,bars_held=i-tr.entry_bar_index,is_open=False)
-            self.closed_trades.append(closed); tr.qty-=q; remaining-=q
+            self.closed_trades.append(closed); self._cb('on_trade_close',closed); tr.qty-=q; remaining-=q
             if tr.qty<=1e-12: self.open_trades.remove(tr)
         self.position.size+=signed
         if abs(self.position.size)<1e-12: self.position=Position(realized_profit=self.position.realized_profit); return 'flat'
         if self.position.size*cur_sign<0:
-            self.position.direction='long' if self.position.size>0 else 'short'; self.position.avg_price=price; self.open_trades.append(Trade(o.id,o.id,None,self.position.direction,bar.time,i,price,None,None,None,abs(self.position.size),0.0,0.0,0.0,0.0,is_open=True))
+            self.position.direction='long' if self.position.size>0 else 'short'; self.position.avg_price=price; tr=Trade(o.id,o.id,None,self.position.direction,bar.time,i,price,None,None,None,abs(self.position.size),0.0,0.0,0.0,0.0,is_open=True); self.open_trades.append(tr); self._cb('on_trade_open',tr)
         return self.position.direction
+
+    def _update_trade_excursions(self,bar:Bar)->None:
+        if not self.config.collect_mfe_mae: return
+        for tr in self.open_trades:
+            if tr.direction=='long':
+                fav=self.instrument.pnl(tr.entry_price,bar.high,tr.qty,tr.direction); adv=self.instrument.pnl(tr.entry_price,bar.low,tr.qty,tr.direction)
+            else:
+                fav=self.instrument.pnl(tr.entry_price,bar.low,tr.qty,tr.direction); adv=self.instrument.pnl(tr.entry_price,bar.high,tr.qty,tr.direction)
+            tr.mfe=fav if tr.mfe is None else max(tr.mfe,fav)
+            tr.mae=adv if tr.mae is None else min(tr.mae,adv)
+            tr.profit=self.instrument.pnl(tr.entry_price,bar.close,tr.qty,tr.direction)-tr.commission_entry
+            self._cb('on_trade_update',tr)
 
     def _apply_oca(self,o:Order)->None:
         if not o.oca_name: return
@@ -209,7 +278,7 @@ class BacktestEngine:
         self.position.open_profit=0.0 if self.position.direction=='flat' else self.instrument.pnl(self.position.avg_price,price,abs(self.position.size),self.position.direction)
         self.equity=self.cash+self.position.open_profit
     def _update_state(self)->None:
-        self.state.position_size=self.position.size; self.state.position_avg_price=None if self.position.direction=='flat' else self.position.avg_price; self.state.position_direction=self.position.direction; self.state.cash=self.cash; self.state.equity=self.equity; self.state.open_profit=self.position.open_profit; self.state.net_profit=self.equity-self.config.initial_capital; self.state.gross_profit=sum(t.profit for t in self.closed_trades if t.profit>0); self.state.gross_loss=sum(t.profit for t in self.closed_trades if t.profit<0); self.state.closed_trades=len(self.closed_trades); self.state.open_trades=len(self.open_trades)
+        self.state.position_size=self.position.size; self.state.position_avg_price=None if self.position.direction=='flat' else self.position.avg_price; self.state.position_direction=self.position.direction; self.state.cash=self.cash; self.state.equity=self.equity; self.state.open_profit=self.position.open_profit; self.state.net_profit=self.equity-self.config.initial_capital; self.state.gross_profit=sum(t.profit for t in self.closed_trades if t.profit>0); self.state.gross_loss=sum(t.profit for t in self.closed_trades if t.profit<0); self.state.max_drawdown=self.max_drawdown; self.state.max_drawdown_percent=self.max_drawdown_percent; self.state.closed_trades=len(self.closed_trades); self.state.open_trades=len(self.open_trades)
     def _want(self,name:str)->bool: return name in self.config.required_outputs
     def _event(self,code,msg,i=None,t=None,oid=None)->None:
         if self.config.collect_events: self.events.append(Diagnostic(code,msg,'info',i,t,oid))
@@ -217,16 +286,17 @@ class BacktestEngine:
         d=Diagnostic(code,msg,severity,i,t,oid); (self.errors if severity=='error' else self.warnings).append(d); self._cb('on_diagnostic',d)
     def _cb(self,name:str,*args:Any)->None:
         fn=getattr(self.callbacks,name,None)
-        if fn:
+        if fn and not self._callbacks_disabled:
             try: fn(*args)
             except Exception as e:
                 if self.config.callback_error_policy=='raise': raise
-                self._diag('CALLBACK_ERROR',str(e),'warning')
+                self.warnings.append(Diagnostic('CALLBACK_ERROR',str(e),'warning'))
+                if self.config.callback_error_policy=='disable_callbacks': self._callbacks_disabled=True
     def _result(self,series:BarSeries,equity_curve:list[EquityPoint]|None,status:str,reason:str|None,ms:float)->BacktestResult:
         profits=[t.profit for t in self.closed_trades]; stats=summarize(profits,self.config.initial_capital,self.equity)
         r=BacktestResult(trades=(self.closed_trades+self.open_trades if self.config.collect_trade_details else None),closed_trades=(self.closed_trades if self._want('closed_trades') or self.config.collect_trade_details else None),open_trades=(self.open_trades if self._want('open_trades') or self.config.collect_trade_details else None),equity_curve=equity_curve,available_outputs=set(),initial_capital=self.config.initial_capital,final_equity=self.equity,bars_processed=len(series),execution_time_ms=ms,status=status,early_stop_reason=reason,config_snapshot=self.config.snapshot(),warnings=self.warnings,errors=self.errors,events=(self.events if self.config.collect_events or self._want('order_events') else None),data_fingerprint=self.config.data_fingerprint or data_fingerprint(series),strategy_fingerprint=self.config.strategy_fingerprint,runtime_fingerprint=self.config.runtime_fingerprint)
         for k,v in stats.items(): setattr(r,k,v)
-        r.max_drawdown=max((p.drawdown for p in equity_curve), default=0.0) if equity_curve else 0.0; r.max_drawdown_percent=max((p.drawdown_percent for p in equity_curve), default=0.0) if equity_curve else 0.0
+        r.max_drawdown=max((p.drawdown for p in equity_curve), default=self.max_drawdown) if equity_curve else self.max_drawdown; r.max_drawdown_percent=max((p.drawdown_percent for p in equity_curve), default=self.max_drawdown_percent) if equity_curve else self.max_drawdown_percent
         if r.closed_trades is not None: r.available_outputs.add('closed_trades')
         if r.open_trades is not None: r.available_outputs.add('open_trades')
         if r.equity_curve is not None: r.available_outputs.add('equity_curve')
