@@ -36,10 +36,12 @@ class BacktestEngine:
         self.events:list[Diagnostic]=[]; self.warnings:list[Diagnostic]=[]; self.errors:list[Diagnostic]=[]
         self.state=StrategyStateView(initial_capital=self.config.initial_capital,cash=self.config.initial_capital,equity=self.config.initial_capital,_open_trades_ref=self.open_trades,_closed_trades_ref=self.closed_trades)
         self.last_trade_bar:int|None=None
+        self._effective_mintick:float|None=self.config.mintick
 
     def run(self, strategy_class:type, params:dict|None=None, bars:BarSeries|list[Bar]|None=None, callbacks:BacktestCallbacks|None=None, resume_state:BacktestResumeState|None=None)->BacktestResult:
         t0=time.perf_counter(); params=params or {}; self.callbacks=callbacks or BacktestCallbacks(); self._callbacks_disabled=False; self._reset_state(); self._validate_config()
         series=self._resolve_bars(bars)
+        self._effective_mintick=self.config.mintick or self._infer_price_tick(series)
         series=self._slice_range(series)
         if self.config.validate_bars: series,_=validate_bars(series,self.config.duplicate_bar_policy)
         if self.config.use_bar_magnifier and (not self.config.bar_magnifier_lower_tf or not self.config.data_provider or not hasattr(self.config.data_provider,'get_lower_tf_bars')):
@@ -114,6 +116,16 @@ class BacktestEngine:
         if isinstance(src,BarSeries): return src
         return BarSeries.from_bars(src)
 
+    def _infer_price_tick(self,series:BarSeries)->float|None:
+        places=0
+        sample=min(len(series),100)
+        for i in range(sample):
+            b=series.get_bar(i)
+            for value in (b.open,b.high,b.low,b.close):
+                text=(f'{value:.10f}').rstrip('0').rstrip('.')
+                if '.' in text: places=max(places,len(text.rsplit('.',1)[1]))
+        return 10.0**(-places) if places else 1.0
+
     def _call_strategy(self,strategy:Any,bar:Bar,i:int)->None:
         try: strategy._process_bar(bar,i)
         except Exception as e: raise StrategyRuntimeError(str(e)) from e
@@ -153,9 +165,11 @@ class BacktestEngine:
                 if stop is not None: self._add_order(Order(id=kw['id']+':S', kind='exit', direction=direction, side=side, position_effect='reduce', order_type='stop', qty=qty, created_bar_index=i, created_time=bar.time, active_from_bar_index=i+1, position_direction=direction, reduce_only=True, stop_price=stop, from_entry=from_entry, oca_name=oca, oca_type='reduce', reserved_qty=qty, parent_exit_id=kw['id'], comment=kw.get('comment')),bar,i)
                 if has_trail:
                     points=kw.get('trail_points'); activation=kw.get('trail_price')
-                    if activation is None and points is not None: activation=base+float(points) if direction=='long' else base-float(points)
-                    offset=float(kw.get('trail_offset') if kw.get('trail_offset') is not None else (points if points is not None else 0.0))
-                    self._add_order(Order(id=kw['id']+':T', kind='exit', direction=direction, side=side, position_effect='reduce', order_type='stop', qty=qty, created_bar_index=i, created_time=bar.time, active_from_bar_index=i+1, position_direction=direction, reduce_only=True, stop_price=None, from_entry=from_entry, oca_name=oca, oca_type='reduce', reserved_qty=qty, parent_exit_id=kw['id'], comment=kw.get('comment'), trail_price=activation, trail_points=points, trail_offset=offset),bar,i)
+                    tick=self._effective_mintick or 1.0
+                    points_price=float(points)*tick if points is not None else None
+                    if activation is None and points_price is not None: activation=base+points_price if direction=='long' else base-points_price
+                    offset=float(kw.get('trail_offset') if kw.get('trail_offset') is not None else (points if points is not None else 0.0))*tick
+                    self._add_order(Order(id=kw['id']+':T', kind='exit', direction=direction, side=side, position_effect='reduce', order_type='stop', qty=qty, created_bar_index=i, created_time=bar.time, active_from_bar_index=i+1, position_direction=direction, reduce_only=True, stop_price=None, from_entry=from_entry, oca_name=oca, oca_type='reduce', reserved_qty=qty, parent_exit_id=kw['id'], comment=kw.get('comment'), trail_price=activation, trail_points=points_price, trail_offset=offset),bar,i)
                 continue
             direction=kw['direction']; side='buy' if direction=='long' else 'sell'; qty=self._qty_from_args(kw,None,bar.close)
             effect='open'
@@ -250,8 +264,15 @@ class BacktestEngine:
                 if open_only and not path_is_open: continue
                 if skip_open and path_is_open: continue
                 for o in list(self.orders):
-                    if o.status!='active': continue
+                    if o.status!='active':
+                        if not (o.status == 'pending' and o.created_bar_index == i and o.trail_price is not None):
+                            continue
+                        self._update_trailing_order(o,price)
+                        continue
+                    was_trail_activated=o.trail_activated
                     self._update_trailing_order(o,price)
+                    if path_is_open and o.trail_price is not None and not was_trail_activated and o.trail_activated:
+                        o.stop_price=price
                     if o.kind=='exit' and o.from_entry is not None and not self._matching_open_trades(o.from_entry): continue
                     if o.order_type=='stop' and o.stop_price is None: continue
                     is_open_point = path_is_open
@@ -391,7 +412,7 @@ class BacktestEngine:
         adverse_price=bar.low if self.position.direction=='long' else bar.high
         adverse_profit=self.instrument.pnl(self.position.avg_price,adverse_price,abs(self.position.size),self.position.direction)
         adverse_equity=self.cash+adverse_profit
-        baseline=max(self.peak_equity,self.config.initial_capital)
+        baseline=self.config.initial_capital
         dd=max(0.0,baseline-adverse_equity); ddp=dd/baseline*100 if baseline else 0.0
         self.max_drawdown=max(self.max_drawdown,dd); self.max_drawdown_percent=max(self.max_drawdown_percent,ddp)
     def _update_state(self)->None:
