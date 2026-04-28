@@ -10,4 +10,18 @@ from .equity import EquityPoint
 from .callbacks import BacktestCallbacks
 from .resume import BacktestResumeState
 from .job import BacktestJob
-__all__=['Bar','BarSeries','InstrumentModel','Diagnostic','Order','Fill','Position','Trade','EquityPoint','BacktestCallbacks','BacktestResumeState','BacktestJob']
+
+__all__ = [
+    "Bar",
+    "BarSeries",
+    "InstrumentModel",
+    "Diagnostic",
+    "Order",
+    "Fill",
+    "Position",
+    "Trade",
+    "EquityPoint",
+    "BacktestCallbacks",
+    "BacktestResumeState",
+    "BacktestJob",
+]

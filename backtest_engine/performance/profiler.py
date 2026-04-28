@@ -1,1 +1,2 @@
-def noop(): return None
+def noop():
+    return None

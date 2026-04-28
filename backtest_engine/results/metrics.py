@@ -11,7 +11,9 @@ def trade_profits(trades: Iterable[Trade]) -> list[float]:
     return [float(trade.profit) for trade in trades]
 
 
-def summary_metrics(*, profits: Iterable[float], initial_capital: float, final_equity: float) -> dict[str, float | int]:
+def summary_metrics(
+    *, profits: Iterable[float], initial_capital: float, final_equity: float
+) -> dict[str, float | int]:
     return summarize(list(profits), initial_capital, final_equity)
 
 

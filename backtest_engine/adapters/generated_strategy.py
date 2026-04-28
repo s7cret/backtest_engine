@@ -81,19 +81,84 @@ class _BridgeStrategyContext:
         self.losstrades = sum(1 for trade in closed if trade.profit < 0)
         self.eventrades = sum(1 for trade in closed if trade.profit == 0)
 
-    def entry(self, id: str, direction: str, qty: float | None = None, limit: float | None = None, stop: float | None = None, *, source_map: object | None = None) -> None:
+    def entry(
+        self,
+        id: str,
+        direction: str,
+        qty: float | None = None,
+        limit: float | None = None,
+        stop: float | None = None,
+        *,
+        source_map: object | None = None,
+    ) -> None:
         del source_map
-        self._engine_ctx.entry(id=id, direction=_direction(direction), qty=qty, limit=limit, stop=stop)
+        self._engine_ctx.entry(
+            id=id, direction=_direction(direction), qty=qty, limit=limit, stop=stop
+        )
 
-    def order(self, id: str, direction: str, qty: float | None = None, limit: float | None = None, stop: float | None = None, oca_name: str | None = None, oca_type: str | None = None, *, source_map: object | None = None) -> None:
+    def order(
+        self,
+        id: str,
+        direction: str,
+        qty: float | None = None,
+        limit: float | None = None,
+        stop: float | None = None,
+        oca_name: str | None = None,
+        oca_type: str | None = None,
+        *,
+        source_map: object | None = None,
+    ) -> None:
         del source_map
-        self._engine_ctx.order(id=id, direction=_direction(direction), qty=qty, limit=limit, stop=stop, oca_name=oca_name, oca_type=oca_type)
+        self._engine_ctx.order(
+            id=id,
+            direction=_direction(direction),
+            qty=qty,
+            limit=limit,
+            stop=stop,
+            oca_name=oca_name,
+            oca_type=oca_type,
+        )
 
-    def exit(self, id: str, from_entry: str | None = None, qty: float | None = None, qty_percent: float | None = None, limit: float | None = None, stop: float | None = None, profit: float | None = None, loss: float | None = None, trail_price: float | None = None, trail_points: float | None = None, trail_offset: float | None = None, *, source_map: object | None = None) -> None:
+    def exit(
+        self,
+        id: str,
+        from_entry: str | None = None,
+        qty: float | None = None,
+        qty_percent: float | None = None,
+        limit: float | None = None,
+        stop: float | None = None,
+        profit: float | None = None,
+        loss: float | None = None,
+        trail_price: float | None = None,
+        trail_points: float | None = None,
+        trail_offset: float | None = None,
+        *,
+        source_map: object | None = None,
+    ) -> None:
         del source_map
-        self._engine_ctx.exit(id=id, from_entry=from_entry, qty=qty, qty_percent=qty_percent, limit=limit, stop=stop, profit=profit, loss=loss, trail_price=trail_price, trail_points=trail_points, trail_offset=trail_offset)
+        self._engine_ctx.exit(
+            id=id,
+            from_entry=from_entry,
+            qty=qty,
+            qty_percent=qty_percent,
+            limit=limit,
+            stop=stop,
+            profit=profit,
+            loss=loss,
+            trail_price=trail_price,
+            trail_points=trail_points,
+            trail_offset=trail_offset,
+        )
 
-    def close(self, id: str, qty: float | None = None, qty_percent: float | None = None, immediately: bool = False, *, source_map: object | None = None) -> None:
+    def close(
+        self,
+        id: str,
+        qty: float | None = None,
+        qty_percent: float | None = None,
+        immediately: bool = False,
+        *,
+        source_map: object | None = None,
+    ) -> None:
         del source_map
         self._engine_ctx.close(id=id, qty=qty, qty_percent=qty_percent, immediately=immediately)
 
@@ -131,14 +196,21 @@ def make_generated_strategy_adapter(
     class BacktestGeneratedStrategyAdapter:
         generated_strategy_class_ref = generated_strategy_class
 
-        def __init__(self, params: dict[str, Any] | None = None, runtime: Any | None = None, ctx: EngineStrategyContext | None = None) -> None:
+        def __init__(
+            self,
+            params: dict[str, Any] | None = None,
+            runtime: Any | None = None,
+            ctx: EngineStrategyContext | None = None,
+        ) -> None:
             del runtime
             if ctx is None:
                 raise GeneratedStrategyBridgeError("BacktestEngine StrategyContext is required")
             self.ctx = ctx
             self._pine_runtime = _make_pine_runtime(adapter_options)
             self.generated = generated_strategy_class(params=params, runtime=self._pine_runtime)
-            self._validate_generated_declaration(getattr(self.generated, "ctx", None), adapter_options)
+            self._validate_generated_declaration(
+                getattr(self.generated, "ctx", None), adapter_options
+            )
             self._bridge_ctx = _BridgeStrategyContext(ctx)
             self._bridge_ctx.attach_runtime(self._pine_runtime)
             self.generated.ctx = self._bridge_ctx
@@ -150,7 +222,9 @@ def make_generated_strategy_adapter(
                 self._bridge_ctx._sync_from_engine()
                 process = getattr(self.generated, "_process_bar", None)
                 if not callable(process):
-                    raise GeneratedStrategyBridgeError("generated strategy must expose _process_bar(bar)")
+                    raise GeneratedStrategyBridgeError(
+                        "generated strategy must expose _process_bar(bar)"
+                    )
                 process(pine_bar)
             finally:
                 self._pine_runtime.end_bar()
@@ -160,20 +234,41 @@ def make_generated_strategy_adapter(
                 )
 
         @staticmethod
-        def _validate_generated_declaration(generated_ctx: Any, opts: GeneratedStrategyAdapterOptions) -> None:
+        def _validate_generated_declaration(
+            generated_ctx: Any, opts: GeneratedStrategyAdapterOptions
+        ) -> None:
             declaration = getattr(generated_ctx, "declaration", None)
             if declaration is None:
                 return
-            if opts.fail_on_calc_on_order_fills and bool(getattr(declaration, "calc_on_order_fills", False)):
-                raise UnsupportedGeneratedStrategySemantics("calc_on_order_fills generated semantics require an explicit recalc bridge")
-            if opts.fail_on_calc_on_every_tick and bool(getattr(declaration, "calc_on_every_tick", False)):
-                raise UnsupportedGeneratedStrategySemantics("calc_on_every_tick generated semantics require explicit tick data scheduling")
-            if opts.fail_on_bar_magnifier and bool(getattr(declaration, "use_bar_magnifier", False)):
-                raise UnsupportedGeneratedStrategySemantics("use_bar_magnifier generated semantics require explicit lower-timeframe bridge")
-            if opts.fail_on_nonstandard_margin and (float(getattr(declaration, "margin_long", 100.0)) != 100.0 or float(getattr(declaration, "margin_short", 100.0)) != 100.0):
-                raise UnsupportedGeneratedStrategySemantics("non-standard generated margin settings are not adapted")
+            if opts.fail_on_calc_on_order_fills and bool(
+                getattr(declaration, "calc_on_order_fills", False)
+            ):
+                raise UnsupportedGeneratedStrategySemantics(
+                    "calc_on_order_fills generated semantics require an explicit recalc bridge"
+                )
+            if opts.fail_on_calc_on_every_tick and bool(
+                getattr(declaration, "calc_on_every_tick", False)
+            ):
+                raise UnsupportedGeneratedStrategySemantics(
+                    "calc_on_every_tick generated semantics require explicit tick data scheduling"
+                )
+            if opts.fail_on_bar_magnifier and bool(
+                getattr(declaration, "use_bar_magnifier", False)
+            ):
+                raise UnsupportedGeneratedStrategySemantics(
+                    "use_bar_magnifier generated semantics require explicit lower-timeframe bridge"
+                )
+            if opts.fail_on_nonstandard_margin and (
+                float(getattr(declaration, "margin_long", 100.0)) != 100.0
+                or float(getattr(declaration, "margin_short", 100.0)) != 100.0
+            ):
+                raise UnsupportedGeneratedStrategySemantics(
+                    "non-standard generated margin settings are not adapted"
+                )
 
-    BacktestGeneratedStrategyAdapter.__name__ = f"Backtest{getattr(generated_strategy_class, '__name__', 'GeneratedStrategy')}Adapter"
+    BacktestGeneratedStrategyAdapter.__name__ = (
+        f"Backtest{getattr(generated_strategy_class, '__name__', 'GeneratedStrategy')}Adapter"
+    )
     BacktestGeneratedStrategyAdapter.__qualname__ = BacktestGeneratedStrategyAdapter.__name__
     return BacktestGeneratedStrategyAdapter
 
@@ -183,7 +278,9 @@ def _make_pine_runtime(options: GeneratedStrategyAdapterOptions) -> Any:
         from pinelib.core import PineRuntime
         from pinelib.core.types import RuntimeConfig, SymbolInfo, TimeframeInfo
     except ImportError as exc:  # pragma: no cover - depends on optional install state
-        raise GeneratedStrategyBridgeError("PineLib is required to run generated strategy adapters") from exc
+        raise GeneratedStrategyBridgeError(
+            "PineLib is required to run generated strategy adapters"
+        ) from exc
     return PineRuntime(
         symbol_info=SymbolInfo(tickerid=options.symbol, timezone=options.timezone),
         timeframe=TimeframeInfo.from_string(options.timeframe),
@@ -195,7 +292,9 @@ def _to_pine_bar(bar: EngineBar) -> Any:
     try:
         from pinelib.core import Bar as PineBar
     except ImportError as exc:  # pragma: no cover - depends on optional install state
-        raise GeneratedStrategyBridgeError("PineLib is required to convert bars for generated strategy adapters") from exc
+        raise GeneratedStrategyBridgeError(
+            "PineLib is required to convert bars for generated strategy adapters"
+        ) from exc
     return PineBar(
         time=bar.time,
         open=bar.open,
@@ -208,7 +307,9 @@ def _to_pine_bar(bar: EngineBar) -> Any:
 
 def _direction(value: str) -> str:
     if value not in {"long", "short"}:
-        raise UnsupportedGeneratedStrategySemantics(f"unsupported generated strategy direction: {value!r}")
+        raise UnsupportedGeneratedStrategySemantics(
+            f"unsupported generated strategy direction: {value!r}"
+        )
     return value
 
 

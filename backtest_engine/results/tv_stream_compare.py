@@ -21,4 +21,9 @@ class StreamingTradeComparator:
         self.reference.append(trade)
 
     def report(self) -> ComparisonReport:
-        return compare_trades(self.actual, self.reference, price_tolerance=self.price_tolerance, qty_tolerance=self.qty_tolerance)
+        return compare_trades(
+            self.actual,
+            self.reference,
+            price_tolerance=self.price_tolerance,
+            qty_tolerance=self.qty_tolerance,
+        )

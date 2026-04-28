@@ -21,7 +21,7 @@ class StateSerializer(Protocol):
 class PickleStateSerializer:
     """Default same-Python-runtime serializer for arbitrary strategy/runtime state."""
 
-    serializer_id = 'pickle-v1'
+    serializer_id = "pickle-v1"
 
     def dumps(self, state: object) -> bytes:
         return pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL)
@@ -33,13 +33,13 @@ class PickleStateSerializer:
 class JsonStateSerializer:
     """JSON serializer for primitive/dict/list dataclass snapshots."""
 
-    serializer_id = 'json-v1'
+    serializer_id = "json-v1"
 
     def dumps(self, state: object) -> bytes:
-        return json.dumps(_plain(state), sort_keys=True, separators=(',', ':')).encode('utf-8')
+        return json.dumps(_plain(state), sort_keys=True, separators=(",", ":")).encode("utf-8")
 
     def loads(self, payload: bytes) -> object:
-        return json.loads(payload.decode('utf-8'))
+        return json.loads(payload.decode("utf-8"))
 
 
 @dataclass(frozen=True)

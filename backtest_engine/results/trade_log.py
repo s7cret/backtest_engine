@@ -17,4 +17,4 @@ def trades_to_rows(trades: Iterable[Trade | dict[str, Any]]) -> list[dict[str, A
 
 
 def closed_trade_rows(result: object) -> list[dict[str, Any]]:
-    return trades_to_rows(getattr(result, 'closed_trades', None) or [])
+    return trades_to_rows(getattr(result, "closed_trades", None) or [])

@@ -1,1 +1,2 @@
-from backtest_engine.results import JSONResultWriter, CSVTradeWriter
+from backtest_engine.results import CSVTradeWriter as CSVTradeWriter
+from backtest_engine.results import JSONResultWriter as JSONResultWriter

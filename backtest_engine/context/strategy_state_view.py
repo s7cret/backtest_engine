@@ -7,7 +7,7 @@ from typing import Any
 class StrategyStateView:
     position_size: float = 0.0
     position_avg_price: float | None = None
-    position_direction: str = 'flat'
+    position_direction: str = "flat"
     equity: float = 0.0
     initial_capital: float = 0.0
     cash: float = 0.0

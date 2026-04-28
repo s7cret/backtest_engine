@@ -1,1 +1,0 @@
-from backtest_engine.results.writers import JSONResultWriter

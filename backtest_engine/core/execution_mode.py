@@ -3,14 +3,14 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-ExecutionModeName = Literal['debug', 'normal', 'fast', 'ultra_fast']
+ExecutionModeName = Literal["debug", "normal", "fast", "ultra_fast"]
 
 
 class ExecutionMode(StrEnum):
-    DEBUG = 'debug'
-    NORMAL = 'normal'
-    FAST = 'fast'
-    ULTRA_FAST = 'ultra_fast'
+    DEBUG = "debug"
+    NORMAL = "normal"
+    FAST = "fast"
+    ULTRA_FAST = "ultra_fast"
 
 
 def normalize_execution_mode(value: str | ExecutionMode) -> ExecutionMode:
@@ -18,7 +18,7 @@ def normalize_execution_mode(value: str | ExecutionMode) -> ExecutionMode:
     try:
         return value if isinstance(value, ExecutionMode) else ExecutionMode(value)
     except ValueError as exc:
-        raise ValueError(f'unknown execution mode: {value!r}') from exc
+        raise ValueError(f"unknown execution mode: {value!r}") from exc
 
 
 def is_debug_mode(value: str | ExecutionMode) -> bool:

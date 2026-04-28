@@ -1,1 +1,2 @@
-def render(*args, **kwargs): return ''
+def render(*args, **kwargs):
+    return ""

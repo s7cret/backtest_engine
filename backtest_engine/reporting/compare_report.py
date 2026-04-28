@@ -3,8 +3,8 @@ import json
 from backtest_engine.results.comparison import ComparisonReport
 
 
-def render(report: ComparisonReport, *, format: str = 'text') -> str:
-    if format == 'json':
+def render(report: ComparisonReport, *, format: str = "text") -> str:
+    if format == "json":
         return json.dumps(report.to_dict(), indent=2, sort_keys=True, default=str)
     lines = [
         f"matched: {report.matched}",
@@ -14,4 +14,4 @@ def render(report: ComparisonReport, *, format: str = 'text') -> str:
     ]
     for d in report.diagnostics[:5]:
         lines.append(f"- {d.code}: {d.message} {d.context or {}}")
-    return '\n'.join(lines)
+    return "\n".join(lines)

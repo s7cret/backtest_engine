@@ -14,7 +14,7 @@ class BacktestClock:
 
     def advance(self, bar: Bar, bar_index: int) -> None:
         if bar_index < self.bar_index:
-            raise ValueError('bar_index cannot move backwards')
+            raise ValueError("bar_index cannot move backwards")
         self.bar_index = bar_index
         self.time = bar.time
 

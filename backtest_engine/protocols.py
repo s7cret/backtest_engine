@@ -6,8 +6,12 @@ from .models import BacktestResumeState, Bar, BarSeries, Fill, Order
 
 
 class DataProvider(Protocol):
-    def get_bars(self, symbol: str, timeframe: str, start_time: int, end_time: int) -> Sequence[Bar] | BarSeries: ...
-    def get_lower_tf_bars(self, symbol: str, parent_timeframe: str, lower_timeframe: str, parent_bar: Bar) -> Sequence[Bar] | BarSeries: ...
+    def get_bars(
+        self, symbol: str, timeframe: str, start_time: int, end_time: int
+    ) -> Sequence[Bar] | BarSeries: ...
+    def get_lower_tf_bars(
+        self, symbol: str, parent_timeframe: str, lower_timeframe: str, parent_bar: Bar
+    ) -> Sequence[Bar] | BarSeries: ...
 
 
 class PineRuntime(Protocol):
@@ -17,6 +21,7 @@ class PineRuntime(Protocol):
 
 class GeneratedStrategy(Protocol):
     ctx: object
+
     def _process_bar(self, bar: Bar, bar_index: int) -> None: ...
 
 
@@ -41,9 +46,17 @@ class SerializableStrategy(Protocol):
 
 class ResumeStateSerializer(Protocol):
     serializer_id: str
+
     def dumps(self, state: object) -> bytes: ...
     def loads(self, payload: bytes) -> object: ...
 
 
 class ResumeCapableEngine(Protocol):
-    def run(self, strategy_class: type[Any], params: dict | None = None, bars: BarSeries | list[Bar] | None = None, callbacks: object | None = None, resume_state: BacktestResumeState | None = None) -> object: ...
+    def run(
+        self,
+        strategy_class: type[Any],
+        params: dict | None = None,
+        bars: BarSeries | list[Bar] | None = None,
+        callbacks: object | None = None,
+        resume_state: BacktestResumeState | None = None,
+    ) -> object: ...

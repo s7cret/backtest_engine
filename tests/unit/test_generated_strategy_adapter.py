@@ -9,12 +9,12 @@ if PINELIB_REPO not in sys.path:
     sys.path.insert(0, PINELIB_REPO)
 pytest.importorskip("pinelib")
 
-from backtest_engine import BacktestConfig, BacktestEngine
-from backtest_engine.adapters.generated_strategy import (
+from backtest_engine import BacktestConfig, BacktestEngine  # noqa: E402
+from backtest_engine.adapters.generated_strategy import (  # noqa: E402
     UnsupportedGeneratedStrategySemantics,
     make_generated_strategy_adapter,
 )
-from backtest_engine.models import Bar
+from backtest_engine.models import Bar  # noqa: E402
 
 
 class GeneratedLikeStrategy:

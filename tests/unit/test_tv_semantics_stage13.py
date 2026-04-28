@@ -2,7 +2,14 @@ from backtest_engine import BacktestConfig, BacktestEngine, Bar
 
 
 def cfg(**kw):
-    d = dict(symbol="S", timeframe="1D", start_time=1, end_time=6, commission_type="none", initial_capital=1000)
+    d = dict(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=6,
+        commission_type="none",
+        initial_capital=1000,
+    )
     d.update(kw)
     return BacktestConfig(**d)
 
