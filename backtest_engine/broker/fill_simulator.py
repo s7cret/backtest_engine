@@ -2,7 +2,13 @@ from backtest_engine.models import Bar, Order
 
 
 def build_price_path(bar: Bar) -> list[tuple[float, str]]:
-    if abs(bar.open - bar.high) <= abs(bar.open - bar.low):
+    """TradingView broker-emulator OHLC path.
+
+    TV documents high-first only when the open is closer to the high than to
+    the low; equality therefore takes the low-first branch.  Keep this tie
+    rule aligned with pinelib StrategyContext.ohlc_path.
+    """
+    if abs(bar.open - bar.high) < abs(bar.open - bar.low):
         return [(bar.open, "open"), (bar.high, "high"), (bar.low, "low"), (bar.close, "close")]
     return [(bar.open, "open"), (bar.low, "low"), (bar.high, "high"), (bar.close, "close")]
 

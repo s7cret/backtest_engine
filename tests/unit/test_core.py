@@ -65,8 +65,8 @@ def test_barseries_and_validation():
 def test_ohlc_path_tie_and_variants():
     assert [p for _, p in build_price_path(Bar(1, 10, 12, 8, 10))] == [
         "open",
-        "high",
         "low",
+        "high",
         "close",
     ]
     assert [p for _, p in build_price_path(Bar(1, 10, 11, 5, 10))] == [

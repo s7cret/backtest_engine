@@ -12,6 +12,7 @@ class BarSeries:
     low: Sequence[float]
     close: Sequence[float]
     volume: Sequence[float | None] | None = None
+    time_close: Sequence[int | None] | None = None
 
     def __post_init__(self) -> None:
         n = len(self.time)
@@ -19,6 +20,8 @@ class BarSeries:
             raise ValueError("BarSeries arrays must have equal length")
         if self.volume is not None and len(self.volume) != n:
             raise ValueError("BarSeries volume length must match")
+        if self.time_close is not None and len(self.time_close) != n:
+            raise ValueError("BarSeries time_close length must match")
 
     def __len__(self) -> int:
         return len(self.time)
@@ -31,6 +34,7 @@ class BarSeries:
             float(self.low[index]),
             float(self.close[index]),
             None if self.volume is None else self.volume[index],
+            None if self.time_close is None else self.time_close[index],
         )
 
     @classmethod
@@ -43,6 +47,7 @@ class BarSeries:
             [x.low for x in b],
             [x.close for x in b],
             [x.volume for x in b],
+            [x.time_close for x in b],
         )
 
     @classmethod
@@ -55,6 +60,7 @@ class BarSeries:
                 float(r["low"]),
                 float(r["close"]),
                 None if r.get("volume") is None else float(r["volume"]),
+                None if r.get("time_close") is None else int(r["time_close"]),
             )
             for r in rows
         )

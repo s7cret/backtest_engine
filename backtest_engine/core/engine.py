@@ -6,6 +6,7 @@ from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext, StrategyStateView
 from backtest_engine.errors import (
     BarMagnifierUnavailableError,
+    BarValidationError,
     ConfigError,
     ProviderError,
     ResumeUnsupportedError,
@@ -108,10 +109,9 @@ class BacktestEngine:
                 "BAR_MAGNIFIER_FALLBACK", "bar magnifier unavailable; using OHLC path", "warning"
             )
         if self.config.calc_on_every_tick and not self.config.experimental_intrabar_strategy_mode:
-            self._diag(
-                "CALC_ON_EVERY_TICK_HISTORICAL_LIMITED",
-                "historical mode calculates strategy on parent bars only",
-                "warning",
+            raise ConfigError(
+                "calc_on_every_tick requires realtime rollback/varip semantics; "
+                "BacktestEngine parity mode fails closed unless experimental_intrabar_strategy_mode=True"
             )
         ctx = StrategyContext(self.config, self.state)
         runtime = self.config.runtime or _NoopRuntime()
@@ -216,7 +216,7 @@ class BacktestEngine:
                 raise ConfigError("margin/liquidation model is unsupported")
             if self.config.unsupported_margin_policy == "warn":
                 self._diag(
-                    "MARGIN_UNSUPPORTED",
+                    "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL",
                     "margin settings are recorded but liquidation is unsupported",
                     "warning",
                 )
@@ -544,7 +544,7 @@ class BacktestEngine:
                 qty,
                 i,
                 bar.time,
-                i + 1,
+                i if self.config.process_orders_on_close else i + 1,
                 direction,
                 False,
                 limit,
@@ -718,6 +718,11 @@ class BacktestEngine:
                 if skip_open and path_is_open:
                     continue
                 for o in list(self.orders):
+                    current_bar_close_activation = (
+                        self.config.process_orders_on_close and o.created_bar_index == i
+                    )
+                    if current_bar_close_activation and not (point == "close" or point.endswith(".close")):
+                        continue
                     if o.status != "active":
                         if not (
                             o.status == "pending"
@@ -836,6 +841,7 @@ class BacktestEngine:
                 self.config.symbol, self.config.timeframe, self.config.bar_magnifier_lower_tf, bar
             )
             lower_series = lower if isinstance(lower, BarSeries) else BarSeries.from_bars(lower)
+            self._validate_lower_timeframe_bars(lower_series, bar)
         except Exception as e:
             if self.config.bar_magnifier_missing_policy == "error":
                 raise BarMagnifierUnavailableError(str(e)) from e
@@ -858,6 +864,46 @@ class BacktestEngine:
             for price, point in build_price_path(lb):
                 path.append((price, f"lower[{j}].{point}"))
         return path
+
+    def _validate_lower_timeframe_bars(self, lower_series: BarSeries, parent: Bar) -> None:
+        """Fail closed on malformed bar-magnifier data before using intrabars."""
+        parent_close = parent.time_close
+        if parent_close is None:
+            parent_close = self._infer_parent_close(parent.time)
+        last_time: int | None = None
+        seen: set[int] = set()
+        for j in range(len(lower_series)):
+            lb = lower_series.get_bar(j)
+            if last_time is not None and lb.time < last_time:
+                raise BarValidationError("lower timeframe bars are not sorted")
+            if lb.time in seen:
+                raise BarValidationError(f"duplicate lower timeframe bar time {lb.time}")
+            seen.add(lb.time)
+            last_time = lb.time
+            if lb.time < parent.time or lb.time >= parent_close:
+                raise BarValidationError("lower timeframe bar outside parent window")
+            if lb.time_close is None:
+                raise BarValidationError("lower timeframe bar missing time_close")
+            if lb.time_close <= lb.time:
+                raise BarValidationError("lower timeframe bar has invalid/open time_close")
+            if lb.time_close > parent_close:
+                raise BarValidationError("lower timeframe bar closes outside parent window")
+            if lb.high < max(lb.open, lb.close, lb.low):
+                raise BarValidationError("lower timeframe bar has invalid OHLC high")
+            if lb.low > min(lb.open, lb.close, lb.high):
+                raise BarValidationError("lower timeframe bar has invalid OHLC low")
+
+    def _infer_parent_close(self, parent_open: int) -> int:
+        unit = self.config.timeframe.strip().lower()
+        if unit.endswith("d"):
+            return parent_open + int(unit[:-1] or "1") * 86400
+        if unit.endswith("h"):
+            return parent_open + int(unit[:-1] or "1") * 3600
+        if unit.endswith("m"):
+            return parent_open + int(unit[:-1] or "1") * 60
+        if unit.isdigit():
+            return parent_open + int(unit) * 60
+        raise BarValidationError("parent bar missing time_close and timeframe duration is unknown")
 
     def _fill(self, o: Order, bar: Bar, i: int, price: float, point: str) -> None:
         if o.kind == "exit":
@@ -915,7 +961,7 @@ class BacktestEngine:
         self.last_trade_bar = i
         self._cb("on_fill", fill)
         self._event("ORDER_FILLED", f"order {o.id} filled", i, bar.time, o.id)
-        self._apply_oca(o)
+        self._apply_oca(o, bar, i)
 
     def _apply_position(self, o: Order, price: float, bar: Bar, i: int, commission: float) -> str:
         signed = o.qty if o.side == "buy" else -o.qty
@@ -1013,16 +1059,27 @@ class BacktestEngine:
             q = min(target_caps[id(trp)], rem_for_profit)
             gross += self.instrument.pnl(trp.entry_price, price, q, trp.direction)
             rem_for_profit -= q
-        profit = gross - commission
-        self.cash += profit
-        self.position.realized_profit += profit
+        # _fill debits commission exactly once for the whole order.  Closing a
+        # position therefore adds only gross PnL to cash/realized PnL here,
+        # while the closed-trade ledger remains net of prorated entry + exit
+        # commission.  For reversals, only the close portion of the order's
+        # commission belongs to the closed trade; the remainder becomes the
+        # entry commission of the newly opened opposite lot.
+        exit_commission_total = commission * (qty_close / o.qty) if o.qty else commission
+        opening_commission = max(0.0, commission - exit_commission_total)
+        self.cash += gross
+        self.position.realized_profit += gross
         remaining = qty_close
         for tr in list(targets):
             if remaining <= 0:
                 break
             q = min(target_caps[id(tr)], remaining)
-            p = self.instrument.pnl(tr.entry_price, price, q, tr.direction) - commission * (
-                q / qty_close
+            exit_commission = exit_commission_total * (q / qty_close) if qty_close else 0.0
+            entry_commission = tr.commission_entry * (q / tr.qty) if tr.qty else 0.0
+            p = (
+                self.instrument.pnl(tr.entry_price, price, q, tr.direction)
+                - exit_commission
+                - entry_commission
             )
             closed = replace(
                 tr,
@@ -1031,7 +1088,8 @@ class BacktestEngine:
                 exit_bar_index=i,
                 exit_price=price,
                 qty=q,
-                commission_exit=commission * (q / qty_close),
+                commission_entry=entry_commission,
+                commission_exit=exit_commission,
                 profit=p,
                 profit_percent=(p / (tr.entry_price * q) * 100 if tr.entry_price * q else 0.0),
                 exit_reason=o.id,
@@ -1041,6 +1099,7 @@ class BacktestEngine:
             self.closed_trades.append(closed)
             self._cb("on_trade_close", closed)
             tr.qty -= q
+            tr.commission_entry -= entry_commission
             remaining -= q
             if tr.qty <= 1e-12:
                 self.open_trades.remove(tr)
@@ -1067,9 +1126,9 @@ class BacktestEngine:
                 None,
                 None,
                 abs(self.position.size),
+                opening_commission,
                 0.0,
-                0.0,
-                0.0,
+                -opening_commission,
                 0.0,
                 is_open=True,
             )
@@ -1095,7 +1154,7 @@ class BacktestEngine:
             )
             self._cb("on_trade_update", tr)
 
-    def _apply_oca(self, o: Order) -> None:
+    def _apply_oca(self, o: Order, bar: Bar, i: int) -> None:
         if not o.oca_name:
             return
         for other in self.orders:
@@ -1106,9 +1165,16 @@ class BacktestEngine:
             ):
                 if o.oca_type == "cancel":
                     other.status = "cancelled"
+                    self._cb("on_order_cancelled", other)
+                    self._event("ORDER_CANCELLED", f"OCA cancelled order {other.id}", i, bar.time, other.id)
                 elif o.oca_type == "reduce":
                     other.qty = max(0.0, other.qty - o.qty)
-                    other.status = "cancelled" if other.qty <= 0 else other.status
+                    if other.qty <= 0:
+                        other.status = "cancelled"
+                        self._cb("on_order_cancelled", other)
+                        self._event("ORDER_CANCELLED", f"OCA reduced order {other.id} to zero", i, bar.time, other.id)
+                    else:
+                        self._event("ORDER_MODIFIED", f"OCA reduced order {other.id}", i, bar.time, other.id)
 
     def _force_close(self, bar: Bar, i: int) -> None:
         o = Order(

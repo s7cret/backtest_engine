@@ -1,3 +1,5 @@
+import pytest
+
 from backtest_engine import BacktestConfig, BacktestEngine, Bar
 
 
@@ -38,8 +40,9 @@ def test_stage14_p1_trade_metrics_and_commission_total():
     result = BacktestEngine(cfg).run(TwoTrades, bars=bars)
 
     assert result.total_trades == 2
-    assert result.avg_trade == (0.98 - 4.99) / 2
-    assert result.largest_win == 0.98
-    assert result.largest_loss == 4.99
-    assert result.avg_bars_in_trade == 0.0
+    # Trade profit is net of both entry and exit commission.
+    assert result.avg_trade == pytest.approx((-0.02 - 6.02) / 2)
+    assert result.largest_win == 0.0
+    assert result.largest_loss == pytest.approx(6.02)
+    assert result.avg_bars_in_trade == 1.0
     assert result.commission_total == 1.0 + 1.02 + 1.03 + 0.99

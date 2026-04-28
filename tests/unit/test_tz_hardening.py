@@ -48,7 +48,7 @@ class Provider:
     def get_lower_tf_bars(self, *a):
         self.lower_called += 1
         # Better intrabar path reaches long limit at 10 before parent synthetic high/low ambiguity matters.
-        return [Bar(20, 12, 12, 10, 11)]
+        return [Bar(20, 12, 12, 10, 11, time_close=21)]
 
 
 class LimitEntry:

@@ -51,6 +51,7 @@ class GeneratedStrategyAdapterOptions:
     fail_on_calc_on_every_tick: bool = True
     fail_on_bar_magnifier: bool = True
     fail_on_nonstandard_margin: bool = True
+    fail_on_config_mismatch: bool = True
 
 
 class _BridgeStrategyContext:
@@ -209,7 +210,7 @@ def make_generated_strategy_adapter(
             self._pine_runtime = _make_pine_runtime(adapter_options)
             self.generated = generated_strategy_class(params=params, runtime=self._pine_runtime)
             self._validate_generated_declaration(
-                getattr(self.generated, "ctx", None), adapter_options
+                getattr(self.generated, "ctx", None), adapter_options, ctx.config
             )
             self._bridge_ctx = _BridgeStrategyContext(ctx)
             self._bridge_ctx.attach_runtime(self._pine_runtime)
@@ -235,7 +236,7 @@ def make_generated_strategy_adapter(
 
         @staticmethod
         def _validate_generated_declaration(
-            generated_ctx: Any, opts: GeneratedStrategyAdapterOptions
+            generated_ctx: Any, opts: GeneratedStrategyAdapterOptions, engine_config: Any
         ) -> None:
             declaration = getattr(generated_ctx, "declaration", None)
             if declaration is None:
@@ -265,12 +266,46 @@ def make_generated_strategy_adapter(
                 raise UnsupportedGeneratedStrategySemantics(
                     "non-standard generated margin settings are not adapted"
                 )
+            if opts.fail_on_config_mismatch:
+                diff = _declaration_config_diff(declaration, engine_config)
+                if diff:
+                    raise UnsupportedGeneratedStrategySemantics(
+                        "generated declaration/config mismatch: " + repr(diff)
+                    )
 
     BacktestGeneratedStrategyAdapter.__name__ = (
         f"Backtest{getattr(generated_strategy_class, '__name__', 'GeneratedStrategy')}Adapter"
     )
     BacktestGeneratedStrategyAdapter.__qualname__ = BacktestGeneratedStrategyAdapter.__name__
     return BacktestGeneratedStrategyAdapter
+
+
+def _declaration_config_diff(declaration: Any, engine_config: Any) -> dict[str, dict[str, Any]]:
+    field_pairs = {
+        "initial_capital": "initial_capital",
+        "default_qty_type": "default_qty_type",
+        "default_qty_value": "default_qty_value",
+        "pyramiding": "pyramiding",
+        "commission_type": "commission_type",
+        "commission_value": "commission_value",
+        "slippage": "slippage",
+        "process_orders_on_close": "process_orders_on_close",
+        "close_entries_rule": "exit_matching",
+        "margin_long": "margin_long",
+        "margin_short": "margin_short",
+        "calc_on_order_fills": "calc_on_order_fills",
+        "calc_on_every_tick": "calc_on_every_tick",
+        "use_bar_magnifier": "use_bar_magnifier",
+    }
+    diff: dict[str, dict[str, Any]] = {}
+    for decl_field, cfg_field in field_pairs.items():
+        if not hasattr(declaration, decl_field):
+            continue
+        expected = getattr(declaration, decl_field)
+        actual = getattr(engine_config, cfg_field, None)
+        if expected != actual:
+            diff[decl_field] = {"declaration": expected, "config": actual}
+    return diff
 
 
 def _make_pine_runtime(options: GeneratedStrategyAdapterOptions) -> Any:

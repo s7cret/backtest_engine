@@ -10,3 +10,4 @@ class Bar:
     low: float
     close: float
     volume: float | None = None
+    time_close: int | None = None

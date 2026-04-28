@@ -82,3 +82,58 @@ def test_generated_strategy_adapter_fails_closed_for_unsupported_recalc_semantic
 
     with pytest.raises(UnsupportedGeneratedStrategySemantics, match="calc_on_order_fills"):
         BacktestEngine(config).run(strategy_class, bars=bars)
+
+
+class _MatchingDeclaration:
+    initial_capital = 10000.0
+    default_qty_type = "fixed"
+    default_qty_value = 1.0
+    pyramiding = 0
+    commission_type = "none"
+    commission_value = 0.0
+    slippage = 0.0
+    process_orders_on_close = False
+    margin_long = 100.0
+    margin_short = 100.0
+    calc_on_order_fills = False
+    calc_on_every_tick = False
+    use_bar_magnifier = False
+
+
+class _GeneratedCtxMatching:
+    declaration = _MatchingDeclaration()
+
+
+class GeneratedWithMatchingDeclaration(GeneratedLikeStrategy):
+    def __init__(self, params=None, runtime=None):
+        super().__init__(params=params, runtime=runtime)
+        self.ctx = _GeneratedCtxMatching()
+
+
+def test_generated_strategy_adapter_config_handshake_accepts_empty_diff() -> None:
+    strategy_class = make_generated_strategy_adapter(GeneratedWithMatchingDeclaration)
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=1,
+        commission_type="none",
+        commission_value=0.0,
+    )
+    result = BacktestEngine(config).run(strategy_class, bars=[Bar(0, 1, 1, 1, 1), Bar(1, 1, 1, 1, 1)])
+    assert result.status == "completed"
+
+
+def test_generated_strategy_adapter_config_handshake_rejects_mismatch() -> None:
+    strategy_class = make_generated_strategy_adapter(GeneratedWithMatchingDeclaration)
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=1,
+        initial_capital=20000.0,
+        commission_type="none",
+        commission_value=0.0,
+    )
+    with pytest.raises(UnsupportedGeneratedStrategySemantics, match="initial_capital"):
+        BacktestEngine(config).run(strategy_class, bars=[Bar(0, 1, 1, 1, 1), Bar(1, 1, 1, 1, 1)])
