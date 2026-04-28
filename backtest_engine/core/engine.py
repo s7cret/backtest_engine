@@ -15,6 +15,7 @@ from backtest_engine.core.state_snapshot import BrokerSnapshot, build_resume_sta
 from backtest_engine.core.validation import data_fingerprint, validate_bars
 from backtest_engine.results import BacktestResult
 from backtest_engine.results.statistics import summarize
+from backtest_engine.results.metrics import sharpe_ratio, sortino_ratio
 
 class _NoopRuntime:
     def begin_bar(self, bar:Bar, bar_index:int)->None: pass
@@ -69,11 +70,13 @@ class BacktestEngine:
             self.max_drawdown=max(self.max_drawdown,dd); self.max_drawdown_percent=max(self.max_drawdown_percent,ddp); self._update_state()
             if equity_curve is not None:
                 point=EquityPoint(i,bar.time,self.equity,self.cash,self.position.size,self.position.avg_price if self.position.direction!='flat' else None,self.position.open_profit,self.position.realized_profit,dd,ddp); equity_curve.append(point); self._cb('on_equity',point)
+            stop_now=False
             if self.config.early_stop_enabled:
-                if self.config.min_equity_stop is not None and self.equity <= self.config.min_equity_stop: status='early_stopped'; early_reason='min_equity_stop'; break
-                if self.config.max_drawdown_stop_percent is not None and ddp >= self.config.max_drawdown_stop_percent: status='early_stopped'; early_reason='max_drawdown_stop_percent'; break
-                if self.config.max_bars_without_trade is not None and self.last_trade_bar is not None and i-self.last_trade_bar>=self.config.max_bars_without_trade: status='early_stopped'; early_reason='max_bars_without_trade'; break
+                if self.config.min_equity_stop is not None and self.equity <= self.config.min_equity_stop: status='early_stopped'; early_reason='min_equity_stop'; stop_now=True
+                if not stop_now and self.config.max_drawdown_stop_percent is not None and ddp >= self.config.max_drawdown_stop_percent: status='early_stopped'; early_reason='max_drawdown_stop_percent'; stop_now=True
+                if not stop_now and self.config.max_bars_without_trade is not None and self.last_trade_bar is not None and i-self.last_trade_bar>=self.config.max_bars_without_trade: status='early_stopped'; early_reason='max_bars_without_trade'; stop_now=True
             runtime.end_bar(); self._cb('on_bar_end',bar,i,self.state)
+            if stop_now: break
         if self.config.force_close_on_end and self.position.direction!='flat' and len(series): self._force_close(series.get_bar(len(series)-1), len(series)-1)
         result=self._result(series,equity_curve,status,early_reason,(time.perf_counter()-t0)*1000,strategy,runtime)
         return result
@@ -90,6 +93,8 @@ class BacktestEngine:
             self.config.collect_events=True
         if 'mfe_mae' in self.config.required_outputs:
             self.config.collect_mfe_mae=True; self.config.collect_trade_details=True
+        if self.config.required_metrics:
+            self.config.collect_equity_curve=True
 
     def _slice_range(self,series:BarSeries)->BarSeries:
         start=self.config.start_time; end=self.config.end_time
@@ -134,9 +139,21 @@ class BacktestEngine:
             if k=='exit':
                 if self.position.direction=='flat': self._diag('ORDER_REJECTED_NO_AVAILABLE_POSITION_QTY','exit without position','warning',i,bar.time,kw['id']); continue
                 direction=self.position.direction; side='sell' if direction=='long' else 'buy'; qty=self._qty_from_args(kw,self.position.size,bar.close)
-                if limit is None and stop is None: self._diag('ORDER_REJECTED_EMPTY_EXIT','exit has no active legs','warning',i,bar.time,kw['id']); continue
-                if limit is not None: self._add_order(Order(id=kw['id']+':L', kind='exit', direction=direction, side=side, position_effect='reduce', order_type='limit', qty=qty, created_bar_index=i, created_time=bar.time, active_from_bar_index=i+1, position_direction=direction, reduce_only=True, limit_price=limit, from_entry=kw.get('from_entry'), oca_name=kw.get('oca_name') or kw['id'], oca_type='reduce', reserved_qty=qty, parent_exit_id=kw['id'], comment=kw.get('comment')),bar,i)
-                if stop is not None: self._add_order(Order(id=kw['id']+':S', kind='exit', direction=direction, side=side, position_effect='reduce', order_type='stop', qty=qty, created_bar_index=i, created_time=bar.time, active_from_bar_index=i+1, position_direction=direction, reduce_only=True, stop_price=stop, from_entry=kw.get('from_entry'), oca_name=kw.get('oca_name') or kw['id'], oca_type='reduce', reserved_qty=qty, parent_exit_id=kw['id'], comment=kw.get('comment')),bar,i)
+                from_entry=kw.get('from_entry'); available=self._available_exit_qty(from_entry)
+                if available<=0: self._diag('ORDER_REJECTED_NO_AVAILABLE_POSITION_QTY','exit has no matching unreserved position qty','warning',i,bar.time,kw['id']); continue
+                qty=min(qty,available); base=self._exit_base_price(from_entry)
+                if kw.get('profit') is not None and limit is None: limit=base+float(kw['profit']) if direction=='long' else base-float(kw['profit'])
+                if kw.get('loss') is not None and stop is None: stop=base-float(kw['loss']) if direction=='long' else base+float(kw['loss'])
+                has_trail=kw.get('trail_price') is not None or kw.get('trail_points') is not None or kw.get('trail_offset') is not None
+                if limit is None and stop is None and not has_trail: self._diag('ORDER_REJECTED_EMPTY_EXIT','exit has no active legs','warning',i,bar.time,kw['id']); continue
+                oca=kw.get('oca_name') or kw['id']
+                if limit is not None: self._add_order(Order(id=kw['id']+':L', kind='exit', direction=direction, side=side, position_effect='reduce', order_type='limit', qty=qty, created_bar_index=i, created_time=bar.time, active_from_bar_index=i+1, position_direction=direction, reduce_only=True, limit_price=limit, from_entry=from_entry, oca_name=oca, oca_type='reduce', reserved_qty=qty, parent_exit_id=kw['id'], comment=kw.get('comment')),bar,i)
+                if stop is not None: self._add_order(Order(id=kw['id']+':S', kind='exit', direction=direction, side=side, position_effect='reduce', order_type='stop', qty=qty, created_bar_index=i, created_time=bar.time, active_from_bar_index=i+1, position_direction=direction, reduce_only=True, stop_price=stop, from_entry=from_entry, oca_name=oca, oca_type='reduce', reserved_qty=qty, parent_exit_id=kw['id'], comment=kw.get('comment')),bar,i)
+                if has_trail:
+                    points=kw.get('trail_points'); activation=kw.get('trail_price')
+                    if activation is None and points is not None: activation=base+float(points) if direction=='long' else base-float(points)
+                    offset=float(kw.get('trail_offset') if kw.get('trail_offset') is not None else (points if points is not None else 0.0))
+                    self._add_order(Order(id=kw['id']+':T', kind='exit', direction=direction, side=side, position_effect='reduce', order_type='stop', qty=qty, created_bar_index=i, created_time=bar.time, active_from_bar_index=i+1, position_direction=direction, reduce_only=True, stop_price=None, from_entry=from_entry, oca_name=oca, oca_type='reduce', reserved_qty=qty, parent_exit_id=kw['id'], comment=kw.get('comment'), trail_price=activation, trail_points=points, trail_offset=offset),bar,i)
                 continue
             direction=kw['direction']; side='buy' if direction=='long' else 'sell'; qty=self._qty_from_args(kw,None,bar.close)
             effect='open'
@@ -173,6 +190,30 @@ class BacktestEngine:
             o.status='active'
         self.orders.append(o); self._event('ORDER_CREATED',f'order {o.id} created',i,bar.time,o.id); self._cb('on_order_created',o)
 
+    def _matching_open_trades(self, from_entry:str|None)->list[Trade]:
+        return [t for t in self.open_trades if from_entry is None or t.entry_id==from_entry]
+    def _reserved_exit_qty(self, from_entry:str|None)->float:
+        groups:dict[str,float]={}
+        for o in self.orders:
+            if o.kind=='exit' and o.status in ('pending','active') and o.from_entry==from_entry:
+                key=o.parent_exit_id or o.id
+                groups[key]=max(groups.get(key,0.0), o.reserved_qty or o.qty)
+        return sum(groups.values())
+    def _available_exit_qty(self, from_entry:str|None)->float:
+        return max(0.0, sum(t.qty for t in self._matching_open_trades(from_entry))-self._reserved_exit_qty(from_entry))
+    def _exit_base_price(self, from_entry:str|None)->float:
+        trades=self._matching_open_trades(from_entry); qty=sum(t.qty for t in trades)
+        return (sum(t.entry_price*t.qty for t in trades)/qty) if qty else self.position.avg_price
+    def _update_trailing_order(self,o:Order,price:float)->None:
+        if o.trail_price is None and o.trail_offset is None and o.trail_points is None: return
+        offset=float(o.trail_offset or 0.0)
+        if o.direction=='long':
+            if not o.trail_activated and (o.trail_price is None or price>=o.trail_price): o.trail_activated=True
+            if o.trail_activated: o.stop_price=max(o.stop_price if o.stop_price is not None else float('-inf'), price-offset)
+        else:
+            if not o.trail_activated and (o.trail_price is None or price<=o.trail_price): o.trail_activated=True
+            if o.trail_activated: o.stop_price=min(o.stop_price if o.stop_price is not None else float('inf'), price+offset)
+
     def _process_bar_fills(self,strategy:Any,ctx:StrategyContext,bar:Bar,i:int)->None:
         recalc=0
         while True:
@@ -181,6 +222,9 @@ class BacktestEngine:
             for price,point in path:
                 for o in list(self.orders):
                     if o.status!='active': continue
+                    self._update_trailing_order(o,price)
+                    if o.kind=='exit' and o.from_entry is not None and not self._matching_open_trades(o.from_entry): continue
+                    if o.order_type=='stop' and o.stop_price is None: continue
                     is_open_point = point == 'open' or point.endswith('.open')
                     is_close_point = point == 'close' or point.endswith('.close')
                     if o.order_type=='market' and ((is_open_point and o.created_bar_index < i) or (is_close_point and (self.config.process_orders_on_close or o.immediately))): pass
@@ -225,6 +269,10 @@ class BacktestEngine:
         return path
 
     def _fill(self,o:Order,bar:Bar,i:int,price:float,point:str)->None:
+        if o.kind=='exit' and o.from_entry is not None:
+            avail=sum(t.qty for t in self._matching_open_trades(o.from_entry))
+            if avail<=0: self._diag('ORDER_REJECTED_NO_MATCHING_ENTRY','reduce order has no matching from_entry','warning',i,bar.time,o.id); return
+            o.qty=min(o.qty,avail)
         slip=slippage_value(price,o.side,o.position_effect,self.config.slippage,self.config.slippage_type,self.config.mintick); fprice=round_to_step(price+slip,self.config.mintick,self.config.price_rounding)
         before=self.position.direction; com=calculate_commission(fprice,o.qty,self.config.commission_type,self.config.commission_value)
         self.cash-=com; self.position.realized_profit-=com
@@ -242,15 +290,27 @@ class BacktestEngine:
         if signed*cur_sign>0:
             newabs=abs(self.position.size)+abs(signed); self.position.avg_price=(self.position.avg_price*abs(self.position.size)+price*abs(signed))/newabs; self.position.size+=signed
             tr=Trade(o.id,o.id,None,self.position.direction,bar.time,i,price,None,None,None,abs(signed),commission,0.0,-commission,0.0,is_open=True); self.open_trades.append(tr); self._cb('on_trade_open',tr); return self.position.direction
-        qty_close=min(abs(signed),abs(self.position.size)); profit=self.instrument.pnl(self.position.avg_price,price,qty_close,self.position.direction)-commission; self.cash+=profit; self.position.realized_profit+=profit
+        qty_close=min(abs(signed),abs(self.position.size))
+        targets=[t for t in self.open_trades if o.from_entry is None or t.entry_id==o.from_entry]
+        if not targets:
+            self._diag('ORDER_REJECTED_NO_MATCHING_ENTRY','reduce order has no matching from_entry','warning',i,bar.time,o.id); return self.position.direction
+        qty_close=min(qty_close,sum(t.qty for t in targets))
+        gross=0.0; rem_for_profit=qty_close
+        for trp in targets:
+            if rem_for_profit<=0: break
+            q=min(trp.qty,rem_for_profit); gross+=self.instrument.pnl(trp.entry_price,price,q,trp.direction); rem_for_profit-=q
+        profit=gross-commission; self.cash+=profit; self.position.realized_profit+=profit
         remaining=qty_close
-        for tr in list(self.open_trades):
+        for tr in list(targets):
             if remaining<=0: break
             q=min(tr.qty,remaining); p=self.instrument.pnl(tr.entry_price,price,q,tr.direction)-commission*(q/qty_close); closed=replace(tr,exit_id=o.id,exit_time=bar.time,exit_bar_index=i,exit_price=price,qty=q,commission_exit=commission*(q/qty_close),profit=p,profit_percent=(p/(tr.entry_price*q)*100 if tr.entry_price*q else 0.0),exit_reason=o.id,bars_held=i-tr.entry_bar_index,is_open=False)
             self.closed_trades.append(closed); self._cb('on_trade_close',closed); tr.qty-=q; remaining-=q
             if tr.qty<=1e-12: self.open_trades.remove(tr)
         self.position.size+=signed
         if abs(self.position.size)<1e-12: self.position=Position(realized_profit=self.position.realized_profit); return 'flat'
+        same_dir=[t for t in self.open_trades if t.direction==self.position.direction]
+        if same_dir:
+            q=sum(t.qty for t in same_dir); self.position.avg_price=sum(t.entry_price*t.qty for t in same_dir)/q
         if self.position.size*cur_sign<0:
             self.position.direction='long' if self.position.size>0 else 'short'; self.position.avg_price=price; tr=Trade(o.id,o.id,None,self.position.direction,bar.time,i,price,None,None,None,abs(self.position.size),0.0,0.0,0.0,0.0,is_open=True); self.open_trades.append(tr); self._cb('on_trade_open',tr)
         return self.position.direction
@@ -339,6 +399,15 @@ class BacktestEngine:
         profits=[t.profit for t in self.closed_trades]; stats=summarize(profits,self.config.initial_capital,self.equity)
         r=BacktestResult(trades=(self.closed_trades+self.open_trades if self.config.collect_trade_details else None),closed_trades=(self.closed_trades if self._want('closed_trades') or self.config.collect_trade_details else None),open_trades=(self.open_trades if self._want('open_trades') or self.config.collect_trade_details else None),equity_curve=equity_curve,available_outputs=set(),initial_capital=self.config.initial_capital,final_equity=self.equity,bars_processed=len(series),execution_time_ms=ms,status=status,early_stop_reason=reason,config_snapshot=self.config.snapshot(),warnings=self.warnings,errors=self.errors,events=(self.events if self.config.collect_events or self._want('order_events') else None),data_fingerprint=self.config.data_fingerprint or data_fingerprint(series),strategy_fingerprint=self.config.strategy_fingerprint,runtime_fingerprint=self.config.runtime_fingerprint)
         for k,v in stats.items(): setattr(r,k,v)
+        if equity_curve and len(equity_curve)>1:
+            rets=[(equity_curve[n].equity-equity_curve[n-1].equity)/equity_curve[n-1].equity for n in range(1,len(equity_curve)) if equity_curve[n-1].equity]
+            r.sharpe_ratio=sharpe_ratio(rets); r.sortino_ratio=sortino_ratio(rets)
+        for metric in self.config.required_metrics:
+            if metric=='sharpe': r.available_outputs.add('sharpe_ratio')
+            elif metric=='sortino': r.available_outputs.add('sortino_ratio')
+            elif metric not in {'sharpe','sortino'}: self._diag('REQUIRED_METRIC_UNSUPPORTED',f'required metric {metric} is unsupported','error')
+        if 'sharpe' in self.config.required_metrics and r.sharpe_ratio is None: self._diag('REQUIRED_METRIC_UNAVAILABLE','sharpe requires at least two non-constant equity returns','error')
+        if 'sortino' in self.config.required_metrics and r.sortino_ratio is None: self._diag('REQUIRED_METRIC_UNAVAILABLE','sortino requires at least one downside return','error')
         r.max_drawdown=max((p.drawdown for p in equity_curve), default=self.max_drawdown) if equity_curve else self.max_drawdown; r.max_drawdown_percent=max((p.drawdown_percent for p in equity_curve), default=self.max_drawdown_percent) if equity_curve else self.max_drawdown_percent
         if r.closed_trades is not None: r.available_outputs.add('closed_trades')
         if r.open_trades is not None: r.available_outputs.add('open_trades')

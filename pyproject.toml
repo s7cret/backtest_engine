@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Independent deterministic bar-by-bar backtest engine with TradingView/Pine strategy emulator semantics."
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "Proprietary"}
+license = {text = "MIT"}
 authors = [{name = "MoltBot"}]
 dependencies = []
 

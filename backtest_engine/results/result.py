@@ -10,7 +10,9 @@ class BacktestResult:
     bars_processed:int=0; execution_time_ms:float=0.0; status:Literal['completed','failed','early_stopped']='completed'; early_stop_reason:str|None=None; config_snapshot:dict=field(default_factory=dict); performance:dict=field(default_factory=dict); warnings:list[Diagnostic]=field(default_factory=list); errors:list[Diagnostic]=field(default_factory=list); events:list[Diagnostic]|None=None
     content_hash_value:str|None=None; data_fingerprint:str|None=None; strategy_fingerprint:str|None=None; runtime_fingerprint:str|None=None; resume_state:BacktestResumeState|None=None
     def content_hash(self, include_equity_curve:bool=True, include_events:bool=False)->str:
-        payload=asdict(self); payload.pop('content_hash_value',None)
+        payload=asdict(self)
+        for key in ('content_hash_value','execution_time_ms','performance'):
+            payload.pop(key,None)
         if not include_equity_curve: payload.pop('equity_curve',None)
         if not include_events: payload.pop('events',None)
         return sha256_obj(payload)
