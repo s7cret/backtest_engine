@@ -473,6 +473,13 @@ class BacktestEngine:
         profits=[t.profit for t in self.closed_trades]; stats=summarize(profits,self.config.initial_capital,self.equity)
         r=BacktestResult(trades=(self.closed_trades+self.open_trades if self.config.collect_trade_details else None),closed_trades=(self.closed_trades if self._want('closed_trades') or self.config.collect_trade_details else None),open_trades=(self.open_trades if self._want('open_trades') or self.config.collect_trade_details else None),equity_curve=equity_curve,available_outputs=set(),initial_capital=self.config.initial_capital,final_equity=self.equity,bars_processed=len(series),execution_time_ms=ms,status=status,early_stop_reason=reason,config_snapshot=self.config.snapshot(),warnings=self.warnings,errors=self.errors,events=(self.events if self.config.collect_events or self._want('order_events') else None),data_fingerprint=self.config.data_fingerprint or data_fingerprint(series),strategy_fingerprint=self.config.strategy_fingerprint,runtime_fingerprint=self.config.runtime_fingerprint)
         for k,v in stats.items(): setattr(r,k,v)
+        wins=[t.profit for t in self.closed_trades if t.profit>0]
+        losses=[t.profit for t in self.closed_trades if t.profit<0]
+        r.largest_win=max(wins) if wins else 0.0
+        r.largest_loss=abs(min(losses)) if losses else 0.0
+        held=[t.bars_held for t in self.closed_trades if t.bars_held is not None]
+        r.avg_bars_in_trade=sum(held)/len(held) if held else 0.0
+        r.commission_total=sum(t.commission_entry+t.commission_exit for t in self.closed_trades)+sum(t.commission_entry+t.commission_exit for t in self.open_trades)
         if equity_curve and len(equity_curve)>1:
             rets=[(equity_curve[n].equity-equity_curve[n-1].equity)/equity_curve[n-1].equity for n in range(1,len(equity_curve)) if equity_curve[n-1].equity]
             r.sharpe_ratio=sharpe_ratio(rets); r.sortino_ratio=sortino_ratio(rets)
