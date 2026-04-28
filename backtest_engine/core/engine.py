@@ -62,8 +62,10 @@ class BacktestEngine:
                 if o.status=='pending' and o.active_from_bar_index<=i:
                     o.status='active'; self._event('ORDER_ACTIVATED',f'order {o.id} activated',i,bar.time,o.id); self._cb('on_order_activated',o)
             runtime.begin_bar(bar,i)
+            self._process_bar_fills(strategy,ctx,bar,i,open_only=True)
             self._call_strategy(strategy,bar,i); self._flush(ctx,bar,i)
-            self._process_bar_fills(strategy,ctx,bar,i)
+            self._process_bar_fills(strategy,ctx,bar,i,skip_open=True)
+            self._update_intrabar_drawdown(bar)
             self._update_open_profit(bar.close); self._update_trade_excursions(bar); self._update_state()
             if self.equity>self.peak_equity: self.peak_equity=self.equity
             dd=max(0.0,self.peak_equity-self.equity); ddp=dd/self.peak_equity*100 if self.peak_equity else 0.0
@@ -238,35 +240,47 @@ class BacktestEngine:
             if not o.trail_activated and (o.trail_price is None or price<=o.trail_price): o.trail_activated=True
             if o.trail_activated: o.stop_price=min(o.stop_price if o.stop_price is not None else float('inf'), price+offset)
 
-    def _process_bar_fills(self,strategy:Any,ctx:StrategyContext,bar:Bar,i:int)->None:
+    def _process_bar_fills(self,strategy:Any,ctx:StrategyContext,bar:Bar,i:int,open_only:bool=False,skip_open:bool=False)->None:
         recalc=0
         while True:
             filled=False
             path=self._price_path(bar)
             for price,point in path:
+                path_is_open = point == 'open' or point.endswith('.open')
+                if open_only and not path_is_open: continue
+                if skip_open and path_is_open: continue
                 for o in list(self.orders):
                     if o.status!='active': continue
                     self._update_trailing_order(o,price)
                     if o.kind=='exit' and o.from_entry is not None and not self._matching_open_trades(o.from_entry): continue
                     if o.order_type=='stop' and o.stop_price is None: continue
-                    is_open_point = point == 'open' or point.endswith('.open')
+                    is_open_point = path_is_open
                     is_close_point = point == 'close' or point.endswith('.close')
+                    fill_price=price
                     if o.order_type=='market' and ((is_open_point and o.created_bar_index < i) or (is_close_point and (self.config.process_orders_on_close or o.immediately))): pass
-                    elif o.order_type=='limit' and limit_reached(o,price,bar,self.config.mintick,self.config.backtest_fill_limits_assumption_ticks): price=o.limit_price or price
+                    elif o.order_type=='limit' and limit_reached(o,price,bar,self.config.mintick,self.config.backtest_fill_limits_assumption_ticks):
+                        fill_price=self._limit_fill_price(o,price,is_open_point)
                     elif o.order_type=='stop' and stop_reached(o,price):
-                        if self.config.stop_gap_fill_policy=='stop_price': price=o.stop_price or price
-                        elif not is_open_point and not self.config.fill_worse_stop_at_path_price: price=o.stop_price or price
+                        if self.config.stop_gap_fill_policy=='stop_price': fill_price=o.stop_price or price
+                        elif not is_open_point and not self.config.fill_worse_stop_at_path_price: fill_price=o.stop_price or price
                     elif o.order_type=='stop_limit':
                         if not o.stop_limit_activated and stop_reached(o,price): o.stop_limit_activated=True; self._event('STOP_LIMIT_ACTIVATED',f'stop-limit {o.id} activated',i,bar.time,o.id)
                         if not (o.stop_limit_activated and limit_reached(o,price,bar,self.config.mintick,self.config.backtest_fill_limits_assumption_ticks)): continue
-                        price=o.limit_price or price
+                        fill_price=self._limit_fill_price(o,price,is_open_point)
                     else: continue
-                    self._fill(o,bar,i,price,point); filled=True
+                    self._fill(o,bar,i,fill_price,point); filled=True
                     if self.config.calc_on_order_fills:
                         recalc+=1
                         if recalc>self.config.max_recalc_depth: self._diag('MAX_RECALC_DEPTH_REACHED','max recalc depth reached','warning',i,bar.time); return
                         self._call_strategy(strategy,bar,i); self._flush(ctx,bar,i)
             if not (self.config.calc_on_order_fills and filled): break
+
+    def _limit_fill_price(self,o:Order,path_price:float,is_open_point:bool)->float:
+        limit=o.limit_price if o.limit_price is not None else path_price
+        if is_open_point and self.config.limit_gap_fill_policy in ('tradingview','open_price'):
+            if o.side=='sell' and path_price>=limit: return path_price
+            if o.side=='buy' and path_price<=limit: return path_price
+        return limit
 
     def _price_path(self,bar:Bar)->list[tuple[float,str]]:
         if self.config.fill_model=='close_only': return [(bar.close,'close')]
@@ -372,8 +386,16 @@ class BacktestEngine:
     def _update_open_profit(self,price:float)->None:
         self.position.open_profit=0.0 if self.position.direction=='flat' else self.instrument.pnl(self.position.avg_price,price,abs(self.position.size),self.position.direction)
         self.equity=self.cash+self.position.open_profit
+    def _update_intrabar_drawdown(self,bar:Bar)->None:
+        if self.position.direction=='flat' or self.position.avg_price is None: return
+        adverse_price=bar.low if self.position.direction=='long' else bar.high
+        adverse_profit=self.instrument.pnl(self.position.avg_price,adverse_price,abs(self.position.size),self.position.direction)
+        adverse_equity=self.cash+adverse_profit
+        baseline=max(self.peak_equity,self.config.initial_capital)
+        dd=max(0.0,baseline-adverse_equity); ddp=dd/baseline*100 if baseline else 0.0
+        self.max_drawdown=max(self.max_drawdown,dd); self.max_drawdown_percent=max(self.max_drawdown_percent,ddp)
     def _update_state(self)->None:
-        self.state.position_size=self.position.size; self.state.position_avg_price=None if self.position.direction=='flat' else self.position.avg_price; self.state.position_direction=self.position.direction; self.state.cash=self.cash; self.state.equity=self.equity; self.state.open_profit=self.position.open_profit; self.state.net_profit=self.equity-self.config.initial_capital; self.state.gross_profit=sum(t.profit for t in self.closed_trades if t.profit>0); self.state.gross_loss=sum(t.profit for t in self.closed_trades if t.profit<0); self.state.max_drawdown=self.max_drawdown; self.state.max_drawdown_percent=self.max_drawdown_percent; self.state.closed_trades=len(self.closed_trades); self.state.open_trades=len(self.open_trades)
+        self.state.position_size=self.position.size; self.state.position_avg_price=None if self.position.direction=='flat' else self.position.avg_price; self.state.position_direction=self.position.direction; self.state.cash=self.cash; self.state.equity=self.equity; self.state.open_profit=self.position.open_profit; self.state.net_profit=self.equity-self.config.initial_capital; self.state.gross_profit=sum(t.profit for t in self.closed_trades if t.profit>0); self.state.gross_loss=abs(sum(t.profit for t in self.closed_trades if t.profit<0)); self.state.max_drawdown=self.max_drawdown; self.state.max_drawdown_percent=self.max_drawdown_percent; self.state.closed_trades=len(self.closed_trades); self.state.open_trades=len(self.open_trades)
     def _want(self,name:str)->bool: return name in self.config.required_outputs
     def _event(self,code,msg,i=None,t=None,oid=None)->None:
         if self.config.collect_events: self.events.append(Diagnostic(code,msg,'info',i,t,oid))
@@ -441,7 +463,7 @@ class BacktestEngine:
             elif metric not in {'sharpe','sortino'}: self._diag('REQUIRED_METRIC_UNSUPPORTED',f'required metric {metric} is unsupported','error')
         if 'sharpe' in self.config.required_metrics and r.sharpe_ratio is None: self._diag('REQUIRED_METRIC_UNAVAILABLE','sharpe requires at least two non-constant equity returns','error')
         if 'sortino' in self.config.required_metrics and r.sortino_ratio is None: self._diag('REQUIRED_METRIC_UNAVAILABLE','sortino requires at least one downside return','error')
-        r.max_drawdown=max((p.drawdown for p in equity_curve), default=self.max_drawdown) if equity_curve else self.max_drawdown; r.max_drawdown_percent=max((p.drawdown_percent for p in equity_curve), default=self.max_drawdown_percent) if equity_curve else self.max_drawdown_percent
+        r.max_drawdown=max([self.max_drawdown]+([p.drawdown for p in equity_curve] if equity_curve else [])); r.max_drawdown_percent=max([self.max_drawdown_percent]+([p.drawdown_percent for p in equity_curve] if equity_curve else []))
         if r.closed_trades is not None: r.available_outputs.add('closed_trades')
         if r.open_trades is not None: r.available_outputs.add('open_trades')
         if r.equity_curve is not None: r.available_outputs.add('equity_curve')
