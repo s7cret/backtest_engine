@@ -2,7 +2,9 @@
 
 Independent Python package for deterministic bar-by-bar historical strategy execution on OHLCV bars.
 
-The package exposes only its own dataclasses and `typing.Protocol` boundaries. It intentionally does not import PineLib, AST2Python, Pine2AST, or MarketDataProvider. Integrations belong in adapters.
+The package exposes only its own dataclasses and `typing.Protocol` boundaries. It intentionally does not import PineLib, AST2Python, Pine2AST, or MarketDataProvider from core modules. Integrations belong in adapters.
+
+In the amended 6-package Pain Stack architecture, Backtest Engine is the broker/fill/equity authority. PineLib remains the Pine runtime/builtin façade and order-intent compatibility layer. See `docs/BROKER_BOUNDARY.md` for the explicit split.
 
 ## Quick start
 
@@ -27,7 +29,7 @@ Useful public helpers live under `backtest_engine.core` (clock/lifecycle/executi
 
 Resume/checkpointing is exposed through `BacktestResumeState` and `core.BrokerSnapshot`: set `export_resume_state=True` and implement `export_state()`/`restore_state(state)` on strategy/runtime objects for continuation. Durable cross-process resume still requires caller-provided stable serializers.
 
-See `docs/releases/` and `ROADMAP.md` for current limits. TradingView parity claims require real exported fixtures; unavailable fixtures are documented as external blockers rather than assumed parity.
+See `docs/BROKER_BOUNDARY.md`, `docs/releases/`, and `ROADMAP.md` for current limits. TradingView parity claims require real exported fixtures; unavailable fixtures are documented as external blockers rather than assumed parity.
 
 ## License
 
