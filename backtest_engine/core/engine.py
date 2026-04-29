@@ -212,12 +212,17 @@ class BacktestEngine:
 
     def _validate_config(self) -> None:
         if self.config.margin_long != 100.0 or self.config.margin_short != 100.0:
+            msg = (
+                "margin/liquidation model is unsupported; "
+                f"margin_long={self.config.margin_long}, margin_short={self.config.margin_short}; "
+                "only 100.0/100.0 non-liquidating cash-margin accounting is modeled"
+            )
             if self.config.unsupported_margin_policy == "error":
-                raise ConfigError("margin/liquidation model is unsupported")
+                raise ConfigError(msg)
             if self.config.unsupported_margin_policy == "warn":
                 self._diag(
                     "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL",
-                    "margin settings are recorded but liquidation is unsupported",
+                    msg,
                     "warning",
                 )
         if (
@@ -299,12 +304,18 @@ class BacktestEngine:
                     if o.status in ("pending", "active"):
                         o.status = "cancelled"
                         self._cb("on_order_cancelled", o)
+                        self._event(
+                            "ORDER_CANCELLED", f"order {o.id} cancelled", i, bar.time, o.id
+                        )
                 continue
             if k == "cancel":
                 for o in self.orders:
                     if o.id == kw["id"] and o.status in ("pending", "active"):
                         o.status = "cancelled"
                         self._cb("on_order_cancelled", o)
+                        self._event(
+                            "ORDER_CANCELLED", f"order {o.id} cancelled", i, bar.time, o.id
+                        )
                 continue
             if k in ("close", "close_all"):
                 if self.position.direction == "flat":

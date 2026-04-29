@@ -29,7 +29,7 @@ Useful public helpers live under `backtest_engine.core` (clock/lifecycle/executi
 
 Resume/checkpointing is exposed through `BacktestResumeState` and `core.BrokerSnapshot`: set `export_resume_state=True` and implement `export_state()`/`restore_state(state)` on strategy/runtime objects for continuation. Durable cross-process resume still requires caller-provided stable serializers.
 
-See `docs/BROKER_BOUNDARY.md`, `docs/releases/`, and `ROADMAP.md` for current limits. TradingView parity claims require real exported fixtures; unavailable fixtures are documented as external blockers rather than assumed parity.
+See `docs/BROKER_BOUNDARY.md`, `docs/STAGE13_SUPPORTED_SUBSET.md`, `docs/releases/`, and `ROADMAP.md` for current limits. TradingView parity claims require real exported fixtures; unavailable fixtures are documented as external blockers rather than assumed parity.
 
 ## License
 
