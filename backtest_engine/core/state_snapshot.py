@@ -6,7 +6,7 @@ import pickle
 from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Protocol
 
-from backtest_engine.models import BacktestResumeState, Fill, Order, Position, Trade
+from backtest_engine.models import BacktestResumeState, Diagnostic, Fill, Order, Position, Trade
 
 
 class StateSerializer(Protocol):
@@ -55,6 +55,32 @@ class BrokerSnapshot:
     closed_trades: list[Trade] = field(default_factory=list)
     open_trades: list[Trade] = field(default_factory=list)
     last_trade_bar: int | None = None
+
+
+@dataclass(frozen=True)
+class RealtimeBrokerSnapshot(BrokerSnapshot):
+    """Detached broker checkpoint for future realtime tick rollback.
+
+    Unlike resume snapshots, realtime rollback also needs diagnostics/events to
+    return to the previous tick attempt before replaying the next update.
+    """
+
+    events: list[Diagnostic] = field(default_factory=list)
+    warnings: list[Diagnostic] = field(default_factory=list)
+    errors: list[Diagnostic] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RealtimeExecutionCheckpoint:
+    """Combined runtime/strategy/broker checkpoint for one realtime tick attempt.
+
+    This is a rollback primitive only. It does not define Pine realtime
+    scheduling, varip, or TradingView tick execution semantics.
+    """
+
+    broker_state: RealtimeBrokerSnapshot
+    runtime_state: object | None = None
+    strategy_state: object | None = None
 
 
 def _plain(value: object) -> object:

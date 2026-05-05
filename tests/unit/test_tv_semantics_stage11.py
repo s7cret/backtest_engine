@@ -101,6 +101,31 @@ def test_non_marketable_limit_remains_pending_until_touched():
     assert r.closed_trades[0].exit_bar_index == 4
 
 
+class FractionalLimitRoundTrip:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long", qty=1, limit=0.1591)
+        if bar_index == 2:
+            self.ctx.exit("X", from_entry="L", qty=1, limit=0.1402)
+
+
+def test_fractional_limit_fills_round_directionally_to_tick_grid():
+    bars = [
+        Bar(1, 0.1607, 0.1607, 0.1607, 0.1607),
+        Bar(2, 0.1568, 0.1568, 0.1568, 0.1568),
+        Bar(3, 0.1361, 0.1361, 0.1361, 0.1361),
+        Bar(4, 0.1467, 0.1467, 0.1467, 0.1467),
+    ]
+    r = BacktestEngine(cfg(end_time=4, mintick=0.01, process_orders_on_close=True)).run(
+        FractionalLimitRoundTrip, bars=bars
+    )
+    assert r.closed_trades[0].entry_price == 0.15
+    assert r.closed_trades[0].exit_price == 0.15
+
+
 def test_intrabar_drawdown_uses_open_trade_adverse_price():
     bars = [
         Bar(1, 10, 10, 10, 10),
@@ -112,3 +137,83 @@ def test_intrabar_drawdown_uses_open_trade_adverse_price():
     assert r.max_drawdown == 5
     assert r.max_drawdown_percent == 0.5
     assert r.gross_loss == 0
+
+
+class DefaultCashEntryClose:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long")
+        if bar_index == 1:
+            self.ctx.close("L")
+
+
+class DefaultPercentEntryClose(DefaultCashEntryClose):
+    pass
+
+
+class PyramidingCloseByEntryId:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L1", "long")
+        if bar_index == 1:
+            self.ctx.entry("L2", "long")
+        if bar_index == 2:
+            self.ctx.close("L1")
+            self.ctx.close("L2")
+
+
+class FractionalStopEntry:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("S", "long", qty=1, stop=0.1639)
+
+
+def test_default_cash_sizing_uses_fill_price_and_qty_step_floor():
+    bars = [Bar(1, 0.160714, 0.160714, 0.160714, 0.160714), Bar(2, 0.13, 0.13, 0.13, 0.13)]
+    r = BacktestEngine(
+        cfg(end_time=2, default_qty_type="cash", default_qty_value=100, qty_step=1, process_orders_on_close=True)
+    ).run(DefaultCashEntryClose, bars=bars)
+    assert r.closed_trades[0].qty == 622
+
+
+def test_default_percent_sizing_reserves_percent_commission_and_qty_step_floor():
+    bars = [Bar(1, 0.160714, 0.160714, 0.160714, 0.160714), Bar(2, 0.13, 0.13, 0.13, 0.13)]
+    r = BacktestEngine(
+        cfg(
+            end_time=2,
+            default_qty_type="percent_of_equity",
+            default_qty_value=10,
+            commission_type="percent",
+            commission_value=0.1,
+            qty_step=1,
+            process_orders_on_close=True,
+        )
+    ).run(DefaultPercentEntryClose, bars=bars)
+    assert r.closed_trades[0].qty == 621
+
+
+def test_strategy_close_id_closes_matching_pyramid_entry_not_default_lot():
+    bars = [Bar(1, 10, 10, 10, 10), Bar(2, 10, 10, 10, 10), Bar(3, 12, 12, 12, 12)]
+    r = BacktestEngine(cfg(end_time=3, pyramiding=2, process_orders_on_close=True)).run(
+        PyramidingCloseByEntryId, bars=bars
+    )
+    assert len(r.closed_trades) == 2
+    assert len(r.open_trades) == 0
+    assert {t.entry_id for t in r.closed_trades} == {"L1", "L2"}
+
+
+def test_fractional_stop_market_rounds_trigger_to_tick_before_slippage():
+    bars = [Bar(1, 0.160714, 0.17, 0.160714, 0.17)]
+    r = BacktestEngine(
+        cfg(end_time=1, mintick=0.01, slippage=1, process_orders_on_close=True)
+    ).run(FractionalStopEntry, bars=bars)
+    assert r.open_trades[0].entry_price == 0.18

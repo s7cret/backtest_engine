@@ -78,20 +78,20 @@ class BuyOnce:
             self.ctx.entry("L", "long", qty=1)
 
 
-def test_margin_non_100_error_and_warn_paths_are_explicit():
+def test_margin_non_100_runs_without_unsupported_warning_when_no_call():
     bars = [Bar(1, 10, 10, 10, 10), Bar(2, 10, 10, 10, 10)]
 
-    with pytest.raises(ConfigError, match="margin/liquidation model is unsupported"):
-        BacktestEngine(cfg(margin_long=50, unsupported_margin_policy="error")).run(
-            BuyOnce, bars=bars
-        )
+    result = BacktestEngine(cfg(margin_long=50, unsupported_margin_policy="error")).run(
+        BuyOnce, bars=bars
+    )
+    assert result.status == "completed"
+    assert not any(d.code == "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL" for d in result.warnings)
 
     result = BacktestEngine(cfg(margin_short=25, unsupported_margin_policy="warn")).run(
         BuyOnce, bars=bars
     )
-    warning = next(d for d in result.warnings if d.code == "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL")
-    assert "margin_long=100.0" in warning.message
-    assert "margin_short=25" in warning.message
+    assert result.status == "completed"
+    assert not any(d.code == "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL" for d in result.warnings)
 
 
 def test_exit_reservations_clip_quantities_and_prevent_over_close():
@@ -157,3 +157,68 @@ def test_stop_limit_entry_activates_then_fills_limit_without_gap_overclaim():
 
     assert [(t.entry_id, t.entry_price, t.qty) for t in result.open_trades] == [("SL", 10.5, 1.0)]
     assert any(e.code == "STOP_LIMIT_ACTIVATED" and e.order_id == "SL" for e in result.events)
+
+
+def test_short_margin_call_liquidates_four_times_cover_amount():
+    bars = [
+        Bar(0, 224.17, 224.17, 224.17, 224.17),
+        Bar(1, 224.17, 224.17, 224.17, 224.17),
+        Bar(2, 237.18, 237.18, 237.18, 237.18),
+    ]
+
+    class ShortOnce:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("S", "short", qty=300)
+
+    result = BacktestEngine(
+        cfg(
+            initial_capital=10000,
+            margin_short=10,
+            commission_type="none",
+            qty_step=1,
+            timeframe="60",
+            start_time=0,
+            end_time=2,
+        )
+    ).run(ShortOnce, bars=bars)
+
+    assert result.closed_trades[0].exit_id == "Margin call"
+    assert result.closed_trades[0].qty == 168
+    assert result.open_trades[0].qty == 132
+    assert result.open_trades[0].direction == "short"
+
+
+def test_long_margin_call_liquidates_single_unit_when_cover_below_one():
+    bars = [
+        Bar(0, 287.32, 287.32, 287.32, 287.32),
+        Bar(1, 287.32, 287.32, 287.32, 287.32),
+        Bar(2, 250.68, 250.68, 250.68, 250.68),
+    ]
+
+    class LongOnce:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=120)
+
+    result = BacktestEngine(
+        cfg(
+            initial_capital=7395.04,
+            margin_long=10,
+            commission_type="none",
+            qty_step=1,
+            timeframe="60",
+            start_time=0,
+            end_time=2,
+        )
+    ).run(LongOnce, bars=bars)
+
+    assert result.closed_trades[0].exit_id == "Margin call"
+    assert result.closed_trades[0].qty == 1
+    assert result.open_trades[0].qty == 119

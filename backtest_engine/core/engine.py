@@ -1,6 +1,7 @@
 from __future__ import annotations
 import time
 from dataclasses import replace
+from inspect import signature
 from typing import Any
 from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext, StrategyStateView
@@ -30,7 +31,14 @@ from backtest_engine.broker.slippage import slippage_value
 from backtest_engine.broker.rounding import round_to_step
 from backtest_engine.broker.fill_simulator import build_price_path, limit_reached, stop_reached
 from backtest_engine.core.deterministic_hash import sha256_obj
-from backtest_engine.core.state_snapshot import BrokerSnapshot, build_resume_state
+from backtest_engine.core.realtime import (
+    BarTickSlice,
+    RealtimeTickAttempt,
+    RealtimeTickCommitPolicy,
+    RuntimeTickUpdate,
+    validate_realtime_order_fill_oracle_proof,
+)
+from backtest_engine.core.state_snapshot import BrokerSnapshot, RealtimeBrokerSnapshot, RealtimeExecutionCheckpoint, build_resume_state, clone_state
 from backtest_engine.core.validation import data_fingerprint, validate_bars
 from backtest_engine.results import BacktestResult
 from backtest_engine.results.statistics import summarize
@@ -107,11 +115,6 @@ class BacktestEngine:
                 )
             self._diag(
                 "BAR_MAGNIFIER_FALLBACK", "bar magnifier unavailable; using OHLC path", "warning"
-            )
-        if self.config.calc_on_every_tick and not self.config.experimental_intrabar_strategy_mode:
-            raise ConfigError(
-                "calc_on_every_tick requires realtime rollback/varip semantics; "
-                "BacktestEngine parity mode fails closed unless experimental_intrabar_strategy_mode=True"
             )
         ctx = StrategyContext(self.config, self.state)
         runtime = self.config.runtime or _NoopRuntime()
@@ -197,6 +200,9 @@ class BacktestEngine:
             self._cb("on_bar_end", bar, i, self.state)
             if stop_now:
                 break
+        finalize = getattr(strategy, "_finalize", None)
+        if callable(finalize):
+            finalize()
         if self.config.force_close_on_end and self.position.direction != "flat" and len(series):
             self._force_close(series.get_bar(len(series) - 1), len(series) - 1)
         result = self._result(
@@ -211,25 +217,28 @@ class BacktestEngine:
         return result
 
     def _validate_config(self) -> None:
-        if self.config.margin_long != 100.0 or self.config.margin_short != 100.0:
-            msg = (
-                "margin/liquidation model is unsupported; "
-                f"margin_long={self.config.margin_long}, margin_short={self.config.margin_short}; "
-                "only 100.0/100.0 non-liquidating cash-margin accounting is modeled"
-            )
-            if self.config.unsupported_margin_policy == "error":
-                raise ConfigError(msg)
-            if self.config.unsupported_margin_policy == "warn":
-                self._diag(
-                    "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL",
-                    msg,
-                    "warning",
-                )
+        if self.config.margin_long <= 0.0 or self.config.margin_short <= 0.0:
+            raise ConfigError("margin_long and margin_short must be positive percentages")
         if (
             self.config.tradingview_compare_mode == "streaming"
             and self.config.execution_mode != "debug"
         ):
             raise ConfigError("streaming TradingView compare requires execution_mode=debug")
+        if self.config.calc_on_every_tick:
+            if not self.config.experimental_intrabar_strategy_mode:
+                raise ConfigError(
+                    "calc_on_every_tick requires realtime rollback/varip semantics; "
+                    "BacktestEngine parity mode fails closed unless experimental_intrabar_strategy_mode=True"
+                )
+            if self.config.realtime_ticks is None and self.config.realtime_tick_provider is None:
+                raise ConfigError(
+                    "calc_on_every_tick requires explicit realtime_ticks or realtime_tick_provider; "
+                    "historical OHLC fallback is forbidden"
+                )
+            raise ConfigError(
+                "calc_on_every_tick tick replay is not implemented; realtime rollback/commit "
+                "semantics must be oracle-verified before enabling execution"
+            )
         if "equity_curve" in self.config.required_outputs and not self.config.collect_equity_curve:
             self.config.collect_equity_curve = True
         if (
@@ -295,7 +304,14 @@ class BacktestEngine:
         except Exception as e:
             raise StrategyRuntimeError(str(e)) from e
 
-    def _flush(self, ctx: StrategyContext, bar: Bar, i: int) -> None:
+    def _flush(
+        self,
+        ctx: StrategyContext,
+        bar: Bar,
+        i: int,
+        *,
+        recalc_after_fill: bool = False,
+    ) -> None:
         for c in ctx.buffer.drain():
             k = c.name
             kw = c.kwargs
@@ -320,9 +336,29 @@ class BacktestEngine:
             if k in ("close", "close_all"):
                 if self.position.direction == "flat":
                     continue
-                qty = self._qty_from_args(kw, self.position.size, bar.close)
+                from_entry = kw.get("id") if k == "close" else None
                 if k == "close_all":
                     qty = abs(self.position.size)
+                elif kw.get("qty") is None and kw.get("qty_percent") is None and from_entry:
+                    # Pine `strategy.close(id)` closes the open entry/trades with
+                    # that entry id, not merely one default-sized lot from the
+                    # aggregate position. This must use raw matching position qty,
+                    # not exit-reservation-adjusted qty: an explicit close can
+                    # flatten a position even when a pending trailing/bracket exit
+                    # has reserved that entry.
+                    qty = sum(t.qty for t in self._matching_open_trades(from_entry))
+                    if qty <= 0:
+                        self._diag(
+                            "ORDER_REJECTED_NO_MATCHING_ENTRY",
+                            "close has no matching entry id",
+                            "warning",
+                            i,
+                            bar.time,
+                            from_entry,
+                        )
+                        continue
+                else:
+                    qty = self._qty_from_args(kw, self.position.size, bar.close)
                 self._add_order(
                     Order(
                         id=kw.get("id", "close_all"),
@@ -335,10 +371,15 @@ class BacktestEngine:
                         created_bar_index=i,
                         created_time=bar.time,
                         active_from_bar_index=i
-                        if (kw.get("immediately") or self.config.process_orders_on_close)
+                        if (
+                            kw.get("immediately")
+                            or self.config.process_orders_on_close
+                            or recalc_after_fill
+                        )
                         else i + 1,
                         position_direction=self.position.direction,
                         reduce_only=True,
+                        from_entry=from_entry,
                         comment=kw.get("comment"),
                         immediately=kw.get("immediately", False),
                     ),
@@ -429,7 +470,7 @@ class BacktestEngine:
                             qty=qty,
                             created_bar_index=i,
                             created_time=bar.time,
-                            active_from_bar_index=i + 1,
+                            active_from_bar_index=i if recalc_after_fill else i + 1,
                             position_direction=direction,
                             reduce_only=True,
                             limit_price=limit,
@@ -455,7 +496,7 @@ class BacktestEngine:
                             qty=qty,
                             created_bar_index=i,
                             created_time=bar.time,
-                            active_from_bar_index=i + 1,
+                            active_from_bar_index=i if recalc_after_fill else i + 1,
                             position_direction=direction,
                             reduce_only=True,
                             stop_price=stop,
@@ -497,7 +538,7 @@ class BacktestEngine:
                             qty=qty,
                             created_bar_index=i,
                             created_time=bar.time,
-                            active_from_bar_index=i + 1,
+                            active_from_bar_index=i if recalc_after_fill else i + 1,
                             position_direction=direction,
                             reduce_only=True,
                             stop_price=None,
@@ -517,6 +558,7 @@ class BacktestEngine:
                 continue
             direction = kw["direction"]
             side = "buy" if direction == "long" else "sell"
+            uses_default_qty = kw.get("qty") is None and kw.get("qty_percent") is None
             qty = self._qty_from_args(kw, None, bar.close)
             effect = "open"
             if (
@@ -555,7 +597,7 @@ class BacktestEngine:
                 qty,
                 i,
                 bar.time,
-                i if self.config.process_orders_on_close else i + 1,
+                i if (self.config.process_orders_on_close or recalc_after_fill) else i + 1,
                 direction,
                 False,
                 limit,
@@ -565,6 +607,7 @@ class BacktestEngine:
                 kw.get("oca_type") or "none",
                 comment=kw.get("comment"),
             )
+            new.qty_is_default = uses_default_qty
             if existing:
                 existing.qty = new.qty
                 existing.limit_price = new.limit_price
@@ -586,7 +629,15 @@ class BacktestEngine:
         elif self.config.default_qty_type == "cash":
             q = self.config.default_qty_value / price
         else:
-            q = (self.equity * self.config.default_qty_value / 100.0) / price
+            notional = self.equity * self.config.default_qty_value / 100.0
+            # TradingView percent-of-equity sizing reserves percent commission in
+            # the notional denominator, so the entry plus entry commission fits
+            # inside the requested equity percentage. Cash sizing does not do
+            # this adjustment in the observed stock oracle cases.
+            denom = price
+            if self.config.commission_type == "percent":
+                denom = price * (1.0 + self.config.commission_value / 100.0)
+            q = notional / denom
         q = round_to_step(q, self.config.qty_step, self.config.qty_rounding)
         if self.config.min_qty and q < self.config.min_qty:
             q = 0.0
@@ -719,10 +770,12 @@ class BacktestEngine:
         skip_open: bool = False,
     ) -> None:
         recalc = 0
+        path = self._price_path(bar)
+        path_cursor = 0
         while True:
             filled = False
-            path = self._price_path(bar)
-            for price, point in path:
+            restart_after_recalc = False
+            for path_index, (price, point) in enumerate(path[path_cursor:], start=path_cursor):
                 path_is_open = point == "open" or point.endswith(".open")
                 if open_only and not path_is_open:
                     continue
@@ -766,6 +819,11 @@ class BacktestEngine:
                     if o.order_type == "market" and (
                         (is_open_point and o.created_bar_index < i)
                         or (
+                            self.config.calc_on_order_fills
+                            and o.created_bar_index == i
+                            and o.active_from_bar_index <= i
+                        )
+                        or (
                             is_close_point
                             and (self.config.process_orders_on_close or o.immediately)
                         )
@@ -783,7 +841,18 @@ class BacktestEngine:
                         if self.config.stop_gap_fill_policy == "stop_price":
                             fill_price = o.stop_price or price
                         elif not is_open_point and not self.config.fill_worse_stop_at_path_price:
-                            fill_price = o.stop_price or price
+                            fill_price = (
+                                o.stop_price
+                                if (
+                                    o.stop_price is not None
+                                    and not (
+                                        self.config.calc_on_order_fills
+                                        and o.created_bar_index == i
+                                        and o.active_from_bar_index <= i
+                                    )
+                                )
+                                else price
+                            )
                     elif o.order_type == "stop_limit":
                         if not o.stop_limit_activated and stop_reached(o, price):
                             o.stop_limit_activated = True
@@ -810,7 +879,9 @@ class BacktestEngine:
                         continue
                     self._fill(o, bar, i, fill_price, point)
                     filled = True
-                    if self.config.calc_on_order_fills:
+                    if self.config.calc_on_order_fills and not current_bar_close_activation:
+                        self._update_open_profit(fill_price)
+                        self._update_state()
                         recalc += 1
                         if recalc > self.config.max_recalc_depth:
                             self._diag(
@@ -822,9 +893,80 @@ class BacktestEngine:
                             )
                             return
                         self._call_strategy(strategy, bar, i)
-                        self._flush(ctx, bar, i)
+                        self._flush(ctx, bar, i, recalc_after_fill=True)
+                        path_cursor = path_index
+                        restart_after_recalc = True
+                        break
+                if restart_after_recalc:
+                    break
+                if self._maybe_margin_call(price, bar, i, point):
+                    filled = True
+                    if self.config.calc_on_order_fills:
+                        self._update_open_profit(price)
+                        self._update_state()
+                        recalc += 1
+                        if recalc > self.config.max_recalc_depth:
+                            self._diag(
+                                "MAX_RECALC_DEPTH_REACHED",
+                                "max recalc depth reached",
+                                "warning",
+                                i,
+                                bar.time,
+                            )
+                            return
+                        self._call_strategy(strategy, bar, i)
+                        self._flush(ctx, bar, i, recalc_after_fill=True)
+                        path_cursor = path_index
+                        restart_after_recalc = True
+                        break
+            if restart_after_recalc and path_cursor < len(path):
+                continue
             if not (self.config.calc_on_order_fills and filled):
                 break
+            break
+
+    def _maybe_margin_call(self, price: float, bar: Bar, i: int, point: str) -> bool:
+        if self.position.direction == "flat" or self.position.avg_price is None:
+            return False
+        margin_percent = (
+            self.config.margin_long if self.position.direction == "long" else self.config.margin_short
+        )
+        if margin_percent >= 100.0:
+            return False
+        margin_ratio = margin_percent / 100.0
+        qty_abs = abs(self.position.size)
+        if qty_abs <= 0.0 or price <= 0.0 or margin_ratio <= 0.0:
+            return False
+        self._update_open_profit(price)
+        margin_required = price * qty_abs * margin_ratio
+        available_funds = self.equity - margin_required
+        if available_funds > 1e-12:
+            return False
+        cover_raw = (-available_funds / margin_ratio) / price
+        liquidation_qty = 1.0 if cover_raw < 1.0 else float(int(cover_raw) * 4)
+        if self.config.qty_step:
+            liquidation_qty = round_to_step(liquidation_qty, self.config.qty_step, "floor")
+        liquidation_qty = min(qty_abs, liquidation_qty)
+        if liquidation_qty <= 0.0:
+            return False
+        order = Order(
+            "Margin call",
+            "close",
+            self.position.direction,
+            "sell" if self.position.direction == "long" else "buy",
+            "close",
+            "market",
+            liquidation_qty,
+            i,
+            bar.time,
+            i,
+            self.position.direction,
+            True,
+            immediately=True,
+        )
+        self._fill(order, bar, i, price, point)
+        self._event("MARGIN_CALL", f"margin call liquidated {liquidation_qty}", i, bar.time, order.id)
+        return True
 
     def _limit_fill_price(self, o: Order, path_price: float, is_open_point: bool) -> float:
         limit = o.limit_price if o.limit_price is not None else path_price
@@ -935,15 +1077,36 @@ class BacktestEngine:
                 )
                 return
             o.qty = min(o.qty, avail)
+        # TradingView applies `slippage` to market/stop-style fills, not to passive
+        # limit fills. Applying tick slippage to limit orders makes buy limits fill
+        # worse than their own limit price and breaks the Stage 2B TV oracle.
+        if o.order_type == "stop" and self.config.mintick:
+            # A stop market order becomes marketable only once the stop level is
+            # reached on the instrument tick grid. TradingView rounds buy stops
+            # up and sell stops down before applying slippage.
+            price = round_to_step(price, self.config.mintick, "ceil" if o.side == "buy" else "floor")
+        slip_raw = 0.0 if o.order_type in {"limit", "stop_limit"} else self.config.slippage
         slip = slippage_value(
             price,
             o.side,
             o.position_effect,
-            self.config.slippage,
+            slip_raw,
             self.config.slippage_type,
             self.config.mintick,
         )
-        fprice = round_to_step(price + slip, self.config.mintick, self.config.price_rounding)
+        rounding_mode = self.config.price_rounding
+        if o.order_type in {"limit", "stop_limit"} and self.config.mintick:
+            # Passive limit fills must remain executable on the tick grid without
+            # crossing the order side. For buy limits, do not round up above the
+            # fill/limit price; for sell limits, do not round down below it. This
+            # matches TradingView-style adjusted equity data in the Stage 2B
+            # oracle, where fractional split-adjusted OHLC is reported/fillable
+            # on cent ticks.
+            rounding_mode = "floor" if o.side == "buy" else "ceil"
+        fprice = round_to_step(price + slip, self.config.mintick, rounding_mode)
+        if getattr(o, "qty_is_default", False):
+            default_qty = self._qty_from_args({}, None, fprice)
+            o.qty = abs(self.position.size) + default_qty if o.position_effect == "reverse" else default_qty
         before = self.position.direction
         com = calculate_commission(
             fprice, o.qty, self.config.commission_type, self.config.commission_value
@@ -1274,6 +1437,221 @@ class BacktestEngine:
         snapshot = self.config.snapshot()
         snapshot.pop("export_resume_state", None)
         return sha256_obj(snapshot)
+
+    def _export_realtime_broker_state(self) -> RealtimeBrokerSnapshot:
+        """Export a detached broker checkpoint for future realtime tick rollback."""
+
+        return RealtimeBrokerSnapshot(
+            cash=self.cash,
+            equity=self.equity,
+            peak_equity=self.peak_equity,
+            max_drawdown=self.max_drawdown,
+            max_drawdown_percent=self.max_drawdown_percent,
+            position=clone_state(self.position),
+            orders=clone_state(self.orders),
+            fills=clone_state(self.fills),
+            closed_trades=clone_state(self.closed_trades),
+            open_trades=clone_state(self.open_trades),
+            last_trade_bar=self.last_trade_bar,
+            events=clone_state(self.events),
+            warnings=clone_state(self.warnings),
+            errors=clone_state(self.errors),
+        )
+
+    def _restore_realtime_broker_state(
+        self, snapshot: RealtimeBrokerSnapshot, ctx: StrategyContext | None = None
+    ) -> None:
+        """Restore a detached broker checkpoint and refresh StrategyStateView refs."""
+
+        if not isinstance(snapshot, RealtimeBrokerSnapshot):
+            raise ResumeUnsupportedError(
+                "realtime broker rollback requires a RealtimeBrokerSnapshot"
+            )
+        self.cash = snapshot.cash
+        self.equity = snapshot.equity
+        self.peak_equity = snapshot.peak_equity
+        self.max_drawdown = snapshot.max_drawdown
+        self.max_drawdown_percent = snapshot.max_drawdown_percent
+        self.position = clone_state(snapshot.position)
+        self.orders = clone_state(snapshot.orders)
+        self.fills = clone_state(snapshot.fills)
+        self.closed_trades = clone_state(snapshot.closed_trades)
+        self.open_trades = clone_state(snapshot.open_trades)
+        self.last_trade_bar = snapshot.last_trade_bar
+        self.events = clone_state(snapshot.events)
+        self.warnings = clone_state(snapshot.warnings)
+        self.errors = clone_state(snapshot.errors)
+        self.state = StrategyStateView(
+            initial_capital=self.config.initial_capital,
+            cash=self.cash,
+            equity=self.equity,
+            _open_trades_ref=self.open_trades,
+            _closed_trades_ref=self.closed_trades,
+        )
+        if ctx is not None:
+            ctx.state = self.state
+        self._update_state()
+
+    def _export_realtime_execution_checkpoint(
+        self, *, strategy: Any | None = None, runtime: Any | None = None
+    ) -> RealtimeExecutionCheckpoint:
+        """Export combined broker/runtime/strategy checkpoint for tick rollback."""
+
+        runtime_export = getattr(runtime, "export_state", None) if runtime is not None else None
+        strategy_export = getattr(strategy, "export_state", None) if strategy is not None else None
+        runtime_state = None
+        if callable(runtime_export):
+            try:
+                params = signature(runtime_export).parameters
+                runtime_state = (
+                    runtime_export(include_varip=False)
+                    if "include_varip" in params
+                    else runtime_export()
+                )
+            except (TypeError, ValueError):
+                runtime_state = runtime_export()
+        return RealtimeExecutionCheckpoint(
+            broker_state=self._export_realtime_broker_state(),
+            runtime_state=clone_state(runtime_state),
+            strategy_state=clone_state(strategy_export()) if callable(strategy_export) else None,
+        )
+
+    def _restore_realtime_execution_checkpoint(
+        self,
+        checkpoint: RealtimeExecutionCheckpoint,
+        *,
+        ctx: StrategyContext | None = None,
+        strategy: Any | None = None,
+        runtime: Any | None = None,
+    ) -> None:
+        """Restore combined broker/runtime/strategy checkpoint for tick rollback."""
+
+        if not isinstance(checkpoint, RealtimeExecutionCheckpoint):
+            raise ResumeUnsupportedError(
+                "realtime execution rollback requires a RealtimeExecutionCheckpoint"
+            )
+        self._restore_realtime_broker_state(checkpoint.broker_state, ctx)
+        if checkpoint.runtime_state is not None:
+            restore = getattr(runtime, "restore_state", None) if runtime is not None else None
+            if not callable(restore):
+                raise ResumeUnsupportedError(
+                    "runtime_state is present but runtime does not implement restore_state(state)"
+                )
+            restore(clone_state(checkpoint.runtime_state))
+        if checkpoint.strategy_state is not None:
+            restore = getattr(strategy, "restore_state", None) if strategy is not None else None
+            if not callable(restore):
+                raise ResumeUnsupportedError(
+                    "strategy_state is present but strategy does not implement restore_state(state)"
+                )
+            restore(clone_state(checkpoint.strategy_state))
+
+    def _guarded_realtime_tick_loop_skeleton(
+        self,
+        tick_slice: BarTickSlice,
+        *,
+        ctx: StrategyContext,
+        strategy: Any | None = None,
+        runtime: Any | None = None,
+        on_attempt: Any | None = None,
+    ) -> tuple[RealtimeTickAttempt, ...]:
+        """Create rollback-guarded tick attempts without enabling tick execution.
+
+        Each tick gets a combined execution checkpoint, optional local mutation
+        hook, and immediate restore. The method is intentionally not called from
+        ``run()`` while ``calc_on_every_tick`` remains fail-closed.
+        """
+
+        attempts: list[RealtimeTickAttempt] = []
+        for tick_index, tick in enumerate(tick_slice.ticks):
+            checkpoint = self._export_realtime_execution_checkpoint(
+                strategy=strategy, runtime=runtime
+            )
+            if callable(on_attempt):
+                on_attempt(tick, tick_index)
+            self._restore_realtime_execution_checkpoint(
+                checkpoint, ctx=ctx, strategy=strategy, runtime=runtime
+            )
+            attempts.append(
+                RealtimeTickAttempt(
+                    bar_index=tick_slice.bar_index,
+                    tick_index=tick_index,
+                    tick=tick,
+                    checkpoint=checkpoint,
+                    rolled_back=True,
+                )
+            )
+        return tuple(attempts)
+
+    def _guarded_realtime_strategy_tick_loop_skeleton(
+        self,
+        tick_slice: BarTickSlice,
+        *,
+        ctx: StrategyContext,
+        strategy: Any,
+        runtime: Any | None = None,
+        commit_policy: RealtimeTickCommitPolicy | None = None,
+    ) -> tuple[RealtimeTickAttempt, ...]:
+        """Invoke strategy once per tick under rollback, without committing effects.
+
+        This is a guarded scaffold for future ``calc_on_every_tick`` work. It is
+        intentionally not wired into ``run()`` and restores broker, runtime,
+        strategy, and command-buffer state after every attempted tick.
+        """
+
+        policy = commit_policy or RealtimeTickCommitPolicy()
+        if policy.allow_intrabar_order_fills:
+            validate_realtime_order_fill_oracle_proof(policy.intrabar_order_fill_oracle_proof)
+        attempts: list[RealtimeTickAttempt] = []
+        update_realtime_tick = (
+            getattr(runtime, "update_realtime_tick", None) if runtime is not None else None
+        )
+        total_ticks = len(tick_slice.ticks)
+        for tick_index, tick in enumerate(tick_slice.ticks):
+            action = policy.action_for(tick_index, total_ticks)
+            checkpoint = self._export_realtime_execution_checkpoint(
+                strategy=strategy, runtime=runtime
+            )
+            buffered_commands = clone_state(ctx.buffer.commands)
+            committed = False
+            try:
+                current_bar = tick_slice.bar
+                if callable(update_realtime_tick):
+                    maybe_bar = update_realtime_tick(
+                        RuntimeTickUpdate(
+                            price=tick.price,
+                            volume=float(tick.volume or 0.0),
+                            time=tick.time,
+                            is_final=tick_index == total_ticks - 1,
+                        )
+                    )
+                    if maybe_bar is not None:
+                        current_bar = maybe_bar
+                self._call_strategy(strategy, current_bar, tick_slice.bar_index)
+                if action == "commit_final" and len(ctx.buffer.commands) != len(buffered_commands):
+                    raise ConfigError(
+                        "realtime order commands require TradingView intrabar order/fill oracle evidence"
+                    )
+                committed = action == "commit_final"
+            finally:
+                if not committed:
+                    self._restore_realtime_execution_checkpoint(
+                        checkpoint, ctx=ctx, strategy=strategy, runtime=runtime
+                    )
+                    ctx.buffer.commands = clone_state(buffered_commands) or []
+            attempts.append(
+                RealtimeTickAttempt(
+                    bar_index=tick_slice.bar_index,
+                    tick_index=tick_index,
+                    tick=tick,
+                    checkpoint=checkpoint,
+                    rolled_back=not committed,
+                    strategy_invoked=True,
+                    policy=action,
+                    committed=committed,
+                )
+            )
+        return tuple(attempts)
 
     def _restore_resume_state(
         self, resume_state: BacktestResumeState, strategy: Any, runtime: Any, ctx: StrategyContext

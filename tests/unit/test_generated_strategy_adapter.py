@@ -84,6 +84,48 @@ def test_generated_strategy_adapter_fails_closed_for_unsupported_recalc_semantic
         BacktestEngine(config).run(strategy_class, bars=bars)
 
 
+class GeneratedCalcOnFillStrategy:
+    def __init__(self, params=None, runtime=None):
+        self.params = params or {}
+        self.rt = runtime
+        self.ctx = _GeneratedCtx()
+        self.entered = False
+        self.closed = False
+
+    def _process_bar(self, bar):
+        del bar
+        idx = self.rt.bar_index_series.current
+        if idx == 0 and not self.entered and self.ctx.position_size == 0:
+            self.entered = True
+            self.ctx.entry("L", "long")
+        if idx == 1 and self.entered and not self.closed and self.ctx.position_size > 0:
+            self.closed = True
+            self.ctx.close("L")
+
+
+def test_generated_strategy_adapter_supports_calc_on_order_fills_recalc_bridge() -> None:
+    strategy_class = make_generated_strategy_adapter(GeneratedCalcOnFillStrategy)
+    bars = [Bar(i, 100.0, 100.0, 100.0, 100.0, 1.0) for i in range(3)]
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=2,
+        commission_type="none",
+        commission_value=0.0,
+        process_orders_on_close=False,
+        calc_on_order_fills=True,
+    )
+
+    result = BacktestEngine(config).run(strategy_class, bars=bars)
+
+    assert result.status == "completed"
+    assert result.total_trades == 1
+    assert len(result.closed_trades or []) == 1
+    assert result.closed_trades[0].entry_bar_index == 1
+    assert result.closed_trades[0].exit_bar_index == 1
+
+
 class _MatchingDeclaration:
     initial_capital = 10000.0
     default_qty_type = "fixed"
@@ -137,3 +179,32 @@ def test_generated_strategy_adapter_config_handshake_rejects_mismatch() -> None:
     )
     with pytest.raises(UnsupportedGeneratedStrategySemantics, match="initial_capital"):
         BacktestEngine(config).run(strategy_class, bars=[Bar(0, 1, 1, 1, 1), Bar(1, 1, 1, 1, 1)])
+
+
+class GeneratedRecordsPineTime:
+    seen_times: list[int] = []
+
+    def __init__(self, params=None, runtime=None):
+        self.params = params or {}
+        self.rt = runtime
+        self.ctx = None
+
+    def _process_bar(self, bar):
+        del bar
+        self.__class__.seen_times.append(self.rt.time.current)
+
+
+def test_generated_strategy_adapter_converts_second_timestamps_to_pine_milliseconds() -> None:
+    GeneratedRecordsPineTime.seen_times = []
+    strategy_class = make_generated_strategy_adapter(GeneratedRecordsPineTime)
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1D",
+        start_time=1_000,
+        end_time=1_000,
+        commission_type="none",
+        commission_value=0.0,
+    )
+    BacktestEngine(config).run(strategy_class, bars=[Bar(1_000, 1, 1, 1, 1)])
+
+    assert GeneratedRecordsPineTime.seen_times == [1_000_000]

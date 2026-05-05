@@ -71,10 +71,12 @@ def test_oca_reduce_reservation_prevents_global_exit_over_closing_reserved_entry
     )
 
 
-def test_nonstandard_margin_fails_closed_or_warns_explicitly():
+def test_nonstandard_margin_runs_without_unsupported_warning_when_no_call():
     bars = [Bar(1, 10, 10, 10, 10), Bar(2, 10, 10, 10, 10)]
-    with pytest.raises(ConfigError):
-        BacktestEngine(cfg(margin_long=50, unsupported_margin_policy="error")).run(BuyOnce, bars=bars)
+    r = BacktestEngine(cfg(margin_long=50, unsupported_margin_policy="error")).run(BuyOnce, bars=bars)
+    assert r.status == "completed"
+    assert not any(d.code == "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL" for d in r.warnings)
 
     r = BacktestEngine(cfg(margin_short=50, unsupported_margin_policy="warn")).run(BuyOnce, bars=bars)
-    assert any(d.code == "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL" for d in r.warnings)
+    assert r.status == "completed"
+    assert not any(d.code == "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL" for d in r.warnings)

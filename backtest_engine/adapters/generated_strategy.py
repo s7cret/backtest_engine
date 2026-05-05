@@ -133,6 +133,8 @@ class _BridgeStrategyContext:
         trail_price: float | None = None,
         trail_points: float | None = None,
         trail_offset: float | None = None,
+        oca_name: str | None = None,
+        oca_type: str | None = None,
         *,
         source_map: object | None = None,
     ) -> None:
@@ -149,6 +151,8 @@ class _BridgeStrategyContext:
             trail_price=trail_price,
             trail_points=trail_points,
             trail_offset=trail_offset,
+            oca_name=oca_name,
+            oca_type=oca_type,
         )
 
     def close(
@@ -215,24 +219,30 @@ def make_generated_strategy_adapter(
             self._bridge_ctx = _BridgeStrategyContext(ctx)
             self._bridge_ctx.attach_runtime(self._pine_runtime)
             self.generated.ctx = self._bridge_ctx
+            self._active_engine_bar_index: int | None = None
 
         def _process_bar(self, bar: EngineBar, bar_index: int) -> None:
             pine_bar = _to_pine_bar(bar)
-            self._pine_runtime.begin_bar(pine_bar)
-            try:
-                self._bridge_ctx._sync_from_engine()
-                process = getattr(self.generated, "_process_bar", None)
-                if not callable(process):
-                    raise GeneratedStrategyBridgeError(
-                        "generated strategy must expose _process_bar(bar)"
-                    )
-                process(pine_bar)
-            finally:
-                self._pine_runtime.end_bar()
-            if self._pine_runtime.bar_index != bar_index:
+            if self._active_engine_bar_index != bar_index:
+                if self._active_engine_bar_index is not None:
+                    self._pine_runtime.end_bar()
+                self._pine_runtime.begin_bar(pine_bar)
+                self._active_engine_bar_index = bar_index
+            self._bridge_ctx._sync_from_engine()
+            process = getattr(self.generated, "_process_bar", None)
+            if not callable(process):
+                raise GeneratedStrategyBridgeError("generated strategy must expose _process_bar(bar)")
+            process(pine_bar)
+            current_index = self._pine_runtime.bar_index + 1
+            if current_index != bar_index:
                 raise GeneratedStrategyBridgeError(
-                    f"PineRuntime/BacktestEngine bar index mismatch: {self._pine_runtime.bar_index} != {bar_index}"
+                    f"PineRuntime/BacktestEngine bar index mismatch: {current_index} != {bar_index}"
                 )
+
+        def _finalize(self) -> None:
+            if self._active_engine_bar_index is not None:
+                self._pine_runtime.end_bar()
+                self._active_engine_bar_index = None
 
         @staticmethod
         def _validate_generated_declaration(
@@ -241,11 +251,13 @@ def make_generated_strategy_adapter(
             declaration = getattr(generated_ctx, "declaration", None)
             if declaration is None:
                 return
-            if opts.fail_on_calc_on_order_fills and bool(
-                getattr(declaration, "calc_on_order_fills", False)
+            if (
+                opts.fail_on_calc_on_order_fills
+                and bool(getattr(declaration, "calc_on_order_fills", False))
+                and not bool(getattr(engine_config, "calc_on_order_fills", False))
             ):
                 raise UnsupportedGeneratedStrategySemantics(
-                    "calc_on_order_fills generated semantics require an explicit recalc bridge"
+                    "calc_on_order_fills declaration requires BacktestConfig.calc_on_order_fills=True"
                 )
             if opts.fail_on_calc_on_every_tick and bool(
                 getattr(declaration, "calc_on_every_tick", False)
@@ -323,6 +335,15 @@ def _make_pine_runtime(options: GeneratedStrategyAdapterOptions) -> Any:
     )
 
 
+def _pine_timestamp(value: int | None) -> int | None:
+    if value is None:
+        return None
+    # BacktestEngine bar feeds may use Unix seconds, while Pine runtime/Pine
+    # builtins expose `time`/`time_close` in milliseconds. Convert seconds at
+    # the bridge boundary so session/timezone functions evaluate on real dates.
+    return int(value) * 1000 if abs(int(value)) < 10_000_000_000 else int(value)
+
+
 def _to_pine_bar(bar: EngineBar) -> Any:
     try:
         from pinelib.core import Bar as PineBar
@@ -331,12 +352,13 @@ def _to_pine_bar(bar: EngineBar) -> Any:
             "PineLib is required to convert bars for generated strategy adapters"
         ) from exc
     return PineBar(
-        time=bar.time,
+        time=_pine_timestamp(bar.time),
         open=bar.open,
         high=bar.high,
         low=bar.low,
         close=bar.close,
         volume=0.0 if bar.volume is None else bar.volume,
+        time_close=_pine_timestamp(getattr(bar, "time_close", None)),
     )
 
 
