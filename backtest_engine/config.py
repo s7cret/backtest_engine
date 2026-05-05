@@ -41,6 +41,8 @@ class BacktestConfig:
     max_recalc_depth: int = 10
     calc_on_every_tick: bool = False
     experimental_intrabar_strategy_mode: bool = False
+    realtime_ticks: object | None = None
+    realtime_tick_provider: object | None = None
     backtest_fill_limits_assumption_ticks: int = 0
     fill_worse_stop_at_path_price: bool = False
     limit_gap_fill_policy: Literal["tradingview", "limit_price", "open_price"] = "tradingview"
@@ -96,6 +98,10 @@ class BacktestConfig:
     def snapshot(self) -> dict:
         d = asdict(self)
         d["data_provider"] = type(self.data_provider).__name__ if self.data_provider else None
+        d["realtime_tick_provider"] = (
+            type(self.realtime_tick_provider).__name__ if self.realtime_tick_provider else None
+        )
+        d["realtime_ticks"] = type(self.realtime_ticks).__name__ if self.realtime_ticks else None
         d["runtime"] = type(self.runtime).__name__ if self.runtime else None
         d["tradingview_reference_path"] = (
             str(self.tradingview_reference_path) if self.tradingview_reference_path else None

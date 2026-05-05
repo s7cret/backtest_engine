@@ -1,5 +1,6 @@
 from .bar import Bar
 from .bar_series import BarSeries
+from .tick import Tick
 from .instrument import InstrumentModel
 from .diagnostic import Diagnostic
 from .order import Order
@@ -14,6 +15,7 @@ from .job import BacktestJob
 __all__ = [
     "Bar",
     "BarSeries",
+    "Tick",
     "InstrumentModel",
     "Diagnostic",
     "Order",

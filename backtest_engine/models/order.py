@@ -31,3 +31,4 @@ class Order:
     trail_points: float | None = None
     trail_offset: float | None = None
     trail_activated: bool = False
+    qty_is_default: bool = False

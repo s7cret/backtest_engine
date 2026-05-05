@@ -69,6 +69,7 @@ class StrategyContext:
         trail_points: float | None = None,
         trail_offset: float | None = None,
         oca_name: str | None = None,
+        oca_type: str | None = None,
         comment: str | None = None,
     ) -> None:
         self.buffer.add(
@@ -85,6 +86,7 @@ class StrategyContext:
             trail_points=trail_points,
             trail_offset=trail_offset,
             oca_name=oca_name,
+            oca_type=oca_type,
             comment=comment,
         )
 
