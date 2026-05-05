@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "backtest-engine"
-version = "0.1.0"
+version = "2.17.0"
 description = "Independent deterministic bar-by-bar backtest engine with TradingView/Pine strategy emulator semantics."
 readme = "README.md"
 requires-python = ">=3.11"
