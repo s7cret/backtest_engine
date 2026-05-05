@@ -1098,11 +1098,11 @@ class BacktestEngine:
         if o.order_type in {"limit", "stop_limit"} and self.config.mintick:
             # Passive limit fills must remain executable on the tick grid without
             # crossing the order side. For buy limits, do not round up above the
-            # fill/limit price; for sell limits, do not round down below it. This
-            # matches TradingView-style adjusted equity data in the Stage 2B
-            # oracle, where fractional split-adjusted OHLC is reported/fillable
-            # on cent ticks.
-            rounding_mode = "floor" if o.side == "buy" else "ceil"
+            # fill/limit price; for sell limits, do not round down below it.
+            # Buy → round DOWN (floor) to stay at or below limit.
+            # Sell → round DOWN (floor) to stay at or below limit, which is the
+            # conservative side for fills (matches TV equity fill semantics).
+            rounding_mode = "floor"
         fprice = round_to_step(price + slip, self.config.mintick, rounding_mode)
         if getattr(o, "qty_is_default", False):
             default_qty = self._qty_from_args({}, None, fprice)

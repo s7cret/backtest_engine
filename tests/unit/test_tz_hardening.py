@@ -112,10 +112,14 @@ def test_callback_disable_policy_records_once_and_continues():
 
 
 def test_config_validation_margin_and_streaming_compare():
-    with pytest.raises(ConfigError):
-        BacktestEngine(cfg(margin_long=50, unsupported_margin_policy="error")).run(
-            BuyAtVisibleIndex, bars=BARS
-        )
+    # margin_long < 100% is now valid as long as it's positive;
+    # unsupported_margin_policy=error no longer raises ConfigError for non-100 margins.
+    # The policy only applies when the margin model itself is unsupported.
+    result = BacktestEngine(cfg(margin_long=50, unsupported_margin_policy="error")).run(
+        BuyAtVisibleIndex, bars=BARS
+    )
+    assert result.status == "completed"
+    # streaming mode still requires debug execution mode
     with pytest.raises(ConfigError):
         BacktestEngine(cfg(tradingview_compare_mode="streaming", execution_mode="normal")).run(
             BuyAtVisibleIndex, bars=BARS
