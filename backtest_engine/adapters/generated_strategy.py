@@ -89,12 +89,13 @@ class _BridgeStrategyContext:
         qty: float | None = None,
         limit: float | None = None,
         stop: float | None = None,
+        comment: str | None = None,
         *,
         source_map: object | None = None,
     ) -> None:
         del source_map
         self._engine_ctx.entry(
-            id=id, direction=_direction(direction), qty=qty, limit=limit, stop=stop
+            id=id, direction=_direction(direction), qty=qty, limit=limit, stop=stop, comment=comment
         )
 
     def order(
@@ -161,11 +162,12 @@ class _BridgeStrategyContext:
         qty: float | None = None,
         qty_percent: float | None = None,
         immediately: bool = False,
+        comment: str | None = None,
         *,
         source_map: object | None = None,
     ) -> None:
         del source_map
-        self._engine_ctx.close(id=id, qty=qty, qty_percent=qty_percent, immediately=immediately)
+        self._engine_ctx.close(id=id, qty=qty, qty_percent=qty_percent, immediately=immediately, comment=comment)
 
     def close_all(self, immediately: bool = False, *, source_map: object | None = None) -> None:
         del source_map
