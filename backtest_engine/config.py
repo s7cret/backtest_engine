@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 from .models.instrument import InstrumentModel
@@ -55,6 +56,13 @@ class BacktestConfig:
     duplicate_bar_policy: Literal["error", "keep_first", "keep_last"] = "error"
     validate_bars: bool = True
     max_bars_back: int = 0
+    score_start_time: datetime | None = None
+    score_end_time: datetime | None = None
+    auto_pre_bars: bool = False
+    min_pre_bars: int = 0
+    max_pre_bars: int = 0
+    warmup_confidence_mode: str = "unknown"
+    data_source_kind: str = "BARS"
     execution_mode: Literal["debug", "normal", "fast", "ultra_fast"] = "normal"
     bar_storage_mode: Literal["object", "array", "auto"] = "auto"
     statistics_profile: Literal["minimal", "standard", "full"] = "standard"
