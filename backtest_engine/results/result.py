@@ -24,6 +24,7 @@ class BacktestResult:
     closed_trades: list[Trade] | None = None
     open_trades: list[Trade] | None = None
     equity_curve: list[EquityPoint] | None = None
+    plots: Any | None = None
     available_outputs: set[str] = field(default_factory=set)
     initial_capital: float = 0.0
     final_equity: float = 0.0

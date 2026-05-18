@@ -105,6 +105,7 @@ class BacktestEngine:
         callbacks: BacktestCallbacks | None = None,
         resume_state: BacktestResumeState | None = None,
         effective_pre_bars: int | None = None,
+        execution_backend: Any | None = None,
     ) -> BacktestResult:
         t0 = time.perf_counter()
         params = params or {}
@@ -155,6 +156,15 @@ class BacktestEngine:
                 )
             self._diag(
                 "BAR_MAGNIFIER_FALLBACK", "bar magnifier unavailable; using OHLC path", "warning"
+            )
+        if execution_backend is not None:
+            return self._run_execution_backend(
+                execution_backend,
+                strategy_class,
+                params,
+                series,
+                t0,
+                effective_pre_bars or 0,
             )
         ctx = StrategyContext(self.config, self.state)
         runtime = self.config.runtime or _NoopRuntime()
@@ -361,6 +371,133 @@ class BacktestEngine:
             strategy._process_bar(bar, i)
         except Exception as e:
             raise StrategyRuntimeError(str(e)) from e
+
+    def _run_execution_backend(
+        self,
+        execution_backend: Any,
+        strategy_class: type,
+        params: dict,
+        series: BarSeries,
+        t0: float,
+        effective_pre_bars: int,
+    ) -> BacktestResult:
+        if isinstance(execution_backend, str):
+            if execution_backend != "pine_runtime":
+                raise ConfigError(f"unknown execution backend: {execution_backend}")
+            from backtest_engine.execution_backends import PineRuntimeBackend
+
+            backend = PineRuntimeBackend()
+        else:
+            backend = execution_backend
+
+        execute = getattr(backend, "execute", None)
+        if not callable(execute):
+            raise ConfigError("execution_backend must provide execute(...)")
+
+        bars = [series.get_bar(i) for i in range(len(series))]
+        backend_result = execute(
+            strategy_class,
+            bars,
+            config=self.config,
+            execution_window=None,
+            effective_pre_bars=effective_pre_bars,
+            runtime_kwargs=None,
+            params=params,
+        )
+        self._apply_backend_result(backend_result)
+        result = self._result(
+            series,
+            self._backend_equity_curve,
+            "completed",
+            None,
+            (time.perf_counter() - t0) * 1000,
+            getattr(backend_result, "raw_context", None),
+            getattr(backend_result, "raw_result", None),
+        )
+        result.plots = getattr(backend_result, "plots", None)
+        if result.plots is not None:
+            result.available_outputs.add("plots")
+        result.performance["execution_backend"] = getattr(backend, "name", type(backend).__name__)
+        result.performance["backend_diagnostics"] = getattr(backend_result, "diagnostics", {})
+        return result
+
+    def _apply_backend_result(self, backend_result: Any) -> None:
+        self.closed_trades = [
+            self._trade_from_backend_trade(t, idx)
+            for idx, t in enumerate(getattr(backend_result, "trades", []) or [])
+        ]
+        self.open_trades = []
+        self._backend_equity_curve: list[EquityPoint] | None = []
+        peak = self.config.initial_capital
+        for idx, item in enumerate(getattr(backend_result, "bar_results", []) or []):
+            equity = getattr(item, "equity", None)
+            if equity is None:
+                continue
+            equity = float(equity)
+            peak = max(peak, equity)
+            drawdown = max(0.0, peak - equity)
+            drawdown_percent = drawdown / peak * 100 if peak else 0.0
+            open_profit = float(getattr(item, "openprofit", 0.0) or 0.0)
+            netprofit = float(getattr(item, "netprofit", 0.0) or 0.0)
+            point = EquityPoint(
+                idx,
+                int(getattr(item, "time")),
+                equity,
+                equity - open_profit,
+                float(getattr(item, "position_size", 0.0) or 0.0),
+                None,
+                open_profit,
+                netprofit,
+                drawdown,
+                drawdown_percent,
+            )
+            self._backend_equity_curve.append(point)
+            if getattr(item, "phase", "score") == "score":
+                self._score_equity_points.append(point)
+        if self._backend_equity_curve:
+            last = self._backend_equity_curve[-1]
+            self.equity = last.equity
+            self.cash = last.cash
+            self.max_drawdown = max(p.drawdown for p in self._backend_equity_curve)
+            self.max_drawdown_percent = max(p.drawdown_percent for p in self._backend_equity_curve)
+        diagnostics = getattr(backend_result, "diagnostics", {}) or {}
+        for raw in diagnostics.get("runtime_diagnostics", []) or []:
+            if isinstance(raw, dict):
+                self.warnings.append(
+                    Diagnostic(
+                        str(raw.get("code", "PINELIB_RUNTIME_DIAGNOSTIC")),
+                        str(raw.get("message", raw)),
+                        "warning",
+                        context=dict(raw),
+                    )
+                )
+
+    def _trade_from_backend_trade(self, trade: Any, idx: int) -> Trade:
+        entry_id = str(getattr(trade, "entry_id", f"entry_{idx}"))
+        commission = float(getattr(trade, "commission", 0.0) or 0.0)
+        return Trade(
+            id=f"pine_{idx}",
+            entry_id=entry_id,
+            exit_id=str(getattr(trade, "exit_reason", "") or "") or None,
+            direction=getattr(trade, "direction", "long"),
+            entry_time=int(getattr(trade, "entry_time")),
+            entry_bar_index=int(getattr(trade, "entry_bar_index")),
+            entry_price=float(getattr(trade, "entry_price")),
+            exit_time=getattr(trade, "exit_time", None),
+            exit_bar_index=getattr(trade, "exit_bar_index", None),
+            exit_price=getattr(trade, "exit_price", None),
+            qty=float(getattr(trade, "qty")),
+            commission_entry=commission,
+            commission_exit=0.0,
+            profit=float(getattr(trade, "profit", 0.0) or 0.0),
+            profit_percent=float(getattr(trade, "profit_percent", 0.0) or 0.0),
+            exit_reason=getattr(trade, "exit_reason", None),
+            bars_held=(
+                None
+                if getattr(trade, "exit_bar_index", None) is None
+                else int(getattr(trade, "exit_bar_index")) - int(getattr(trade, "entry_bar_index"))
+            ),
+        )
 
     def _flush(
         self,
