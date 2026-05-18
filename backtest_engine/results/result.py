@@ -1,13 +1,26 @@
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from typing import Literal, Any
-from backtest_engine.models import Trade, EquityPoint, Diagnostic, BacktestResumeState
+from backtest_engine.models import (
+    BacktestResumeState,
+    Diagnostic,
+    EquityPoint,
+    ExecutionWindow,
+    PrehistoryPlan,
+    Trade,
+    TradeResult,
+    WarmupQuality,
+)
 from backtest_engine.core.deterministic_hash import sha256_obj
 
 
 @dataclass
 class BacktestResult:
+    execution_window: ExecutionWindow | None = None
+    prehistory_plan: PrehistoryPlan | None = None
+    warmup: WarmupQuality | None = None
     trades: list[Trade] | None = None
+    phase_trades: list[TradeResult] | None = None
     closed_trades: list[Trade] | None = None
     open_trades: list[Trade] | None = None
     equity_curve: list[EquityPoint] | None = None

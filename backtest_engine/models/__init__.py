@@ -11,6 +11,7 @@ from .equity import EquityPoint
 from .callbacks import BacktestCallbacks
 from .resume import BacktestResumeState
 from .job import BacktestJob
+from .window import ExecutionWindow, PrehistoryPlan, TradeResult, WarmupQuality
 
 __all__ = [
     "Bar",
@@ -26,4 +27,8 @@ __all__ = [
     "BacktestCallbacks",
     "BacktestResumeState",
     "BacktestJob",
+    "ExecutionWindow",
+    "PrehistoryPlan",
+    "WarmupQuality",
+    "TradeResult",
 ]

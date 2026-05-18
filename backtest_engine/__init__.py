@@ -11,10 +11,14 @@ from .models import (
     Diagnostic,
     EquityPoint,
     Fill,
+    ExecutionWindow,
     InstrumentModel,
     Order,
     Position,
+    PrehistoryPlan,
     Trade,
+    TradeResult,
+    WarmupQuality,
 )
 from .results import BacktestResult, JSONResultWriter, CSVTradeWriter
 from .context import StrategyContext, StrategyStateView
@@ -33,6 +37,10 @@ __all__ = [
     "Bar",
     "BarSeries",
     "Tick",
+    "ExecutionWindow",
+    "PrehistoryPlan",
+    "WarmupQuality",
+    "TradeResult",
     "InstrumentModel",
     "Diagnostic",
     "Order",
