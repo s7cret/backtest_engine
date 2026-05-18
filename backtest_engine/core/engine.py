@@ -3,7 +3,7 @@ import time
 from dataclasses import replace
 from inspect import signature
 from typing import Any
-from backtest_engine.config import BacktestConfig
+from backtest_engine.config import BacktestConfig, ProviderConfig
 from backtest_engine.context import StrategyContext, StrategyStateView
 from backtest_engine.errors import (
     BarMagnifierUnavailableError,
@@ -124,10 +124,10 @@ class BacktestEngine:
         if self._score_mode:
             # Determine bar phases: prehistory vs score
             # effective_pre_bars warmup bars precede score_start
-            if effective_pre_bars is not None:
-                self._prehistory_end_index = min(effective_pre_bars, len(series) - 1)
+            if effective_pre_bars is not None and effective_pre_bars > 0:
+                self._prehistory_end_index = min(effective_pre_bars - 1, len(series) - 1)
             else:
-                self._prehistory_end_index = 0  # treat first bar as prehistory boundary
+                self._prehistory_end_index = 0  # default: first bar is prehistory boundary
             self._score_start_index = self._prehistory_end_index + 1
             self._bar_phases = [
                 "prehistory" if i <= self._prehistory_end_index else "score"
@@ -137,6 +137,10 @@ class BacktestEngine:
             self._bar_phases = ["score"] * len(series)
             self._prehistory_end_index = -1
             self._score_start_index = 0
+            effective_pre_bars = None
+
+        # D5-D: store effective_pre_bars for warmup_metadata in _result()
+        self._effective_pre_bars = effective_pre_bars
 
         if self.config.validate_bars:
             series, _ = validate_bars(series, self.config.duplicate_bar_policy)
@@ -319,8 +323,24 @@ class BacktestEngine:
                 )
             except Exception as e:
                 raise ProviderError(str(e)) from e
+        if src is None and self.config.provider:
+            # D5-D: fetch via structured ProviderConfig
+            try:
+                cfg = self.config.provider
+                # Override start/end from config if provider doesn't have them set
+                fetch_cfg = ProviderConfig(
+                    provider=cfg.provider,
+                    symbol=cfg.symbol,
+                    timeframe=cfg.timeframe,
+                    start_time=self.config.start_time,
+                    end_time=self.config.end_time,
+                    max_pre_bars=cfg.max_pre_bars,
+                )
+                src = fetch_cfg.fetch_bars()
+            except Exception as e:
+                raise ProviderError(f"Provider fetch failed: {e}") from e
         if src is None:
-            raise ProviderError("No bars or data_provider supplied")
+            raise ProviderError("No bars, data_provider, or provider supplied")
         if isinstance(src, BarSeries):
             return src
         return BarSeries.from_bars(src)
@@ -1970,4 +1990,19 @@ class BacktestEngine:
                 self.config.content_hash_include_equity_curve,
                 self.config.content_hash_include_events,
             )
+
+        # D5-D: populate warmup quality metadata from execution results
+        actual_pre_bars = self._bar_phases.count("prehistory") if self._bar_phases else 0
+        effective_pre = getattr(self, '_effective_pre_bars', None)
+        recommended_raw = self.config.warmup_metadata.get('recommended_pre_bars_raw', 0) if self.config.warmup_metadata else 0
+        insufficient_pre = actual_pre_bars < (effective_pre or 0) if effective_pre is not None else False
+        if effective_pre is not None:
+            r.warmup = WarmupQuality.classify(
+                recommended_pre_bars_raw=recommended_raw,
+                requested_max_pre_bars=self.config.max_pre_bars,
+                effective_pre_bars=effective_pre,
+                actual_pre_bars=actual_pre_bars,
+                insufficient_prehistory=insufficient_pre,
+            )
+
         return r
