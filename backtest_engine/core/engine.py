@@ -26,6 +26,12 @@ from backtest_engine.models import (
     BacktestResumeState,
     InstrumentModel,
 )
+from backtest_engine.models.window import (
+    ExecutionWindow,
+    WarmupQuality,
+    TradeResult,
+    Phase,
+)
 from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.broker.slippage import slippage_value
 from backtest_engine.broker.rounding import round_to_step
@@ -75,6 +81,7 @@ class BacktestEngine:
         self.events: list[Diagnostic] = []
         self.warnings: list[Diagnostic] = []
         self.errors: list[Diagnostic] = []
+        self._score_equity_points: list[EquityPoint] = []
         self.state = StrategyStateView(
             initial_capital=self.config.initial_capital,
             cash=self.config.initial_capital,
@@ -84,6 +91,11 @@ class BacktestEngine:
         )
         self.last_trade_bar: int | None = None
         self._effective_mintick: float | None = self.config.mintick
+        # D5-C: score window state
+        self._score_mode: bool = False
+        self._prehistory_end_index: int = 0   # last prehistory bar index (inclusive)
+        self._score_start_index: int = 0      # first score bar index
+        self._bar_phases: list[str] = []       # "prehistory" or "score" per bar index
 
     def run(
         self,
@@ -92,6 +104,7 @@ class BacktestEngine:
         bars: BarSeries | list[Bar] | None = None,
         callbacks: BacktestCallbacks | None = None,
         resume_state: BacktestResumeState | None = None,
+        effective_pre_bars: int | None = None,
     ) -> BacktestResult:
         t0 = time.perf_counter()
         params = params or {}
@@ -102,6 +115,29 @@ class BacktestEngine:
         series = self._resolve_bars(bars)
         self._effective_mintick = self.config.mintick or self._infer_price_tick(series)
         series = self._slice_range(series)
+
+        # D5-C: detect and set up score window mode
+        self._score_mode = (
+            self.config.score_start_time is not None
+            or self.config.score_end_time is not None
+        )
+        if self._score_mode:
+            # Determine bar phases: prehistory vs score
+            # effective_pre_bars warmup bars precede score_start
+            if effective_pre_bars is not None:
+                self._prehistory_end_index = min(effective_pre_bars, len(series) - 1)
+            else:
+                self._prehistory_end_index = 0  # treat first bar as prehistory boundary
+            self._score_start_index = self._prehistory_end_index + 1
+            self._bar_phases = [
+                "prehistory" if i <= self._prehistory_end_index else "score"
+                for i in range(len(series))
+            ]
+        else:
+            self._bar_phases = ["score"] * len(series)
+            self._prehistory_end_index = -1
+            self._score_start_index = 0
+
         if self.config.validate_bars:
             series, _ = validate_bars(series, self.config.duplicate_bar_policy)
         if self.config.use_bar_magnifier and (
@@ -169,6 +205,8 @@ class BacktestEngine:
                     ddp,
                 )
                 equity_curve.append(point)
+                if self._score_mode and i >= self._score_start_index:
+                    self._score_equity_points.append(point)
                 self._cb("on_equity", point)
             stop_now = False
             if self.config.early_stop_enabled:
@@ -1786,25 +1824,102 @@ class BacktestEngine:
             strategy_fingerprint=self.config.strategy_fingerprint,
             runtime_fingerprint=self.config.runtime_fingerprint,
         )
+
+        # D5-C: phase-aware trade results — compute only in score mode
+        if self._score_mode and self._bar_phases:
+            def _phase_of(bar_idx: int | None) -> Phase | None:
+                if bar_idx is None or bar_idx < 0 or bar_idx >= len(self._bar_phases):
+                    return None
+                return self._bar_phases[bar_idx]  # type: ignore[return-value]
+
+            phase_trades: list[TradeResult] = []
+            for t in self.closed_trades:
+                ep = _phase_of(t.entry_bar_index)
+                xp = _phase_of(t.exit_bar_index)
+                crosses = (
+                    ep == "prehistory" and xp == "score"
+                ) or (ep == "score" and xp == "prehistory")
+                if ep is not None:
+                    phase_trades.append(TradeResult(
+                        entry_time=t.entry_time,
+                        exit_time=t.exit_time,
+                        direction=t.direction,
+                        entry_price=t.entry_price,
+                        exit_price=t.exit_price,
+                        qty=t.qty,
+                        profit=t.profit,
+                        entry_phase=ep,
+                        exit_phase=xp,
+                        crosses_score_boundary=crosses,
+                    ))
+            r.phase_trades = phase_trades or None
+        else:
+            r.phase_trades = None
+
         for k, v in stats.items():
             setattr(r, k, v)
-        wins = [t.profit for t in self.closed_trades if t.profit > 0]
-        losses = [t.profit for t in self.closed_trades if t.profit < 0]
-        r.largest_win = max(wins) if wins else 0.0
-        r.largest_loss = abs(min(losses)) if losses else 0.0
-        held = [t.bars_held for t in self.closed_trades if t.bars_held is not None]
-        r.avg_bars_in_trade = sum(held) / len(held) if held else 0.0
-        r.commission_total = sum(
-            t.commission_entry + t.commission_exit for t in self.closed_trades
-        ) + sum(t.commission_entry + t.commission_exit for t in self.open_trades)
-        if equity_curve and len(equity_curve) > 1:
-            rets = [
-                (equity_curve[n].equity - equity_curve[n - 1].equity) / equity_curve[n - 1].equity
-                for n in range(1, len(equity_curve))
-                if equity_curve[n - 1].equity
+
+        # D5-C: use score-window trades/equity for metrics when in score mode
+        if self._score_mode and self._score_equity_points:
+            score_trades = [
+                t for t in self.closed_trades
+                if t.exit_bar_index is not None and t.exit_bar_index >= self._score_start_index
             ]
-            r.sharpe_ratio = sharpe_ratio(rets)
-            r.sortino_ratio = sortino_ratio(rets)
+            score_initial_capital = self._score_equity_points[0].equity
+            score_final_equity = self._score_equity_points[-1].equity
+            score_profits = [t.profit for t in score_trades]
+            score_stats = summarize(score_profits, score_initial_capital, score_final_equity)
+            for k, v in score_stats.items():
+                setattr(r, k, v)
+            wins = [t.profit for t in score_trades if t.profit > 0]
+            losses = [t.profit for t in score_trades if t.profit < 0]
+            r.largest_win = max(wins) if wins else 0.0
+            r.largest_loss = abs(min(losses)) if losses else 0.0
+            held = [t.bars_held for t in score_trades if t.bars_held is not None]
+            r.avg_bars_in_trade = sum(held) / len(held) if held else 0.0
+            r.commission_total = sum(
+                t.commission_entry + t.commission_exit for t in score_trades
+            )
+            # Override final_equity and bars_processed to score-window values
+            r.final_equity = score_final_equity
+            r.bars_processed = len(self._score_equity_points)
+            # Score-window equity for sharpe/sortino/drawdown
+            r.sharpe_ratio = None
+            r.sortino_ratio = None
+            if len(self._score_equity_points) > 1:
+                rets = [
+                    (self._score_equity_points[n].equity - self._score_equity_points[n - 1].equity)
+                    / self._score_equity_points[n - 1].equity
+                    for n in range(1, len(self._score_equity_points))
+                    if self._score_equity_points[n - 1].equity
+                ]
+                r.sharpe_ratio = sharpe_ratio(rets)
+                r.sortino_ratio = sortino_ratio(rets)
+            r.max_drawdown = max(p.drawdown for p in self._score_equity_points) if self._score_equity_points else 0.0
+            r.max_drawdown_percent = max(p.drawdown_percent for p in self._score_equity_points) if self._score_equity_points else 0.0
+            # Filter closed_trades output to score-window only
+            if r.closed_trades is not None:
+                r.closed_trades = [t for t in r.closed_trades if t in score_trades]
+            if r.trades is not None:
+                r.trades = [t for t in (r.trades or []) if t in score_trades]
+        else:
+            wins = [t.profit for t in self.closed_trades if t.profit > 0]
+            losses = [t.profit for t in self.closed_trades if t.profit < 0]
+            r.largest_win = max(wins) if wins else 0.0
+            r.largest_loss = abs(min(losses)) if losses else 0.0
+            held = [t.bars_held for t in self.closed_trades if t.bars_held is not None]
+            r.avg_bars_in_trade = sum(held) / len(held) if held else 0.0
+            r.commission_total = sum(
+                t.commission_entry + t.commission_exit for t in self.closed_trades
+            ) + sum(t.commission_entry + t.commission_exit for t in self.open_trades)
+            if equity_curve and len(equity_curve) > 1:
+                rets = [
+                    (equity_curve[n].equity - equity_curve[n - 1].equity) / equity_curve[n - 1].equity
+                    for n in range(1, len(equity_curve))
+                    if equity_curve[n - 1].equity
+                ]
+                r.sharpe_ratio = sharpe_ratio(rets)
+                r.sortino_ratio = sortino_ratio(rets)
         for metric in self.config.required_metrics:
             if metric == "sharpe":
                 if r.sharpe_ratio is not None:
@@ -1830,13 +1945,15 @@ class BacktestEngine:
                 "sortino requires at least one downside return",
                 "error",
             )
-        r.max_drawdown = max(
-            [self.max_drawdown] + ([p.drawdown for p in equity_curve] if equity_curve else [])
-        )
-        r.max_drawdown_percent = max(
-            [self.max_drawdown_percent]
-            + ([p.drawdown_percent for p in equity_curve] if equity_curve else [])
-        )
+        # D5-C: max_drawdown already set from score equity in score mode
+        if not self._score_mode:
+            r.max_drawdown = max(
+                [self.max_drawdown] + ([p.drawdown for p in equity_curve] if equity_curve else [])
+            )
+            r.max_drawdown_percent = max(
+                [self.max_drawdown_percent]
+                + ([p.drawdown_percent for p in equity_curve] if equity_curve else [])
+            )
         if r.closed_trades is not None:
             r.available_outputs.add("closed_trades")
         if r.open_trades is not None:
