@@ -52,6 +52,19 @@ class BacktestResult:
     max_consecutive_wins: int = 0
     max_consecutive_losses: int = 0
     bars_processed: int = 0
+    # D5-E: Score-window metrics — set when score mode is active
+    score_net_profit: float = 0.0
+    score_net_profit_percent: float = 0.0
+    score_total_trades: int = 0
+    score_winning_trades: int = 0
+    score_losing_trades: int = 0
+    score_win_rate: float = 0.0
+    score_profit_factor: float = 0.0
+    score_max_drawdown: float = 0.0
+    score_max_drawdown_percent: float = 0.0
+    score_avg_trade: float = 0.0
+    score_sharpe_ratio: float | None = None
+    score_sortino_ratio: float | None = None
     execution_time_ms: float = 0.0
     status: Literal["completed", "failed", "early_stopped"] = "completed"
     early_stop_reason: str | None = None

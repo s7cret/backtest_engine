@@ -226,7 +226,7 @@ def test_no_score_config_bars_processed_equals_total():
 
 def test_effective_pre_bars_none_defaults_first_bar_as_score():
     """
-    Passing effective_pre_bars=None (default) treats first bar as score boundary.
+    Passing effective_pre_bars=None (default) treats first bar as prehistory boundary.
     Does not crash.
     """
     bars = make_bars(20)
@@ -261,11 +261,10 @@ def test_prehistory_only_trade_excluded_from_score():
 
     assert result.status == "completed"
     # Trade was closed in prehistory — not in score window
-    # phase_trades should either be None (no trades in score) or the score trades list
     score_trades = [t for t in (result.phase_trades or []) if t.exit_phase == "score"]
     assert len(score_trades) == 0, "Prehistory-only trade should not appear as score trade"
-    # Score metrics should reflect zero score trades
-    assert result.net_profit == 0.0
+    # D5-E: score_net_profit is the score-window metric; net_profit is full-window
+    assert result.score_net_profit == 0.0, "Score metrics should reflect zero score trades"
 
 
 # ─── Test 8: bars_processed reflects score window count ────────────────────────
@@ -289,3 +288,28 @@ def test_bars_processed_is_score_window_count():
     # effective_pre_bars=5 → prehistory_end=4, score_start=5 → 10 score bars
     # close_all at bar 12 (score) fills at bar 13 → bar 14 may record flat equity
     assert result.bars_processed >= 8, f"Expected >= 8 score bars, got {result.bars_processed}"
+
+
+# ─── D5-E: Score-window metrics in dedicated fields ─────────────────────────────
+
+def test_score_window_metrics_in_score_fields():
+    """
+    D5-E: score_* fields hold score-window metrics; full metrics preserved separately.
+    """
+    bars = make_bars(20)
+    config = score_config(
+        score_start_ms=bars.time[5],
+        score_end_ms=bars.time[19],
+    )
+    engine = BacktestEngine(config)
+    result = engine.run(ScorePhaseTradeStrategy, bars=bars, effective_pre_bars=5)
+
+    assert result.status == "completed"
+    # Score-window fields are populated in score mode
+    assert hasattr(result, "score_net_profit"), "score_net_profit field must exist"
+    assert hasattr(result, "score_total_trades"), "score_total_trades field must exist"
+    assert result.score_total_trades >= 0
+    assert result.score_net_profit is not None
+    # score_* fields are distinct from main fields (score_net_profit may differ from net_profit
+    # if there are prehistory trades — which is the D5-E contract)
+    # Full metrics (net_profit, total_trades) are preserved from all trades

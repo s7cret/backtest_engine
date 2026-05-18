@@ -1879,7 +1879,7 @@ class BacktestEngine:
         for k, v in stats.items():
             setattr(r, k, v)
 
-        # D5-C: use score-window trades/equity for metrics when in score mode
+        # D5-E: score-window metrics — add to score_* fields, keep full metrics intact
         if self._score_mode and self._score_equity_points:
             score_trades = [
                 t for t in self.closed_trades
@@ -1889,23 +1889,16 @@ class BacktestEngine:
             score_final_equity = self._score_equity_points[-1].equity
             score_profits = [t.profit for t in score_trades]
             score_stats = summarize(score_profits, score_initial_capital, score_final_equity)
-            for k, v in score_stats.items():
-                setattr(r, k, v)
-            wins = [t.profit for t in score_trades if t.profit > 0]
-            losses = [t.profit for t in score_trades if t.profit < 0]
-            r.largest_win = max(wins) if wins else 0.0
-            r.largest_loss = abs(min(losses)) if losses else 0.0
-            held = [t.bars_held for t in score_trades if t.bars_held is not None]
-            r.avg_bars_in_trade = sum(held) / len(held) if held else 0.0
-            r.commission_total = sum(
-                t.commission_entry + t.commission_exit for t in score_trades
-            )
-            # Override final_equity and bars_processed to score-window values
-            r.final_equity = score_final_equity
-            r.bars_processed = len(self._score_equity_points)
-            # Score-window equity for sharpe/sortino/drawdown
-            r.sharpe_ratio = None
-            r.sortino_ratio = None
+            # D5-E: set score_* fields instead of overwriting main metrics
+            r.score_net_profit = score_stats.get("net_profit", 0.0)
+            r.score_net_profit_percent = score_stats.get("net_profit_percent", 0.0)
+            r.score_total_trades = score_stats.get("total_trades", 0)
+            r.score_winning_trades = score_stats.get("winning_trades", 0)
+            r.score_losing_trades = score_stats.get("losing_trades", 0)
+            r.score_win_rate = score_stats.get("win_rate", 0.0)
+            r.score_profit_factor = score_stats.get("profit_factor", 0.0)
+            r.score_avg_trade = score_stats.get("avg_trade", 0.0)
+            # Score-window equity metrics
             if len(self._score_equity_points) > 1:
                 rets = [
                     (self._score_equity_points[n].equity - self._score_equity_points[n - 1].equity)
@@ -1913,15 +1906,12 @@ class BacktestEngine:
                     for n in range(1, len(self._score_equity_points))
                     if self._score_equity_points[n - 1].equity
                 ]
-                r.sharpe_ratio = sharpe_ratio(rets)
-                r.sortino_ratio = sortino_ratio(rets)
-            r.max_drawdown = max(p.drawdown for p in self._score_equity_points) if self._score_equity_points else 0.0
-            r.max_drawdown_percent = max(p.drawdown_percent for p in self._score_equity_points) if self._score_equity_points else 0.0
-            # Filter closed_trades output to score-window only
-            if r.closed_trades is not None:
-                r.closed_trades = [t for t in r.closed_trades if t in score_trades]
-            if r.trades is not None:
-                r.trades = [t for t in (r.trades or []) if t in score_trades]
+                r.score_sharpe_ratio = sharpe_ratio(rets)
+                r.score_sortino_ratio = sortino_ratio(rets)
+            r.score_max_drawdown = max(p.drawdown for p in self._score_equity_points) if self._score_equity_points else 0.0
+            r.score_max_drawdown_percent = max(p.drawdown_percent for p in self._score_equity_points) if self._score_equity_points else 0.0
+            # bars_processed = score-window bars (score-phase only)
+            r.bars_processed = len(self._score_equity_points)
         else:
             wins = [t.profit for t in self.closed_trades if t.profit > 0]
             losses = [t.profit for t in self.closed_trades if t.profit < 0]
