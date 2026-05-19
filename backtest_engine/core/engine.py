@@ -417,6 +417,7 @@ class BacktestEngine:
         result.plots = getattr(backend_result, "plots", None)
         if result.plots is not None:
             result.available_outputs.add("plots")
+        result.bar_results = getattr(backend_result, "bar_results", None)
         result.performance["execution_backend"] = getattr(backend, "name", type(backend).__name__)
         result.performance["backend_diagnostics"] = getattr(backend_result, "diagnostics", {})
         return result

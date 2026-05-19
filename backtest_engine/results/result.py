@@ -25,6 +25,8 @@ class BacktestResult:
     open_trades: list[Trade] | None = None
     equity_curve: list[EquityPoint] | None = None
     plots: Any | None = None
+    # Raw per-bar results from execution backend (list of BackendBarResult or similar)
+    bar_results: list[Any] | None = None
     available_outputs: set[str] = field(default_factory=set)
     initial_capital: float = 0.0
     final_equity: float = 0.0

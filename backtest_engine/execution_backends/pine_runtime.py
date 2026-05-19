@@ -57,6 +57,7 @@ class PineRuntimeBackend:
         effective_pre_bars: int = 0,
         runtime_kwargs: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        is_indicator: bool = False,
     ) -> BackendExecutionResult:
         imports = _pinelib_imports()
         runtime_kwargs = dict(runtime_kwargs or {})
@@ -89,6 +90,30 @@ class PineRuntimeBackend:
         except TypeError:
             strategy = strategy_class(params, runtime)
 
+        pine_bars = [_bar_to_pinelib(bar, imports["PineBar"]) for bar in bars]
+
+        if is_indicator:
+            # Indicators: call run() directly, no strategy context needed
+            strategy.run(pine_bars)
+            bar_results: list[BackendBarResult] = []
+            plots = None
+            plot_recorder = getattr(runtime, "plot_recorder", None)
+            if plot_recorder is not None:
+                get_records = getattr(plot_recorder, "get_records", None)
+                plots = get_records() if callable(get_records) else plot_recorder
+            return BackendExecutionResult(
+                bar_results=bar_results,
+                trades=[],
+                plots=plots,
+                diagnostics={
+                    "runtime_diagnostics": list(getattr(runtime.config, "diagnostics", []) or []),
+                    "backend": self.name,
+                },
+                raw_context=None,
+                raw_result=None,
+            )
+
+        # Strategy path (existing behavior)
         strategy_ctx = getattr(strategy, "ctx", None)
         if not isinstance(strategy_ctx, imports["StrategyContext"]):
             strategy_ctx = imports["StrategyContext"](
@@ -110,10 +135,9 @@ class PineRuntimeBackend:
             setattr(strategy, "ctx", strategy_ctx)
         strategy_ctx.attach_runtime(runtime)
 
-        pine_bars = [_bar_to_pinelib(bar, imports["PineBar"]) for bar in bars]
         result = imports["run_generated_strategy"](strategy, runtime, strategy_ctx, pine_bars)
 
-        bar_results: list[BackendBarResult] = []
+        bar_results = []
         for idx, snapshot in enumerate(result.snapshots):
             phase = "prehistory" if idx < max(0, effective_pre_bars) else "score"
             raw = asdict(snapshot)
