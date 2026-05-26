@@ -268,6 +268,29 @@ class BacktestEngine:
         )
         return result
 
+    def process_next_bar(
+        self,
+        strategy_class: type,
+        bar: Bar,
+        *,
+        params: dict | None = None,
+        resume_state: BacktestResumeState | None = None,
+        execution_backend: Any | None = None,
+    ) -> BacktestResult:
+        """Process one closed bar through the native BacktestEngine path.
+
+        This public live/paper hook intentionally reuses ``run(...)`` with a
+        one-bar series and optional resume_state, so OpenPine does not create a
+        second Pine/order execution engine for single-bar processing.
+        """
+        return self.run(
+            strategy_class,
+            params=params,
+            bars=[bar],
+            resume_state=resume_state,
+            execution_backend=execution_backend,
+        )
+
     def _validate_config(self) -> None:
         if self.config.margin_long <= 0.0 or self.config.margin_short <= 0.0:
             raise ConfigError("margin_long and margin_short must be positive percentages")
