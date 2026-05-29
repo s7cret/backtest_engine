@@ -193,6 +193,8 @@ class BacktestEngine:
                     self._cb("on_order_activated", o)
             runtime.begin_bar(bar, i)
             self._process_bar_fills(strategy, ctx, bar, i, open_only=True)
+            self._update_open_profit(bar.open)
+            self._update_state()
             self._call_strategy(strategy, bar, i)
             self._flush(ctx, bar, i)
             self._process_bar_fills(strategy, ctx, bar, i, skip_open=True)

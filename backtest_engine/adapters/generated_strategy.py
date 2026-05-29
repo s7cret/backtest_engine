@@ -27,6 +27,89 @@ class UnsupportedGeneratedStrategySemantics(GeneratedStrategyBridgeError):
     """Raised for generated/PineLib semantics this bridge will not approximate."""
 
 
+class _BridgeScalarSeries:
+    """Mutable scalar with Pine history semantics for strategy-owned fields."""
+
+    def __init__(self, value: float | int = 0.0) -> None:
+        self._current: float | int = value
+        self._history: list[float | int] = []
+
+    @property
+    def current(self) -> float | int:
+        return self._current
+
+    @property
+    def committed_length(self) -> int:
+        return len(self._history)
+
+    def set_current(self, value: float | int) -> None:
+        self._current = value
+
+    def commit_current(self) -> None:
+        self._history.append(self._current)
+
+    def __getitem__(self, offset: int) -> float | int:
+        if offset < 0:
+            raise IndexError("negative history offsets are not supported")
+        if offset == 0:
+            return self._current
+        if offset <= len(self._history):
+            return self._history[-offset]
+        return 0
+
+    def __float__(self) -> float:
+        return float(self._current)
+
+    def __int__(self) -> int:
+        return int(self._current)
+
+    def __bool__(self) -> bool:
+        return bool(self._current)
+
+    def __add__(self, other: Any) -> Any:
+        return self._current + _unwrap_scalar(other)
+
+    def __radd__(self, other: Any) -> Any:
+        return _unwrap_scalar(other) + self._current
+
+    def __sub__(self, other: Any) -> Any:
+        return self._current - _unwrap_scalar(other)
+
+    def __rsub__(self, other: Any) -> Any:
+        return _unwrap_scalar(other) - self._current
+
+    def __mul__(self, other: Any) -> Any:
+        return self._current * _unwrap_scalar(other)
+
+    def __rmul__(self, other: Any) -> Any:
+        return _unwrap_scalar(other) * self._current
+
+    def __truediv__(self, other: Any) -> Any:
+        return self._current / _unwrap_scalar(other)
+
+    def __rtruediv__(self, other: Any) -> Any:
+        return _unwrap_scalar(other) / self._current
+
+    def __eq__(self, other: object) -> bool:
+        return self._current == _unwrap_scalar(other)
+
+    def __lt__(self, other: Any) -> bool:
+        return self._current < _unwrap_scalar(other)
+
+    def __le__(self, other: Any) -> bool:
+        return self._current <= _unwrap_scalar(other)
+
+    def __gt__(self, other: Any) -> bool:
+        return self._current > _unwrap_scalar(other)
+
+    def __ge__(self, other: Any) -> bool:
+        return self._current >= _unwrap_scalar(other)
+
+
+def _unwrap_scalar(value: Any) -> Any:
+    return getattr(value, "_current", value)
+
+
 class GeneratedStrategyClass(Protocol):
     def __call__(self, params: dict[str, Any] | None = None, runtime: Any | None = None) -> Any: ...
 
@@ -58,6 +141,20 @@ class _BridgeStrategyContext:
     def __init__(self, engine_ctx: EngineStrategyContext) -> None:
         self._engine_ctx = engine_ctx
         self._runtime: Any | None = None
+        self.equity = _BridgeScalarSeries()
+        self.netprofit = _BridgeScalarSeries()
+        self.openprofit = _BridgeScalarSeries()
+        self.grossprofit = _BridgeScalarSeries()
+        self.grossloss = _BridgeScalarSeries()
+        self.position_size = _BridgeScalarSeries()
+        self.position_avg_price = _BridgeScalarSeries()
+        self.opentrades = _BridgeScalarSeries(0)
+        self.closedtrades = _BridgeScalarSeries(0)
+        self.max_drawdown = _BridgeScalarSeries()
+        self.max_runup = _BridgeScalarSeries()
+        self.wintrades = _BridgeScalarSeries(0)
+        self.losstrades = _BridgeScalarSeries(0)
+        self.eventrades = _BridgeScalarSeries(0)
         self._sync_from_engine()
 
     def attach_runtime(self, runtime: Any) -> None:
@@ -66,21 +163,40 @@ class _BridgeStrategyContext:
 
     def _sync_from_engine(self) -> None:
         state = self._engine_ctx.state
-        self.equity = float(state.equity)
-        self.netprofit = float(state.net_profit)
-        self.openprofit = float(state.open_profit)
-        self.grossprofit = float(state.gross_profit)
-        self.grossloss = float(state.gross_loss)
-        self.position_size = float(state.position_size)
-        self.position_avg_price = float(state.position_avg_price or 0.0)
-        self.opentrades = int(state.open_trades)
-        self.closedtrades = int(state.closed_trades)
-        self.max_drawdown = float(state.max_drawdown)
-        self.max_runup = 0.0
+        self.equity.set_current(float(state.equity))
+        self.netprofit.set_current(float(state.net_profit))
+        self.openprofit.set_current(float(state.open_profit))
+        self.grossprofit.set_current(float(state.gross_profit))
+        self.grossloss.set_current(float(state.gross_loss))
+        self.position_size.set_current(float(state.position_size))
+        self.position_avg_price.set_current(float(state.position_avg_price or 0.0))
+        self.opentrades.set_current(int(state.open_trades))
+        self.closedtrades.set_current(int(state.closed_trades))
+        self.max_drawdown.set_current(float(state.max_drawdown))
+        self.max_runup.set_current(0.0)
         closed = getattr(state, "_closed_trades_ref", [])
-        self.wintrades = sum(1 for trade in closed if trade.profit > 0)
-        self.losstrades = sum(1 for trade in closed if trade.profit < 0)
-        self.eventrades = sum(1 for trade in closed if trade.profit == 0)
+        self.wintrades.set_current(sum(1 for trade in closed if trade.profit > 0))
+        self.losstrades.set_current(sum(1 for trade in closed if trade.profit < 0))
+        self.eventrades.set_current(sum(1 for trade in closed if trade.profit == 0))
+
+    def _commit_scalar_history(self) -> None:
+        for value in (
+            self.equity,
+            self.netprofit,
+            self.openprofit,
+            self.grossprofit,
+            self.grossloss,
+            self.position_size,
+            self.position_avg_price,
+            self.opentrades,
+            self.closedtrades,
+            self.max_drawdown,
+            self.max_runup,
+            self.wintrades,
+            self.losstrades,
+            self.eventrades,
+        ):
+            value.commit_current()
 
     def entry(
         self,
@@ -240,6 +356,7 @@ def make_generated_strategy_adapter(
                 raise GeneratedStrategyBridgeError(
                     f"PineRuntime/BacktestEngine bar index mismatch: {current_index} != {bar_index}"
                 )
+            self._bridge_ctx._commit_scalar_history()
 
         def _finalize(self) -> None:
             if self._active_engine_bar_index is not None:

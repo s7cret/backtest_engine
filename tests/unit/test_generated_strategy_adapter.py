@@ -57,6 +57,51 @@ def test_generated_strategy_adapter_runs_orders_through_backtest_engine() -> Non
     assert result.closed_trades[0].exit_bar_index == 5
 
 
+class GeneratedClosedTradesChangeStrategy:
+    events: list[tuple[int, float]] = []
+
+    def __init__(self, params=None, runtime=None):
+        from pinelib.ta import change
+
+        self.params = params or {}
+        self.rt = runtime
+        self.ctx = None
+        self._change = change
+
+    def _process_bar(self, bar):
+        del bar
+        idx = self.rt.bar_index_series.current
+        delta = self._change(self.ctx.closedtrades)
+        if delta == 1:
+            self.events.append((idx, delta))
+        if idx == 1:
+            self.ctx.entry("L", "long")
+        if idx == 4:
+            self.ctx.close("L")
+
+
+def test_generated_strategy_adapter_tracks_strategy_scalar_history() -> None:
+    GeneratedClosedTradesChangeStrategy.events = []
+    strategy_class = make_generated_strategy_adapter(GeneratedClosedTradesChangeStrategy)
+    bars = [Bar(i, 100 + i, 101 + i, 99 + i, 100 + i, 1.0) for i in range(7)]
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=6,
+        commission_type="none",
+        commission_value=0.0,
+        default_qty_type="fixed",
+        default_qty_value=1.0,
+        force_close_on_end=False,
+    )
+
+    result = BacktestEngine(config).run(strategy_class, bars=bars)
+
+    assert result.status == "completed"
+    assert GeneratedClosedTradesChangeStrategy.events == [(5, 1.0)]
+
+
 class _Declaration:
     calc_on_order_fills = True
     calc_on_every_tick = False
