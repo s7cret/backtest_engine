@@ -27,15 +27,47 @@ def _pinelib_imports() -> dict[str, Any]:
 
 
 def _bar_to_pinelib(bar: Any, pine_bar_type: type) -> Any:
+    bar_time = getattr(bar, "time", getattr(bar, "timestamp", 0))
+    bar_time_close = getattr(bar, "time_close", getattr(bar, "close_time_ms", None))
     return pine_bar_type(
-        time=int(getattr(bar, "time")),
+        time=int(bar_time),
         open=float(getattr(bar, "open")),
         high=float(getattr(bar, "high")),
         low=float(getattr(bar, "low")),
         close=float(getattr(bar, "close")),
         volume=0.0 if getattr(bar, "volume", None) is None else float(getattr(bar, "volume")),
-        time_close=getattr(bar, "time_close", None),
+        time_close=bar_time_close,
     )
+
+
+def _sync_strategy_context_from_config(strategy_ctx: Any, config: Any) -> None:
+    """Apply engine config to generated strategies that already own a context."""
+    mappings = {
+        "initial_capital": getattr(config, "initial_capital", None),
+        "currency": getattr(config, "currency", None),
+        "default_qty_type": getattr(config, "default_qty_type", None),
+        "default_qty_value": getattr(config, "default_qty_value", None),
+        "pyramiding": getattr(config, "pyramiding", None),
+        "commission_type": getattr(config, "commission_type", None),
+        "commission_value": getattr(config, "commission_value", None),
+        "slippage": getattr(config, "slippage", None),
+        "process_orders_on_close": getattr(config, "process_orders_on_close", None),
+        "calc_on_order_fills": getattr(config, "calc_on_order_fills", None),
+        "calc_on_every_tick": getattr(config, "calc_on_every_tick", None),
+        "use_bar_magnifier": getattr(config, "use_bar_magnifier", None),
+        "margin_long": getattr(config, "margin_long", None),
+        "margin_short": getattr(config, "margin_short", None),
+        "qty_step": getattr(config, "qty_step", None),
+        "qty_rounding_mode": getattr(config, "qty_rounding_mode", getattr(config, "qty_rounding", None)),
+    }
+    for name, value in mappings.items():
+        if value is None:
+            continue
+        if hasattr(strategy_ctx, name):
+            setattr(strategy_ctx, name, value)
+        declaration = getattr(strategy_ctx, "declaration", None)
+        if declaration is not None and hasattr(declaration, name):
+            setattr(declaration, name, value)
 
 
 class PineRuntimeBackend:
@@ -62,6 +94,7 @@ class PineRuntimeBackend:
         imports = _pinelib_imports()
         runtime_kwargs = dict(runtime_kwargs or {})
         params = dict(params or {})
+        progress_callback = runtime_kwargs.pop("progress_callback", None)
 
         runtime_config = imports["RuntimeConfig"](
             strict_tv_parity=getattr(config, "parity_mode", None) == "strict",
@@ -93,8 +126,15 @@ class PineRuntimeBackend:
         pine_bars = [_bar_to_pinelib(bar, imports["PineBar"]) for bar in bars]
 
         if is_indicator:
-            # Indicators: call run() directly, no strategy context needed
-            strategy.run(pine_bars)
+            # Indicators: run bar-by-bar so CLI callers can report progress.
+            for idx, bar in enumerate(pine_bars):
+                runtime.begin_bar(bar)
+                try:
+                    strategy._process_bar(bar)
+                finally:
+                    runtime.end_bar()
+                if progress_callback is not None:
+                    progress_callback(idx + 1, len(pine_bars))
             bar_results: list[BackendBarResult] = []
             plots = None
             plot_recorder = getattr(runtime, "plot_recorder", None)
@@ -131,11 +171,21 @@ class PineRuntimeBackend:
                 use_bar_magnifier=getattr(config, "use_bar_magnifier", False),
                 margin_long=getattr(config, "margin_long", 100.0),
                 margin_short=getattr(config, "margin_short", 100.0),
+                qty_step=getattr(config, "qty_step", None),
+                qty_rounding_mode=getattr(config, "qty_rounding_mode", getattr(config, "qty_rounding", "none")),
             )
             setattr(strategy, "ctx", strategy_ctx)
+        else:
+            _sync_strategy_context_from_config(strategy_ctx, config)
         strategy_ctx.attach_runtime(runtime)
 
-        result = imports["run_generated_strategy"](strategy, runtime, strategy_ctx, pine_bars)
+        result = imports["run_generated_strategy"](
+            strategy,
+            runtime,
+            strategy_ctx,
+            pine_bars,
+            progress_callback=progress_callback,
+        )
 
         bar_results = []
         for idx, snapshot in enumerate(result.snapshots):
@@ -149,6 +199,7 @@ class PineRuntimeBackend:
                     netprofit=float(snapshot.netprofit),
                     openprofit=float(snapshot.openprofit),
                     position_size=float(snapshot.position_size),
+                    position_avg_price=float(snapshot.position_avg_price),
                     closedtrades=int(snapshot.closedtrades),
                     raw=raw,
                 )

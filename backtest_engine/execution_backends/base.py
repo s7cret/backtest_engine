@@ -12,6 +12,7 @@ class BackendBarResult:
     netprofit: float | None = None
     openprofit: float | None = None
     position_size: float | None = None
+    position_avg_price: float | None = None
     closedtrades: int | None = None
     raw: dict[str, Any] | None = None
 

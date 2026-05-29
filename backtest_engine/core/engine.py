@@ -106,6 +106,7 @@ class BacktestEngine:
         resume_state: BacktestResumeState | None = None,
         effective_pre_bars: int | None = None,
         execution_backend: Any | None = None,
+        runtime_kwargs: dict[str, Any] | None = None,
     ) -> BacktestResult:
         t0 = time.perf_counter()
         params = params or {}
@@ -165,6 +166,7 @@ class BacktestEngine:
                 series,
                 t0,
                 effective_pre_bars or 0,
+                runtime_kwargs,
             )
         ctx = StrategyContext(self.config, self.state)
         runtime = self.config.runtime or _NoopRuntime()
@@ -403,6 +405,7 @@ class BacktestEngine:
         series: BarSeries,
         t0: float,
         effective_pre_bars: int,
+        runtime_kwargs: dict[str, Any] | None = None,
     ) -> BacktestResult:
         if isinstance(execution_backend, str):
             if execution_backend != "pine_runtime":
@@ -424,7 +427,7 @@ class BacktestEngine:
             config=self.config,
             execution_window=None,
             effective_pre_bars=effective_pre_bars,
-            runtime_kwargs=None,
+            runtime_kwargs=runtime_kwargs,
             params=params,
         )
         self._apply_backend_result(backend_result)
@@ -469,7 +472,7 @@ class BacktestEngine:
                 equity,
                 equity - open_profit,
                 float(getattr(item, "position_size", 0.0) or 0.0),
-                None,
+                getattr(item, "position_avg_price", None),
                 open_profit,
                 netprofit,
                 drawdown,
