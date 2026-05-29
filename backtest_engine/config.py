@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Literal
 from .models.instrument import InstrumentModel
@@ -193,7 +193,7 @@ class BacktestConfig:
     output_dir: Path | None = None
 
     def snapshot(self) -> dict:
-        d = asdict(self)
+        d = {field.name: getattr(self, field.name) for field in fields(self)}
         d["data_provider"] = type(self.data_provider).__name__ if self.data_provider else None
         d["realtime_tick_provider"] = (
             type(self.realtime_tick_provider).__name__ if self.realtime_tick_provider else None

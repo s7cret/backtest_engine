@@ -103,11 +103,16 @@ class PineRuntimeBackend:
             process_orders_on_close=getattr(config, "process_orders_on_close", None),
             calc_on_order_fills=getattr(config, "calc_on_order_fills", None),
             calc_on_every_tick=getattr(config, "calc_on_every_tick", None),
+            extra={
+                "exchange": getattr(config, "exchange", None),
+                "market_type": getattr(config, "market_type", None),
+            },
         )
         symbol_info = imports["SymbolInfo"](
             tickerid=runtime_kwargs.pop("symbol", getattr(config, "symbol", "UNKNOWN")),
             mintick=getattr(config, "mintick", None) or 0.01,
             currency=getattr(config, "currency", None),
+            exchange=getattr(config, "exchange", None),
         )
         timeframe = imports["TimeframeInfo"].from_string(
             runtime_kwargs.pop("timeframe", getattr(config, "timeframe", "1"))
