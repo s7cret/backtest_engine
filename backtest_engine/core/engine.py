@@ -1328,9 +1328,6 @@ class BacktestEngine:
             # conservative side for fills (matches TV equity fill semantics).
             rounding_mode = "floor"
         fprice = round_to_step(price + slip, self.config.mintick, rounding_mode)
-        if getattr(o, "qty_is_default", False):
-            default_qty = self._qty_from_args({}, None, fprice)
-            o.qty = abs(self.position.size) + default_qty if o.position_effect == "reverse" else default_qty
         before = self.position.direction
         com = calculate_commission(
             fprice, o.qty, self.config.commission_type, self.config.commission_value

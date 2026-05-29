@@ -177,6 +177,15 @@ class FractionalStopEntry:
             self.ctx.entry("S", "long", qty=1, stop=0.1639)
 
 
+class DefaultPercentNextOpenEntry:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long")
+
+
 def test_default_cash_sizing_uses_fill_price_and_qty_step_floor():
     bars = [Bar(1, 0.160714, 0.160714, 0.160714, 0.160714), Bar(2, 0.13, 0.13, 0.13, 0.13)]
     r = BacktestEngine(
@@ -199,6 +208,22 @@ def test_default_percent_sizing_reserves_percent_commission_and_qty_step_floor()
         )
     ).run(DefaultPercentEntryClose, bars=bars)
     assert r.closed_trades[0].qty == 621
+
+
+def test_default_percent_next_open_entry_sizes_from_creation_close():
+    bars = [Bar(1, 100, 100, 100, 100), Bar(2, 110, 110, 110, 110)]
+    r = BacktestEngine(
+        cfg(
+            end_time=2,
+            default_qty_type="percent_of_equity",
+            default_qty_value=10,
+            commission_type="percent",
+            commission_value=1,
+            process_orders_on_close=False,
+        )
+    ).run(DefaultPercentNextOpenEntry, bars=bars)
+    assert round(r.open_trades[0].qty, 9) == round(100.0 / (100.0 * 1.01), 9)
+    assert r.open_trades[0].entry_price == 110
 
 
 def test_strategy_close_id_closes_matching_pyramid_entry_not_default_lot():

@@ -141,6 +141,7 @@ class _BridgeStrategyContext:
     def __init__(self, engine_ctx: EngineStrategyContext) -> None:
         self._engine_ctx = engine_ctx
         self._runtime: Any | None = None
+        self.initial_capital = float(getattr(engine_ctx.config, "initial_capital", 0.0))
         self.equity = _BridgeScalarSeries()
         self.netprofit = _BridgeScalarSeries()
         self.openprofit = _BridgeScalarSeries()
