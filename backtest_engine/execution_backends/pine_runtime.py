@@ -95,6 +95,8 @@ class PineRuntimeBackend:
         runtime_kwargs = dict(runtime_kwargs or {})
         params = dict(params or {})
         progress_callback = runtime_kwargs.pop("progress_callback", None)
+        plot_from_ms = runtime_kwargs.pop("plot_from_ms", None)
+        plot_to_ms = runtime_kwargs.pop("plot_to_ms", None)
 
         runtime_config = imports["RuntimeConfig"](
             strict_tv_parity=getattr(config, "parity_mode", None) == "strict",
@@ -117,6 +119,10 @@ class PineRuntimeBackend:
             config=runtime_config,
             **runtime_kwargs,
         )
+        plot_recorder = getattr(runtime, "plot_recorder", None)
+        set_time_window = getattr(plot_recorder, "set_time_window", None)
+        if callable(set_time_window):
+            set_time_window(plot_from_ms, plot_to_ms)
 
         try:
             strategy = strategy_class(params=params, runtime=runtime)
