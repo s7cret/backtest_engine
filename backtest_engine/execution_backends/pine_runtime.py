@@ -130,6 +130,8 @@ class PineRuntimeBackend:
             strategy = strategy_class(params, runtime)
 
         pine_bars = [_bar_to_pinelib(bar, imports["PineBar"]) for bar in bars]
+        if pine_bars:
+            runtime.request_data_end_ms = pine_bars[-1].time_close or pine_bars[-1].time
 
         if is_indicator:
             # Indicators: run bar-by-bar so CLI callers can report progress.
