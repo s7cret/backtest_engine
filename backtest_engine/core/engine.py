@@ -6,6 +6,7 @@ from typing import Any
 from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext, StrategyStateView
 from backtest_engine.errors import (
+    BacktestEngineError,
     BarMagnifierUnavailableError,
     BarValidationError,
     ConfigError,
@@ -382,6 +383,8 @@ class BacktestEngine:
     def _call_strategy(self, strategy: Any, bar: Bar, i: int) -> None:
         try:
             strategy._process_bar(bar, i)
+        except BacktestEngineError:
+            raise
         except Exception as e:
             raise StrategyRuntimeError(str(e)) from e
 

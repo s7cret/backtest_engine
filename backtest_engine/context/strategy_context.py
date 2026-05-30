@@ -1,6 +1,7 @@
 from __future__ import annotations
 from .command_buffer import CommandBuffer
 from .strategy_state_view import StrategyStateView
+from backtest_engine.errors import UnsupportedRiskRuleError
 
 
 class StrategyContext:
@@ -150,9 +151,11 @@ class StrategyContext:
         self.config.max_position_size = float(value)
 
     def risk_max_intraday_loss(self, value: float, type: str) -> None:
-        raise NotImplementedError("risk_max_intraday_loss is not implemented in BacktestEngine")
+        raise UnsupportedRiskRuleError(
+            "strategy.risk.max_intraday_loss is not supported by BacktestEngine"
+        )
 
     def risk_max_intraday_filled_orders(self, value: float, type: str = "fixed") -> None:
-        raise NotImplementedError(
-            "risk_max_intraday_filled_orders is not implemented in BacktestEngine"
+        raise UnsupportedRiskRuleError(
+            "strategy.risk.max_intraday_filled_orders is not supported by BacktestEngine"
         )

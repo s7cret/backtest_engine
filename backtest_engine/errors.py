@@ -28,3 +28,7 @@ class ProviderError(BacktestEngineError):
 
 class StrategyRuntimeError(BacktestEngineError):
     pass
+
+
+class UnsupportedRiskRuleError(BacktestEngineError):
+    pass

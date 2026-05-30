@@ -1,6 +1,7 @@
 import pytest
 
 from backtest_engine import BacktestConfig, BacktestEngine, Bar
+from backtest_engine.errors import UnsupportedRiskRuleError
 
 
 class TwoTrades:
@@ -162,3 +163,29 @@ def test_risk_allow_entry_direction_is_enforced_by_engine():
 
     assert result.open_trades is not None
     assert [trade.entry_id for trade in result.open_trades] == ["allowed_short"]
+
+
+class UnsupportedIntradayRiskStrategy:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.risk_max_intraday_loss(10, "percent_of_equity")
+
+
+def test_unsupported_intraday_risk_rule_fails_closed():
+    bars = [
+        Bar(1, 100, 100, 100, 100),
+        Bar(2, 100, 100, 100, 100),
+    ]
+    cfg = BacktestConfig(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=2,
+        commission_type="none",
+    )
+
+    with pytest.raises(UnsupportedRiskRuleError, match="max_intraday_loss"):
+        BacktestEngine(cfg).run(UnsupportedIntradayRiskStrategy, bars=bars)

@@ -112,6 +112,13 @@ def test_engine_slice_preserves_bar_close_times():
     assert list(sliced.time_close or []) == [2, 3, 4]
 
 
+def test_strategy_context_has_no_notimplemented_risk_methods():
+    source = Path("backtest_engine/context/strategy_context.py").read_text(encoding="utf-8")
+
+    assert "NotImplementedError" not in source
+    assert "UnsupportedRiskRuleError" in source
+
+
 def test_result_helpers_are_public_functions():
     dds = calculate_drawdowns([100, 90, 110, 80])
     assert dds[1].drawdown == 10
