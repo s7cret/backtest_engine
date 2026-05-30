@@ -2,6 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Literal
+
+from .errors import ConfigError
 from .models.instrument import InstrumentModel
 
 
@@ -50,7 +52,7 @@ class BacktestConfig:
     pyramiding_price_order_overfill_policy: Literal["tradingview", "strict"] = "tradingview"
     use_bar_magnifier: bool = False
     bar_magnifier_lower_tf: str | None = None
-    bar_magnifier_missing_policy: Literal["error", "fallback"] = "error"
+    bar_magnifier_missing_policy: Literal["error"] = "error"
     missing_bar_policy: Literal["error", "warn", "ignore"] = "warn"
     duplicate_bar_policy: Literal["error", "keep_first", "keep_last"] = "error"
     validate_bars: bool = True
@@ -102,6 +104,10 @@ class BacktestConfig:
     bar_magnifier_bars: dict[int, object] | None = None
     store_backtest_result_in_memory: bool = True
     output_dir: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.bar_magnifier_missing_policy != "error":
+            raise ConfigError("bar_magnifier_missing_policy only supports fail-closed 'error'")
 
     def snapshot(self) -> dict:
         d = {field.name: getattr(self, field.name) for field in fields(self)}

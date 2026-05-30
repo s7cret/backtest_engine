@@ -160,12 +160,17 @@ def test_bar_magnifier_recalc_uses_lower_timeframe_sequence_not_parent_ohlc():
             end_time=7200,
             use_bar_magnifier=True,
             bar_magnifier_lower_tf="5",
-            bar_magnifier_missing_policy="fallback",
             calc_on_order_fills=True,
             bar_magnifier_bars={
+                0: [
+                    Bar(0, 10, 10, 10, 10, time_close=300),
+                ],
                 3600: [
                     Bar(3600, 10, 12, 10, 12, time_close=3900),
                     Bar(3900, 12, 12, 9, 9.5, time_close=4200),
+                ],
+                7200: [
+                    Bar(7200, 10, 10, 10, 10, time_close=7500),
                 ],
             },
         )
@@ -175,3 +180,8 @@ def test_bar_magnifier_recalc_uses_lower_timeframe_sequence_not_parent_ohlc():
     assert result.closed_trades[0].entry_bar_index == 1
     assert result.closed_trades[0].exit_bar_index == 2
     assert result.closed_trades[0].exit_price == 10
+
+
+def test_bar_magnifier_missing_policy_rejects_fallback_mode():
+    with pytest.raises(ConfigError, match="fail-closed"):
+        cfg(bar_magnifier_missing_policy="fallback")

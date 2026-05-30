@@ -156,12 +156,8 @@ class BacktestEngine:
             not self.config.bar_magnifier_lower_tf
             or self.config.bar_magnifier_bars is None
         ):
-            if self.config.bar_magnifier_missing_policy == "error":
-                raise BarMagnifierUnavailableError(
-                    "bar magnifier lower timeframe bars unavailable"
-                )
-            self._diag(
-                "BAR_MAGNIFIER_FALLBACK", "bar magnifier unavailable; using OHLC path", "warning"
+            raise BarMagnifierUnavailableError(
+                "bar magnifier lower timeframe bars unavailable"
             )
         if self.config.use_bar_magnifier and self.config.bar_magnifier_bars is not None:
             self._validate_supplied_bar_magnifier_bars(series)
@@ -1240,21 +1236,9 @@ class BacktestEngine:
             lower_series = lower if isinstance(lower, BarSeries) else BarSeries.from_bars(lower)
             self._validate_lower_timeframe_bars(lower_series, bar)
         except Exception as e:
-            if self.config.bar_magnifier_missing_policy == "error":
-                raise BarMagnifierUnavailableError(str(e)) from e
-            self._diag(
-                "BAR_MAGNIFIER_FALLBACK",
-                "lower timeframe bars unavailable; using OHLC path",
-                "warning",
-            )
-            return build_price_path(bar)
+            raise BarMagnifierUnavailableError(str(e)) from e
         if len(lower_series) == 0:
-            if self.config.bar_magnifier_missing_policy == "error":
-                raise BarMagnifierUnavailableError("empty lower timeframe bars")
-            self._diag(
-                "BAR_MAGNIFIER_FALLBACK", "empty lower timeframe bars; using OHLC path", "warning"
-            )
-            return build_price_path(bar)
+            raise BarMagnifierUnavailableError("empty lower timeframe bars")
         path: list[tuple[float, str]] = []
         for j in range(len(lower_series)):
             lb = lower_series.get_bar(j)
