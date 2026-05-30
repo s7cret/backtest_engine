@@ -89,12 +89,11 @@ def test_backtest_config_has_no_market_data_ingress_fields():
 
 
 def test_engine_uses_canonical_timeframe_parser_for_parent_close():
-    source = Path("backtest_engine/core/engine.py").read_text(encoding="utf-8")
-    infer_source = source.split("def _infer_parent_close", 1)[1].split("def _fill", 1)[0]
+    source = Path("backtest_engine/models/timeframe.py").read_text(encoding="utf-8")
 
-    assert "parse_timeframe" in infer_source
-    assert ".endswith(" not in infer_source
-    assert ".isdigit(" not in infer_source
+    assert "parse_timeframe" in source
+    assert ".endswith(" not in source
+    assert ".isdigit(" not in source
 
 
 def test_engine_slice_preserves_bar_close_times():

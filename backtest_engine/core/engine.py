@@ -33,6 +33,7 @@ from backtest_engine.models.window import (
     TradeResult,
     Phase,
 )
+from backtest_engine.models.timeframe import infer_close_from_timeframe
 from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.broker.slippage import slippage_value
 from backtest_engine.broker.rounding import round_to_step
@@ -1307,20 +1308,7 @@ class BacktestEngine:
                 raise BarMagnifierUnavailableError(str(exc)) from exc
 
     def _infer_parent_close(self, parent_open: int) -> int:
-        try:
-            from marketdata_provider.contracts import InvalidTimeframeError, parse_timeframe
-
-            timeframe = parse_timeframe(self.config.timeframe)
-        except InvalidTimeframeError as exc:
-            raise BarValidationError(
-                "parent bar missing time_close and timeframe duration is unknown"
-            ) from exc
-
-        if timeframe.duration_ms is None:
-            raise BarValidationError(
-                "parent bar missing time_close and timeframe duration is unknown"
-            )
-        return parent_open + timeframe.duration_ms
+        return infer_close_from_timeframe(parent_open, self.config.timeframe)
 
     def _fill(self, o: Order, bar: Bar, i: int, price: float, point: str) -> None:
         if o.kind == "exit":
