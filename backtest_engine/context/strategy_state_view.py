@@ -17,6 +17,8 @@ class StrategyStateView:
     gross_loss: float = 0.0
     max_drawdown: float = 0.0
     max_drawdown_percent: float = 0.0
+    max_runup: float = 0.0
+    max_runup_percent: float = 0.0
     closed_trades: int = 0
     open_trades: int = 0
     _open_trades_ref: list[Any] = field(default_factory=list, repr=False)
@@ -48,6 +50,18 @@ class StrategyStateView:
     def opentrades_profit(self, index: int) -> float:
         return self._open(index).profit
 
+    def opentrades_max_runup(self, index: int) -> float:
+        value = self._open(index).max_runup
+        if value is None:
+            raise AttributeError("open trade max_runup is unavailable")
+        return value
+
+    def opentrades_max_drawdown(self, index: int) -> float:
+        value = self._open(index).max_drawdown
+        if value is None:
+            raise AttributeError("open trade max_drawdown is unavailable")
+        return value
+
     def closedtrades_entry_id(self, index: int) -> str:
         return self._closed(index).entry_id
 
@@ -56,6 +70,18 @@ class StrategyStateView:
 
     def closedtrades_profit(self, index: int) -> float:
         return self._closed(index).profit
+
+    def closedtrades_max_runup(self, index: int) -> float:
+        value = self._closed(index).max_runup
+        if value is None:
+            raise AttributeError("closed trade max_runup is unavailable")
+        return value
+
+    def closedtrades_max_drawdown(self, index: int) -> float:
+        value = self._closed(index).max_drawdown
+        if value is None:
+            raise AttributeError("closed trade max_drawdown is unavailable")
+        return value
 
     def closedtrades_entry_bar_index(self, index: int) -> int:
         return self._closed(index).entry_bar_index

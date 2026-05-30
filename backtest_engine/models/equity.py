@@ -13,3 +13,5 @@ class EquityPoint:
     realized_profit: float
     drawdown: float
     drawdown_percent: float
+    runup: float = 0.0
+    runup_percent: float = 0.0

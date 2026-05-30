@@ -37,6 +37,8 @@ class BacktestResult:
     profit_factor: float = 0.0
     max_drawdown: float = 0.0
     max_drawdown_percent: float = 0.0
+    max_runup: float = 0.0
+    max_runup_percent: float = 0.0
     sharpe_ratio: float | None = None
     sortino_ratio: float | None = None
     total_trades: int = 0
@@ -65,6 +67,8 @@ class BacktestResult:
     score_profit_factor: float = 0.0
     score_max_drawdown: float = 0.0
     score_max_drawdown_percent: float = 0.0
+    score_max_runup: float = 0.0
+    score_max_runup_percent: float = 0.0
     score_avg_trade: float = 0.0
     score_sharpe_ratio: float | None = None
     score_sortino_ratio: float | None = None

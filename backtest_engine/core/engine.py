@@ -72,8 +72,11 @@ class BacktestEngine:
         self.cash = self.config.initial_capital
         self.equity = self.config.initial_capital
         self.peak_equity = self.config.initial_capital
+        self.trough_equity = self.config.initial_capital
         self.max_drawdown = 0.0
         self.max_drawdown_percent = 0.0
+        self.max_runup = 0.0
+        self.max_runup_percent = 0.0
         self.orders: list[Order] = []
         self.fills: list[Fill] = []
         self.closed_trades: list[Trade] = []
@@ -204,10 +207,16 @@ class BacktestEngine:
             self._update_state()
             if self.equity > self.peak_equity:
                 self.peak_equity = self.equity
+            if self.equity < self.trough_equity:
+                self.trough_equity = self.equity
             dd = max(0.0, self.peak_equity - self.equity)
             ddp = dd / self.peak_equity * 100 if self.peak_equity else 0.0
+            ru = max(0.0, self.equity - self.trough_equity)
+            rup = ru / self.trough_equity * 100 if self.trough_equity else 0.0
             self.max_drawdown = max(self.max_drawdown, dd)
             self.max_drawdown_percent = max(self.max_drawdown_percent, ddp)
+            self.max_runup = max(self.max_runup, ru)
+            self.max_runup_percent = max(self.max_runup_percent, rup)
             self._update_state()
             if equity_curve is not None:
                 point = EquityPoint(
@@ -221,6 +230,8 @@ class BacktestEngine:
                     self.position.realized_profit,
                     dd,
                     ddp,
+                    ru,
+                    rup,
                 )
                 equity_curve.append(point)
                 if self._score_mode and i >= self._score_start_index:
@@ -369,8 +380,8 @@ class BacktestEngine:
                     provider=cfg.provider,
                     symbol=cfg.symbol,
                     timeframe=cfg.timeframe,
-                    start_time=self.config.start_time,
-                    end_time=self.config.end_time,
+                    start_time=cfg.start_time if cfg.start_time is not None else self.config.start_time,
+                    end_time=cfg.end_time if cfg.end_time is not None else self.config.end_time,
                     max_pre_bars=cfg.max_pre_bars,
                 )
                 src = fetch_cfg.fetch_bars()
@@ -458,14 +469,18 @@ class BacktestEngine:
         self.open_trades = []
         self._backend_equity_curve: list[EquityPoint] | None = []
         peak = self.config.initial_capital
+        trough = self.config.initial_capital
         for idx, item in enumerate(getattr(backend_result, "bar_results", []) or []):
             equity = getattr(item, "equity", None)
             if equity is None:
                 continue
             equity = float(equity)
             peak = max(peak, equity)
+            trough = min(trough, equity)
             drawdown = max(0.0, peak - equity)
             drawdown_percent = drawdown / peak * 100 if peak else 0.0
+            runup = max(0.0, equity - trough)
+            runup_percent = runup / trough * 100 if trough else 0.0
             open_profit = float(getattr(item, "openprofit", 0.0) or 0.0)
             netprofit = float(getattr(item, "netprofit", 0.0) or 0.0)
             point = EquityPoint(
@@ -479,6 +494,8 @@ class BacktestEngine:
                 netprofit,
                 drawdown,
                 drawdown_percent,
+                runup,
+                runup_percent,
             )
             self._backend_equity_curve.append(point)
             if getattr(item, "phase", "score") == "score":
@@ -489,6 +506,9 @@ class BacktestEngine:
             self.cash = last.cash
             self.max_drawdown = max(p.drawdown for p in self._backend_equity_curve)
             self.max_drawdown_percent = max(p.drawdown_percent for p in self._backend_equity_curve)
+            self.trough_equity = min(p.equity for p in self._backend_equity_curve)
+            self.max_runup = max(p.runup for p in self._backend_equity_curve)
+            self.max_runup_percent = max(p.runup_percent for p in self._backend_equity_curve)
         diagnostics = getattr(backend_result, "diagnostics", {}) or {}
         for raw in diagnostics.get("runtime_diagnostics", []) or []:
             if isinstance(raw, dict):
@@ -520,6 +540,9 @@ class BacktestEngine:
             commission_exit=0.0,
             profit=float(getattr(trade, "profit", 0.0) or 0.0),
             profit_percent=float(getattr(trade, "profit_percent", 0.0) or 0.0),
+            mfe=getattr(trade, "max_runup", None),
+            max_runup=getattr(trade, "max_runup", None),
+            max_drawdown=getattr(trade, "max_drawdown", None),
             exit_reason=getattr(trade, "exit_reason", None),
             bars_held=(
                 None
@@ -1476,6 +1499,7 @@ class BacktestEngine:
                 - exit_commission
                 - entry_commission
             )
+            mfe, mae, max_runup, max_drawdown = self._trade_excursion_values(tr, bar)
             closed = replace(
                 tr,
                 exit_id=o.id,
@@ -1487,6 +1511,10 @@ class BacktestEngine:
                 commission_exit=exit_commission,
                 profit=p,
                 profit_percent=(p / (tr.entry_price * q) * 100 if tr.entry_price * q else 0.0),
+                mfe=mfe,
+                mae=mae,
+                max_runup=max_runup,
+                max_drawdown=max_drawdown,
                 exit_reason=o.id,
                 bars_held=i - tr.entry_bar_index,
                 is_open=False,
@@ -1535,19 +1563,23 @@ class BacktestEngine:
         if not self.config.collect_mfe_mae:
             return
         for tr in self.open_trades:
-            if tr.direction == "long":
-                fav = self.instrument.pnl(tr.entry_price, bar.high, tr.qty, tr.direction)
-                adv = self.instrument.pnl(tr.entry_price, bar.low, tr.qty, tr.direction)
-            else:
-                fav = self.instrument.pnl(tr.entry_price, bar.low, tr.qty, tr.direction)
-                adv = self.instrument.pnl(tr.entry_price, bar.high, tr.qty, tr.direction)
-            tr.mfe = fav if tr.mfe is None else max(tr.mfe, fav)
-            tr.mae = adv if tr.mae is None else min(tr.mae, adv)
+            tr.mfe, tr.mae, tr.max_runup, tr.max_drawdown = self._trade_excursion_values(tr, bar)
             tr.profit = (
                 self.instrument.pnl(tr.entry_price, bar.close, tr.qty, tr.direction)
                 - tr.commission_entry
             )
             self._cb("on_trade_update", tr)
+
+    def _trade_excursion_values(self, tr: Trade, bar: Bar) -> tuple[float, float, float, float]:
+        if tr.direction == "long":
+            fav = self.instrument.pnl(tr.entry_price, bar.high, tr.qty, tr.direction)
+            adv = self.instrument.pnl(tr.entry_price, bar.low, tr.qty, tr.direction)
+        else:
+            fav = self.instrument.pnl(tr.entry_price, bar.low, tr.qty, tr.direction)
+            adv = self.instrument.pnl(tr.entry_price, bar.high, tr.qty, tr.direction)
+        mfe = fav if tr.mfe is None else max(tr.mfe, fav)
+        mae = adv if tr.mae is None else min(tr.mae, adv)
+        return mfe, mae, max(0.0, mfe), max(0.0, -mae)
 
     def _apply_oca(self, o: Order, bar: Bar, i: int) -> None:
         if not o.oca_name:
@@ -1603,15 +1635,24 @@ class BacktestEngine:
         if self.position.direction == "flat" or self.position.avg_price is None:
             return
         adverse_price = bar.low if self.position.direction == "long" else bar.high
+        favorable_price = bar.high if self.position.direction == "long" else bar.low
         adverse_profit = self.instrument.pnl(
             self.position.avg_price, adverse_price, abs(self.position.size), self.position.direction
         )
+        favorable_profit = self.instrument.pnl(
+            self.position.avg_price, favorable_price, abs(self.position.size), self.position.direction
+        )
         adverse_equity = self.cash + adverse_profit
+        favorable_equity = self.cash + favorable_profit
         baseline = self.config.initial_capital
         dd = max(0.0, baseline - adverse_equity)
         ddp = dd / baseline * 100 if baseline else 0.0
+        ru = max(0.0, favorable_equity - baseline)
+        rup = ru / baseline * 100 if baseline else 0.0
         self.max_drawdown = max(self.max_drawdown, dd)
         self.max_drawdown_percent = max(self.max_drawdown_percent, ddp)
+        self.max_runup = max(self.max_runup, ru)
+        self.max_runup_percent = max(self.max_runup_percent, rup)
 
     def _update_state(self) -> None:
         self.state.position_size = self.position.size
@@ -1627,6 +1668,8 @@ class BacktestEngine:
         self.state.gross_loss = abs(sum(t.profit for t in self.closed_trades if t.profit < 0))
         self.state.max_drawdown = self.max_drawdown
         self.state.max_drawdown_percent = self.max_drawdown_percent
+        self.state.max_runup = self.max_runup
+        self.state.max_runup_percent = self.max_runup_percent
         self.state.closed_trades = len(self.closed_trades)
         self.state.open_trades = len(self.open_trades)
 
@@ -1668,6 +1711,9 @@ class BacktestEngine:
             peak_equity=self.peak_equity,
             max_drawdown=self.max_drawdown,
             max_drawdown_percent=self.max_drawdown_percent,
+            trough_equity=self.trough_equity,
+            max_runup=self.max_runup,
+            max_runup_percent=self.max_runup_percent,
             position=clone_state(self.position),
             orders=clone_state(self.orders),
             fills=clone_state(self.fills),
@@ -1693,6 +1739,9 @@ class BacktestEngine:
         self.peak_equity = snapshot.peak_equity
         self.max_drawdown = snapshot.max_drawdown
         self.max_drawdown_percent = snapshot.max_drawdown_percent
+        self.trough_equity = snapshot.trough_equity
+        self.max_runup = snapshot.max_runup
+        self.max_runup_percent = snapshot.max_runup_percent
         self.position = clone_state(snapshot.position)
         self.orders = clone_state(snapshot.orders)
         self.fills = clone_state(snapshot.fills)
@@ -1897,6 +1946,9 @@ class BacktestEngine:
         self.peak_equity = broker.peak_equity
         self.max_drawdown = broker.max_drawdown
         self.max_drawdown_percent = broker.max_drawdown_percent
+        self.trough_equity = broker.trough_equity
+        self.max_runup = broker.max_runup
+        self.max_runup_percent = broker.max_runup_percent
         self.position = broker.position
         self.orders = broker.orders
         self.fills = broker.fills
@@ -1947,6 +1999,9 @@ class BacktestEngine:
             self.peak_equity,
             self.max_drawdown,
             self.max_drawdown_percent,
+            self.trough_equity,
+            self.max_runup,
+            self.max_runup_percent,
             self.position,
             self.orders,
             self.fills,
@@ -2041,6 +2096,10 @@ class BacktestEngine:
 
         for k, v in stats.items():
             setattr(r, k, v)
+        r.max_drawdown = self.max_drawdown
+        r.max_drawdown_percent = self.max_drawdown_percent
+        r.max_runup = self.max_runup
+        r.max_runup_percent = self.max_runup_percent
 
         # D5-E: score-window metrics — add to score_* fields, keep full metrics intact
         if self._score_mode and self._score_equity_points:
@@ -2073,6 +2132,8 @@ class BacktestEngine:
                 r.score_sortino_ratio = sortino_ratio(rets)
             r.score_max_drawdown = max(p.drawdown for p in self._score_equity_points) if self._score_equity_points else 0.0
             r.score_max_drawdown_percent = max(p.drawdown_percent for p in self._score_equity_points) if self._score_equity_points else 0.0
+            r.score_max_runup = max(p.runup for p in self._score_equity_points) if self._score_equity_points else 0.0
+            r.score_max_runup_percent = max(p.runup_percent for p in self._score_equity_points) if self._score_equity_points else 0.0
             # bars_processed = score-window bars (score-phase only)
             r.bars_processed = len(self._score_equity_points)
         else:
@@ -2126,6 +2187,13 @@ class BacktestEngine:
             r.max_drawdown_percent = max(
                 [self.max_drawdown_percent]
                 + ([p.drawdown_percent for p in equity_curve] if equity_curve else [])
+            )
+            r.max_runup = max(
+                [self.max_runup] + ([p.runup for p in equity_curve] if equity_curve else [])
+            )
+            r.max_runup_percent = max(
+                [self.max_runup_percent]
+                + ([p.runup_percent for p in equity_curve] if equity_curve else [])
             )
         if r.closed_trades is not None:
             r.available_outputs.add("closed_trades")

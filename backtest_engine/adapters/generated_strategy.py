@@ -174,7 +174,7 @@ class _BridgeStrategyContext:
         self.opentrades.set_current(int(state.open_trades))
         self.closedtrades.set_current(int(state.closed_trades))
         self.max_drawdown.set_current(float(state.max_drawdown))
-        self.max_runup.set_current(0.0)
+        self.max_runup.set_current(float(state.max_runup))
         closed = getattr(state, "_closed_trades_ref", [])
         self.wintrades.set_current(sum(1 for trade in closed if trade.profit > 0))
         self.losstrades.set_current(sum(1 for trade in closed if trade.profit < 0))
@@ -198,6 +198,18 @@ class _BridgeStrategyContext:
             self.eventrades,
         ):
             value.commit_current()
+
+    def closedtrades_max_runup(self, index: int | float) -> float:
+        return self._engine_ctx.state.closedtrades_max_runup(int(index))
+
+    def closedtrades_max_drawdown(self, index: int | float) -> float:
+        return self._engine_ctx.state.closedtrades_max_drawdown(int(index))
+
+    def opentrades_max_runup(self, index: int | float) -> float:
+        return self._engine_ctx.state.opentrades_max_runup(int(index))
+
+    def opentrades_max_drawdown(self, index: int | float) -> float:
+        return self._engine_ctx.state.opentrades_max_drawdown(int(index))
 
     def entry(
         self,

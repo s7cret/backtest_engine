@@ -46,3 +46,49 @@ def test_stage14_p1_trade_metrics_and_commission_total():
     assert result.largest_loss == pytest.approx(6.02)
     assert result.avg_bars_in_trade == 1.0
     assert result.commission_total == 1.0 + 1.02 + 1.03 + 0.99
+
+
+class LongShortExcursions:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long")
+        if bar_index == 1:
+            self.ctx.close("L")
+        if bar_index == 2:
+            self.ctx.entry("S", "short")
+        if bar_index == 3:
+            self.ctx.close("S")
+
+
+def test_trade_max_runup_drawdown_are_stored_for_long_and_short():
+    bars = [
+        Bar(1, 100, 100, 100, 100),
+        Bar(2, 100, 110, 95, 105),
+        Bar(3, 105, 105, 105, 105),
+        Bar(4, 105, 108, 90, 95),
+        Bar(5, 95, 95, 95, 95),
+    ]
+    cfg = BacktestConfig(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=5,
+        initial_capital=10000,
+        commission_type="none",
+        commission_value=0.0,
+        process_orders_on_close=True,
+        collect_trade_details=True,
+    )
+
+    result = BacktestEngine(cfg).run(LongShortExcursions, bars=bars)
+
+    assert result.closed_trades is not None
+    long_trade, short_trade = result.closed_trades
+    assert long_trade.max_runup == pytest.approx(10.0)
+    assert long_trade.max_drawdown == pytest.approx(5.0)
+    assert short_trade.max_runup == pytest.approx(15.0)
+    assert short_trade.max_drawdown == pytest.approx(3.0)
+    assert result.max_runup == pytest.approx(15.0)

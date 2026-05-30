@@ -49,6 +49,9 @@ class BrokerSnapshot:
     peak_equity: float
     max_drawdown: float
     max_drawdown_percent: float
+    trough_equity: float
+    max_runup: float
+    max_runup_percent: float
     position: Position
     orders: list[Order] = field(default_factory=list)
     fills: list[Fill] = field(default_factory=list)

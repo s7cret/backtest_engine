@@ -209,6 +209,34 @@ class TestProviderConfig:
 
         assert result.status == "completed"
 
+    def test_provider_fetch_preserves_explicit_provider_bounds(self):
+        """ProviderConfig bounds are authoritative when supplied."""
+        bars = make_bars(20)
+        seen: dict[str, int | None] = {}
+
+        config = BacktestConfig(
+            symbol="BTCUSDT",
+            timeframe="15m",
+            start_time=bars.time[0],
+            end_time=bars.time[-1],
+            provider=ProviderConfig(
+                provider="binance",
+                start_time=bars.time[2],
+                end_time=bars.time[10],
+            ),
+        )
+
+        def fetch(self):
+            seen["start_time"] = self.start_time
+            seen["end_time"] = self.end_time
+            return bars
+
+        with mock.patch.object(ProviderConfig, "fetch_bars", fetch):
+            result = BacktestEngine(config).run(NoopStrategy, bars=None)
+
+        assert result.status == "completed"
+        assert seen == {"start_time": bars.time[2], "end_time": bars.time[10]}
+
 
 class TestProviderWithScoreWindow:
     """Phase 5 + D5-C: provider fetch with score window execution."""

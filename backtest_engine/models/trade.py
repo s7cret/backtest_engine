@@ -21,6 +21,8 @@ class Trade:
     profit_percent: float
     mfe: float | None = None
     mae: float | None = None
+    max_runup: float | None = None
+    max_drawdown: float | None = None
     exit_reason: str | None = None
     bars_held: int | None = None
     is_open: bool = False
