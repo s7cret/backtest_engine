@@ -1,4 +1,5 @@
 from dataclasses import fields
+from pathlib import Path
 
 import pytest
 
@@ -12,7 +13,7 @@ from backtest_engine.core import (
     is_fast_mode,
 )
 from backtest_engine.core.state_snapshot import BrokerSnapshot
-from backtest_engine.models import Order
+from backtest_engine.models import BarSeries, Order
 from backtest_engine.results import (
     calculate_drawdowns,
     equity_values,
@@ -85,6 +86,30 @@ def test_backtest_config_has_no_market_data_ingress_fields():
     assert "data_provider" not in names
     assert "preloaded_bars" not in names
     assert "provider" not in names
+
+
+def test_engine_uses_canonical_timeframe_parser_for_parent_close():
+    source = Path("backtest_engine/core/engine.py").read_text(encoding="utf-8")
+    infer_source = source.split("def _infer_parent_close", 1)[1].split("def _fill", 1)[0]
+
+    assert "parse_timeframe" in infer_source
+    assert ".endswith(" not in infer_source
+    assert ".isdigit(" not in infer_source
+
+
+def test_engine_slice_preserves_bar_close_times():
+    engine = BacktestEngine(cfg())
+    sliced = engine._slice_range(
+        BarSeries.from_bars(
+            [
+                Bar(1, 10, 11, 9, 10, time_close=2),
+                Bar(2, 12, 13, 11, 12, time_close=3),
+                Bar(3, 14, 15, 13, 14, time_close=4),
+            ]
+        )
+    )
+
+    assert list(sliced.time_close or []) == [2, 3, 4]
 
 
 def test_result_helpers_are_public_functions():

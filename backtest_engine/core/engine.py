@@ -160,6 +160,8 @@ class BacktestEngine:
             self._diag(
                 "BAR_MAGNIFIER_FALLBACK", "bar magnifier unavailable; using OHLC path", "warning"
             )
+        if self.config.use_bar_magnifier and self.config.bar_magnifier_bars is not None:
+            self._validate_supplied_bar_magnifier_bars(series)
         if execution_backend is not None:
             return self._run_execution_backend(
                 execution_backend,
@@ -356,6 +358,7 @@ class BacktestEngine:
             series.low[first:last],
             series.close[first:last],
             None if series.volume is None else series.volume[first:last],
+            None if series.time_close is None else series.time_close[first:last],
         )
 
     def _resolve_bars(self, bars: BarSeries | list[Bar] | None) -> BarSeries:
@@ -1275,17 +1278,33 @@ class BacktestEngine:
             if lb.low > min(lb.open, lb.close, lb.high):
                 raise BarValidationError("lower timeframe bar has invalid OHLC low")
 
+    def _validate_supplied_bar_magnifier_bars(self, series: BarSeries) -> None:
+        for i in range(len(series)):
+            parent = series.get_bar(i)
+            lower = self.config.bar_magnifier_bars.get(parent.time, ())
+            if not lower:
+                continue
+            lower_series = lower if isinstance(lower, BarSeries) else BarSeries.from_bars(lower)
+            try:
+                self._validate_lower_timeframe_bars(lower_series, parent)
+            except Exception as exc:
+                raise BarMagnifierUnavailableError(str(exc)) from exc
+
     def _infer_parent_close(self, parent_open: int) -> int:
-        unit = self.config.timeframe.strip().lower()
-        if unit.endswith("d"):
-            return parent_open + int(unit[:-1] or "1") * 86400
-        if unit.endswith("h"):
-            return parent_open + int(unit[:-1] or "1") * 3600
-        if unit.endswith("m"):
-            return parent_open + int(unit[:-1] or "1") * 60
-        if unit.isdigit():
-            return parent_open + int(unit) * 60
-        raise BarValidationError("parent bar missing time_close and timeframe duration is unknown")
+        try:
+            from marketdata_provider.contracts import InvalidTimeframeError, parse_timeframe
+
+            timeframe = parse_timeframe(self.config.timeframe)
+        except InvalidTimeframeError as exc:
+            raise BarValidationError(
+                "parent bar missing time_close and timeframe duration is unknown"
+            ) from exc
+
+        if timeframe.duration_ms is None:
+            raise BarValidationError(
+                "parent bar missing time_close and timeframe duration is unknown"
+            )
+        return parent_open + timeframe.duration_ms
 
     def _fill(self, o: Order, bar: Bar, i: int, price: float, point: str) -> None:
         if o.kind == "exit":
