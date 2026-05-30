@@ -15,6 +15,11 @@ from .equity_curve import (
 )
 from .metrics import sharpe_ratio, sortino_ratio, summary_metrics, trade_profits
 from .result import BacktestResult
+from .finalize import (
+    apply_full_window_equity_extremes,
+    apply_non_score_trade_metrics,
+    mark_available_outputs,
+)
 from .score_window import ScoreWindowMetrics, calculate_score_window_metrics
 from .trade_log import closed_trade_rows, trade_to_row, trades_to_rows
 from .writers import CSVTradeWriter, JSONResultWriter
@@ -43,6 +48,9 @@ __all__ = [
     "final_equity",
     "trade_profits",
     "summary_metrics",
+    "apply_full_window_equity_extremes",
+    "apply_non_score_trade_metrics",
+    "mark_available_outputs",
     "sharpe_ratio",
     "sortino_ratio",
     "ScoreWindowMetrics",

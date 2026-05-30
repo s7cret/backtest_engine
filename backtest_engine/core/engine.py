@@ -51,14 +51,16 @@ from backtest_engine.core.validation import data_fingerprint, validate_bars
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
 from backtest_engine.results import (
     BacktestResult,
+    apply_full_window_equity_extremes,
+    apply_non_score_trade_metrics,
     calculate_score_window_metrics,
     equity_move_from_baseline,
     equity_point,
+    mark_available_outputs,
     summarize_equity_curve,
     update_equity_extremes,
 )
 from backtest_engine.results.statistics import summarize
-from backtest_engine.results.metrics import sharpe_ratio, sortino_ratio
 
 
 class _NoopRuntime:
@@ -2081,23 +2083,12 @@ class BacktestEngine:
                 r.score_max_runup_percent = score_metrics.max_runup_percent
                 r.bars_processed = score_metrics.bars_processed
         else:
-            wins = [t.profit for t in self.closed_trades if t.profit > 0]
-            losses = [t.profit for t in self.closed_trades if t.profit < 0]
-            r.largest_win = max(wins) if wins else 0.0
-            r.largest_loss = abs(min(losses)) if losses else 0.0
-            held = [t.bars_held for t in self.closed_trades if t.bars_held is not None]
-            r.avg_bars_in_trade = sum(held) / len(held) if held else 0.0
-            r.commission_total = sum(
-                t.commission_entry + t.commission_exit for t in self.closed_trades
-            ) + sum(t.commission_entry + t.commission_exit for t in self.open_trades)
-            if equity_curve and len(equity_curve) > 1:
-                rets = [
-                    (equity_curve[n].equity - equity_curve[n - 1].equity) / equity_curve[n - 1].equity
-                    for n in range(1, len(equity_curve))
-                    if equity_curve[n - 1].equity
-                ]
-                r.sharpe_ratio = sharpe_ratio(rets)
-                r.sortino_ratio = sortino_ratio(rets)
+            apply_non_score_trade_metrics(
+                r,
+                closed_trades=self.closed_trades,
+                open_trades=self.open_trades,
+                equity_curve=equity_curve,
+            )
         for metric in self.config.required_metrics:
             if metric == "sharpe":
                 if r.sharpe_ratio is not None:
@@ -2125,29 +2116,15 @@ class BacktestEngine:
             )
         # D5-C: max_drawdown already set from score equity in score mode
         if not self._score_mode:
-            r.max_drawdown = max(
-                [self.max_drawdown] + ([p.drawdown for p in equity_curve] if equity_curve else [])
+            apply_full_window_equity_extremes(
+                r,
+                max_drawdown=self.max_drawdown,
+                max_drawdown_percent=self.max_drawdown_percent,
+                max_runup=self.max_runup,
+                max_runup_percent=self.max_runup_percent,
+                equity_curve=equity_curve,
             )
-            r.max_drawdown_percent = max(
-                [self.max_drawdown_percent]
-                + ([p.drawdown_percent for p in equity_curve] if equity_curve else [])
-            )
-            r.max_runup = max(
-                [self.max_runup] + ([p.runup for p in equity_curve] if equity_curve else [])
-            )
-            r.max_runup_percent = max(
-                [self.max_runup_percent]
-                + ([p.runup_percent for p in equity_curve] if equity_curve else [])
-            )
-        if r.closed_trades is not None:
-            r.available_outputs.add("closed_trades")
-        if r.open_trades is not None:
-            r.available_outputs.add("open_trades")
-        if r.equity_curve is not None:
-            r.available_outputs.add("equity_curve")
-        if r.events is not None:
-            r.available_outputs.add("order_events")
-        r.available_outputs.add("summary_metrics")
+        mark_available_outputs(r)
         if self.config.export_resume_state:
             r.resume_state = self._export_resume_state(len(series) - 1, strategy, runtime)
         if self.config.content_hash_enabled:
