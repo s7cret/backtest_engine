@@ -17,6 +17,71 @@ class EquityCurveSummary:
     max_runup_percent: float
 
 
+@dataclass(frozen=True, slots=True)
+class EquityExtremes:
+    peak_equity: float
+    trough_equity: float
+    max_drawdown: float
+    max_drawdown_percent: float
+    max_runup: float
+    max_runup_percent: float
+    drawdown: float
+    drawdown_percent: float
+    runup: float
+    runup_percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class EquityMove:
+    drawdown: float
+    drawdown_percent: float
+    runup: float
+    runup_percent: float
+
+
+def equity_move_from_baseline(*, baseline: float, adverse_equity: float, favorable_equity: float) -> EquityMove:
+    drawdown = max(0.0, baseline - adverse_equity)
+    drawdown_percent = drawdown / baseline * 100 if baseline else 0.0
+    runup = max(0.0, favorable_equity - baseline)
+    runup_percent = runup / baseline * 100 if baseline else 0.0
+    return EquityMove(
+        drawdown=drawdown,
+        drawdown_percent=drawdown_percent,
+        runup=runup,
+        runup_percent=runup_percent,
+    )
+
+
+def update_equity_extremes(
+    *,
+    equity: float,
+    peak_equity: float,
+    trough_equity: float,
+    max_drawdown: float,
+    max_drawdown_percent: float,
+    max_runup: float,
+    max_runup_percent: float,
+) -> EquityExtremes:
+    peak = max(peak_equity, equity)
+    trough = min(trough_equity, equity)
+    drawdown = max(0.0, peak - equity)
+    drawdown_percent = drawdown / peak * 100 if peak else 0.0
+    runup = max(0.0, equity - trough)
+    runup_percent = runup / trough * 100 if trough else 0.0
+    return EquityExtremes(
+        peak_equity=peak,
+        trough_equity=trough,
+        max_drawdown=max(max_drawdown, drawdown),
+        max_drawdown_percent=max(max_drawdown_percent, drawdown_percent),
+        max_runup=max(max_runup, runup),
+        max_runup_percent=max(max_runup_percent, runup_percent),
+        drawdown=drawdown,
+        drawdown_percent=drawdown_percent,
+        runup=runup,
+        runup_percent=runup_percent,
+    )
+
+
 def equity_point(
     *,
     bar_index: int,

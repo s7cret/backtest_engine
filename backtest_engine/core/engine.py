@@ -49,7 +49,13 @@ from backtest_engine.core.realtime import (
 from backtest_engine.core.state_snapshot import BrokerSnapshot, RealtimeBrokerSnapshot, RealtimeExecutionCheckpoint, build_resume_state, clone_state
 from backtest_engine.core.validation import data_fingerprint, validate_bars
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
-from backtest_engine.results import BacktestResult, equity_point, summarize_equity_curve
+from backtest_engine.results import (
+    BacktestResult,
+    equity_move_from_baseline,
+    equity_point,
+    summarize_equity_curve,
+    update_equity_extremes,
+)
 from backtest_engine.results.statistics import summarize
 from backtest_engine.results.metrics import sharpe_ratio, sortino_ratio
 
@@ -205,18 +211,7 @@ class BacktestEngine:
             self._update_open_profit(bar.close)
             self._update_trade_excursions(bar)
             self._update_state()
-            if self.equity > self.peak_equity:
-                self.peak_equity = self.equity
-            if self.equity < self.trough_equity:
-                self.trough_equity = self.equity
-            dd = max(0.0, self.peak_equity - self.equity)
-            ddp = dd / self.peak_equity * 100 if self.peak_equity else 0.0
-            ru = max(0.0, self.equity - self.trough_equity)
-            rup = ru / self.trough_equity * 100 if self.trough_equity else 0.0
-            self.max_drawdown = max(self.max_drawdown, dd)
-            self.max_drawdown_percent = max(self.max_drawdown_percent, ddp)
-            self.max_runup = max(self.max_runup, ru)
-            self.max_runup_percent = max(self.max_runup_percent, rup)
+            extremes = self._update_equity_extremes(self.equity)
             self._update_state()
             if equity_curve is not None:
                 point = EquityPoint(
@@ -228,10 +223,10 @@ class BacktestEngine:
                     self.position.avg_price if self.position.direction != "flat" else None,
                     self.position.open_profit,
                     self.position.realized_profit,
-                    dd,
-                    ddp,
-                    ru,
-                    rup,
+                    extremes.drawdown,
+                    extremes.drawdown_percent,
+                    extremes.runup,
+                    extremes.runup_percent,
                 )
                 equity_curve.append(point)
                 if self._score_mode and i >= self._score_start_index:
@@ -249,7 +244,7 @@ class BacktestEngine:
                 if (
                     not stop_now
                     and self.config.max_drawdown_stop_percent is not None
-                    and ddp >= self.config.max_drawdown_stop_percent
+                    and extremes.drawdown_percent >= self.config.max_drawdown_stop_percent
                 ):
                     status = "early_stopped"
                     early_reason = "max_drawdown_stop_percent"
@@ -1620,15 +1615,33 @@ class BacktestEngine:
         )
         adverse_equity = self.cash + adverse_profit
         favorable_equity = self.cash + favorable_profit
-        baseline = self.config.initial_capital
-        dd = max(0.0, baseline - adverse_equity)
-        ddp = dd / baseline * 100 if baseline else 0.0
-        ru = max(0.0, favorable_equity - baseline)
-        rup = ru / baseline * 100 if baseline else 0.0
-        self.max_drawdown = max(self.max_drawdown, dd)
-        self.max_drawdown_percent = max(self.max_drawdown_percent, ddp)
-        self.max_runup = max(self.max_runup, ru)
-        self.max_runup_percent = max(self.max_runup_percent, rup)
+        move = equity_move_from_baseline(
+            baseline=self.config.initial_capital,
+            adverse_equity=adverse_equity,
+            favorable_equity=favorable_equity,
+        )
+        self.max_drawdown = max(self.max_drawdown, move.drawdown)
+        self.max_drawdown_percent = max(self.max_drawdown_percent, move.drawdown_percent)
+        self.max_runup = max(self.max_runup, move.runup)
+        self.max_runup_percent = max(self.max_runup_percent, move.runup_percent)
+
+    def _update_equity_extremes(self, equity: float):
+        extremes = update_equity_extremes(
+            equity=equity,
+            peak_equity=self.peak_equity,
+            trough_equity=self.trough_equity,
+            max_drawdown=self.max_drawdown,
+            max_drawdown_percent=self.max_drawdown_percent,
+            max_runup=self.max_runup,
+            max_runup_percent=self.max_runup_percent,
+        )
+        self.peak_equity = extremes.peak_equity
+        self.trough_equity = extremes.trough_equity
+        self.max_drawdown = extremes.max_drawdown
+        self.max_drawdown_percent = extremes.max_drawdown_percent
+        self.max_runup = extremes.max_runup
+        self.max_runup_percent = extremes.max_runup_percent
+        return extremes
 
     def _update_state(self) -> None:
         self.state.position_size = self.position.size

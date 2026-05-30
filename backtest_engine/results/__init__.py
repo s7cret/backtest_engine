@@ -2,12 +2,16 @@ from .comparison import ComparisonReport, compare_trades, load_trades_csv
 from .content_hash import result_content_hash
 from .drawdown import DrawdownPoint, calculate_drawdowns, max_drawdown, max_drawdown_from_curve
 from .equity_curve import (
+    EquityExtremes,
+    EquityMove,
     EquityCurveSummary,
+    equity_move_from_baseline,
     equity_point,
     equity_values,
     final_equity,
     returns,
     summarize_equity_curve,
+    update_equity_extremes,
 )
 from .metrics import sharpe_ratio, sortino_ratio, summary_metrics, trade_profits
 from .result import BacktestResult
@@ -29,7 +33,11 @@ __all__ = [
     "equity_values",
     "equity_point",
     "summarize_equity_curve",
+    "EquityExtremes",
+    "EquityMove",
     "EquityCurveSummary",
+    "equity_move_from_baseline",
+    "update_equity_extremes",
     "returns",
     "final_equity",
     "trade_profits",
