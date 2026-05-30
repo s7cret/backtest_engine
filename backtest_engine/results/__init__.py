@@ -1,7 +1,14 @@
 from .comparison import ComparisonReport, compare_trades, load_trades_csv
 from .content_hash import result_content_hash
 from .drawdown import DrawdownPoint, calculate_drawdowns, max_drawdown, max_drawdown_from_curve
-from .equity_curve import equity_values, final_equity, returns
+from .equity_curve import (
+    EquityCurveSummary,
+    equity_point,
+    equity_values,
+    final_equity,
+    returns,
+    summarize_equity_curve,
+)
 from .metrics import sharpe_ratio, sortino_ratio, summary_metrics, trade_profits
 from .result import BacktestResult
 from .trade_log import closed_trade_rows, trade_to_row, trades_to_rows
@@ -20,6 +27,9 @@ __all__ = [
     "max_drawdown",
     "max_drawdown_from_curve",
     "equity_values",
+    "equity_point",
+    "summarize_equity_curve",
+    "EquityCurveSummary",
     "returns",
     "final_equity",
     "trade_profits",

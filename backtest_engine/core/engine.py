@@ -49,7 +49,7 @@ from backtest_engine.core.realtime import (
 from backtest_engine.core.state_snapshot import BrokerSnapshot, RealtimeBrokerSnapshot, RealtimeExecutionCheckpoint, build_resume_state, clone_state
 from backtest_engine.core.validation import data_fingerprint, validate_bars
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
-from backtest_engine.results import BacktestResult
+from backtest_engine.results import BacktestResult, equity_point, summarize_equity_curve
 from backtest_engine.results.statistics import summarize
 from backtest_engine.results.metrics import sharpe_ratio, sortino_ratio
 
@@ -457,38 +457,32 @@ class BacktestEngine:
             equity = float(equity)
             peak = max(peak, equity)
             trough = min(trough, equity)
-            drawdown = max(0.0, peak - equity)
-            drawdown_percent = drawdown / peak * 100 if peak else 0.0
-            runup = max(0.0, equity - trough)
-            runup_percent = runup / trough * 100 if trough else 0.0
             open_profit = float(getattr(item, "openprofit", 0.0) or 0.0)
             netprofit = float(getattr(item, "netprofit", 0.0) or 0.0)
-            point = EquityPoint(
-                idx,
-                int(getattr(item, "time")),
-                equity,
-                equity - open_profit,
-                float(getattr(item, "position_size", 0.0) or 0.0),
-                getattr(item, "position_avg_price", None),
-                open_profit,
-                netprofit,
-                drawdown,
-                drawdown_percent,
-                runup,
-                runup_percent,
+            point = equity_point(
+                bar_index=idx,
+                time=int(getattr(item, "time")),
+                equity=equity,
+                cash=equity - open_profit,
+                position_size=float(getattr(item, "position_size", 0.0) or 0.0),
+                position_avg_price=getattr(item, "position_avg_price", None),
+                open_profit=open_profit,
+                realized_profit=netprofit,
+                peak=peak,
+                trough=trough,
             )
             self._backend_equity_curve.append(point)
             if getattr(item, "phase", "score") == "score":
                 self._score_equity_points.append(point)
         if self._backend_equity_curve:
-            last = self._backend_equity_curve[-1]
-            self.equity = last.equity
-            self.cash = last.cash
-            self.max_drawdown = max(p.drawdown for p in self._backend_equity_curve)
-            self.max_drawdown_percent = max(p.drawdown_percent for p in self._backend_equity_curve)
-            self.trough_equity = min(p.equity for p in self._backend_equity_curve)
-            self.max_runup = max(p.runup for p in self._backend_equity_curve)
-            self.max_runup_percent = max(p.runup_percent for p in self._backend_equity_curve)
+            summary = summarize_equity_curve(self._backend_equity_curve)
+            self.equity = summary.final_equity
+            self.cash = summary.final_cash
+            self.max_drawdown = summary.max_drawdown
+            self.max_drawdown_percent = summary.max_drawdown_percent
+            self.trough_equity = summary.trough_equity
+            self.max_runup = summary.max_runup
+            self.max_runup_percent = summary.max_runup_percent
         diagnostics = getattr(backend_result, "diagnostics", {}) or {}
         for raw in diagnostics.get("runtime_diagnostics", []) or []:
             if isinstance(raw, dict):

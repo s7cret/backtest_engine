@@ -17,10 +17,12 @@ from backtest_engine.models import BarSeries, InstrumentModel, Order, Trade
 from backtest_engine.ledger import trade_excursion_values
 from backtest_engine.results import (
     calculate_drawdowns,
+    equity_point,
     equity_values,
     max_drawdown,
     returns,
     sharpe_ratio,
+    summarize_equity_curve,
     trades_to_rows,
 )
 
@@ -130,6 +132,30 @@ def test_trade_excursion_math_lives_in_ledger_module():
     assert mae == -5
     assert max_runup == 10
     assert max_drawdown == 5
+
+
+def test_equity_curve_math_lives_in_results_module():
+    source = Path("backtest_engine/core/engine.py").read_text(encoding="utf-8")
+
+    assert "drawdown = max(0.0, peak - equity)" not in source
+    point = equity_point(
+        bar_index=0,
+        time=1,
+        equity=90,
+        cash=90,
+        position_size=0,
+        position_avg_price=None,
+        open_profit=0,
+        realized_profit=-10,
+        peak=100,
+        trough=90,
+    )
+    summary = summarize_equity_curve([point], default_equity=100)
+
+    assert point.drawdown == 10
+    assert point.drawdown_percent == 10
+    assert summary.final_equity == 90
+    assert summary.max_drawdown == 10
 
 
 def test_engine_slice_preserves_bar_close_times():
