@@ -46,6 +46,7 @@ from backtest_engine.core.realtime import (
     RuntimeTickUpdate,
     validate_realtime_order_fill_oracle_proof,
 )
+from backtest_engine.core.score_window import build_score_window_plan
 from backtest_engine.core.state_snapshot import BrokerSnapshot, RealtimeBrokerSnapshot, RealtimeExecutionCheckpoint, build_resume_state, clone_state
 from backtest_engine.core.validation import data_fingerprint, validate_bars
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
@@ -130,30 +131,17 @@ class BacktestEngine:
         self._effective_mintick = self.config.mintick or self._infer_price_tick(series)
         series = self._slice_range(series)
 
-        # D5-C: detect and set up score window mode
-        self._score_mode = (
-            self.config.score_start_time is not None
-            or self.config.score_end_time is not None
+        plan = build_score_window_plan(
+            series_len=len(series),
+            score_start_time=self.config.score_start_time,
+            score_end_time=self.config.score_end_time,
+            effective_pre_bars=effective_pre_bars,
         )
-        if self._score_mode:
-            # Determine bar phases: prehistory vs score
-            # effective_pre_bars warmup bars precede score_start
-            if effective_pre_bars is not None and effective_pre_bars > 0:
-                self._prehistory_end_index = min(effective_pre_bars - 1, len(series) - 1)
-            else:
-                self._prehistory_end_index = 0  # default: first bar is prehistory boundary
-            self._score_start_index = self._prehistory_end_index + 1
-            self._bar_phases = [
-                "prehistory" if i <= self._prehistory_end_index else "score"
-                for i in range(len(series))
-            ]
-        else:
-            self._bar_phases = ["score"] * len(series)
-            self._prehistory_end_index = -1
-            self._score_start_index = 0
-            effective_pre_bars = None
-
-        # D5-D: store effective_pre_bars for warmup_metadata in _result()
+        self._score_mode = plan.score_mode
+        self._prehistory_end_index = plan.prehistory_end_index
+        self._score_start_index = plan.score_start_index
+        self._bar_phases = list(plan.bar_phases)
+        effective_pre_bars = plan.effective_pre_bars
         self._effective_pre_bars = effective_pre_bars
 
         if self.config.validate_bars:
