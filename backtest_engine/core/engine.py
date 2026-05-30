@@ -27,10 +27,7 @@ from backtest_engine.models import (
     BacktestResumeState,
     InstrumentModel,
 )
-from backtest_engine.models.window import (
-    ExecutionWindow,
-    WarmupQuality,
-)
+from backtest_engine.models.window import ExecutionWindow
 from backtest_engine.models.timeframe import infer_close_from_timeframe
 from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.broker.slippage import slippage_value
@@ -44,7 +41,11 @@ from backtest_engine.core.realtime import (
     RuntimeTickUpdate,
     validate_realtime_order_fill_oracle_proof,
 )
-from backtest_engine.core.score_window import build_phase_trades, build_score_window_plan
+from backtest_engine.core.score_window import (
+    build_phase_trades,
+    build_score_window_plan,
+    classify_warmup_quality,
+)
 from backtest_engine.core.state_snapshot import BrokerSnapshot, RealtimeBrokerSnapshot, RealtimeExecutionCheckpoint, build_resume_state, clone_state
 from backtest_engine.core.validation import data_fingerprint, validate_bars
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
@@ -2167,17 +2168,16 @@ class BacktestEngine:
             )
 
         # D5-D: populate warmup quality metadata from execution results
-        actual_pre_bars = self._bar_phases.count("prehistory") if self._bar_phases else 0
-        effective_pre = getattr(self, '_effective_pre_bars', None)
-        recommended_raw = self.config.warmup_metadata.get('recommended_pre_bars_raw', 0) if self.config.warmup_metadata else 0
-        insufficient_pre = actual_pre_bars < (effective_pre or 0) if effective_pre is not None else False
-        if effective_pre is not None:
-            r.warmup = WarmupQuality.classify(
-                recommended_pre_bars_raw=recommended_raw,
-                requested_max_pre_bars=self.config.max_pre_bars,
-                effective_pre_bars=effective_pre,
-                actual_pre_bars=actual_pre_bars,
-                insufficient_prehistory=insufficient_pre,
-            )
+        recommended_raw = (
+            self.config.warmup_metadata.get("recommended_pre_bars_raw", 0)
+            if self.config.warmup_metadata
+            else 0
+        )
+        r.warmup = classify_warmup_quality(
+            bar_phases=self._bar_phases,
+            effective_pre_bars=getattr(self, "_effective_pre_bars", None),
+            recommended_pre_bars_raw=recommended_raw,
+            requested_max_pre_bars=self.config.max_pre_bars,
+        )
 
         return r

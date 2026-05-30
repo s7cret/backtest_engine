@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from backtest_engine.models import Trade
-from backtest_engine.models.window import Phase, TradeResult
+from backtest_engine.models.window import Phase, TradeResult, WarmupQuality
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,3 +86,24 @@ def build_phase_trades(
                 )
             )
     return phase_trades
+
+
+def classify_warmup_quality(
+    *,
+    bar_phases: list[str],
+    effective_pre_bars: int | None,
+    recommended_pre_bars_raw: int,
+    requested_max_pre_bars: int,
+) -> WarmupQuality | None:
+    if effective_pre_bars is None:
+        return None
+
+    actual_pre_bars = bar_phases.count("prehistory") if bar_phases else 0
+    insufficient_prehistory = actual_pre_bars < effective_pre_bars
+    return WarmupQuality.classify(
+        recommended_pre_bars_raw=recommended_pre_bars_raw,
+        requested_max_pre_bars=requested_max_pre_bars,
+        effective_pre_bars=effective_pre_bars,
+        actual_pre_bars=actual_pre_bars,
+        insufficient_prehistory=insufficient_prehistory,
+    )

@@ -1,6 +1,7 @@
 from backtest_engine.core.score_window import (
     build_phase_trades,
     build_score_window_plan,
+    classify_warmup_quality,
     phase_for_bar,
 )
 from backtest_engine.models import Trade
@@ -85,3 +86,28 @@ def test_build_phase_trades_marks_score_boundary_crossings() -> None:
     assert phase_trades[0].entry_phase == "prehistory"
     assert phase_trades[0].exit_phase == "score"
     assert phase_trades[0].crosses_score_boundary is True
+
+
+def test_classify_warmup_quality_returns_none_without_effective_pre_bars() -> None:
+    quality = classify_warmup_quality(
+        bar_phases=["prehistory", "score"],
+        effective_pre_bars=None,
+        recommended_pre_bars_raw=2,
+        requested_max_pre_bars=10,
+    )
+
+    assert quality is None
+
+
+def test_classify_warmup_quality_marks_partial_prehistory() -> None:
+    quality = classify_warmup_quality(
+        bar_phases=["prehistory", "score"],
+        effective_pre_bars=3,
+        recommended_pre_bars_raw=5,
+        requested_max_pre_bars=10,
+    )
+
+    assert quality is not None
+    assert quality.actual_pre_bars == 1
+    assert quality.insufficient_prehistory is True
+    assert quality.warmup_confidence == "partial"
