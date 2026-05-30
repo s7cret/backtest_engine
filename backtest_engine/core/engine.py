@@ -51,6 +51,7 @@ from backtest_engine.core.validation import data_fingerprint, validate_bars
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
 from backtest_engine.results import (
     BacktestResult,
+    calculate_score_window_metrics,
     equity_move_from_baseline,
     equity_point,
     summarize_equity_curve,
@@ -2058,39 +2059,27 @@ class BacktestEngine:
 
         # D5-E: score-window metrics — add to score_* fields, keep full metrics intact
         if self._score_mode and self._score_equity_points:
-            score_trades = [
-                t for t in self.closed_trades
-                if t.exit_bar_index is not None and t.exit_bar_index >= self._score_start_index
-            ]
-            score_initial_capital = self._score_equity_points[0].equity
-            score_final_equity = self._score_equity_points[-1].equity
-            score_profits = [t.profit for t in score_trades]
-            score_stats = summarize(score_profits, score_initial_capital, score_final_equity)
-            # D5-E: set score_* fields instead of overwriting main metrics
-            r.score_net_profit = score_stats.get("net_profit", 0.0)
-            r.score_net_profit_percent = score_stats.get("net_profit_percent", 0.0)
-            r.score_total_trades = score_stats.get("total_trades", 0)
-            r.score_winning_trades = score_stats.get("winning_trades", 0)
-            r.score_losing_trades = score_stats.get("losing_trades", 0)
-            r.score_win_rate = score_stats.get("win_rate", 0.0)
-            r.score_profit_factor = score_stats.get("profit_factor", 0.0)
-            r.score_avg_trade = score_stats.get("avg_trade", 0.0)
-            # Score-window equity metrics
-            if len(self._score_equity_points) > 1:
-                rets = [
-                    (self._score_equity_points[n].equity - self._score_equity_points[n - 1].equity)
-                    / self._score_equity_points[n - 1].equity
-                    for n in range(1, len(self._score_equity_points))
-                    if self._score_equity_points[n - 1].equity
-                ]
-                r.score_sharpe_ratio = sharpe_ratio(rets)
-                r.score_sortino_ratio = sortino_ratio(rets)
-            r.score_max_drawdown = max(p.drawdown for p in self._score_equity_points) if self._score_equity_points else 0.0
-            r.score_max_drawdown_percent = max(p.drawdown_percent for p in self._score_equity_points) if self._score_equity_points else 0.0
-            r.score_max_runup = max(p.runup for p in self._score_equity_points) if self._score_equity_points else 0.0
-            r.score_max_runup_percent = max(p.runup_percent for p in self._score_equity_points) if self._score_equity_points else 0.0
-            # bars_processed = score-window bars (score-phase only)
-            r.bars_processed = len(self._score_equity_points)
+            score_metrics = calculate_score_window_metrics(
+                closed_trades=self.closed_trades,
+                score_equity_points=self._score_equity_points,
+                score_start_index=self._score_start_index,
+            )
+            if score_metrics is not None:
+                r.score_net_profit = score_metrics.net_profit
+                r.score_net_profit_percent = score_metrics.net_profit_percent
+                r.score_total_trades = score_metrics.total_trades
+                r.score_winning_trades = score_metrics.winning_trades
+                r.score_losing_trades = score_metrics.losing_trades
+                r.score_win_rate = score_metrics.win_rate
+                r.score_profit_factor = score_metrics.profit_factor
+                r.score_avg_trade = score_metrics.avg_trade
+                r.score_sharpe_ratio = score_metrics.sharpe_ratio
+                r.score_sortino_ratio = score_metrics.sortino_ratio
+                r.score_max_drawdown = score_metrics.max_drawdown
+                r.score_max_drawdown_percent = score_metrics.max_drawdown_percent
+                r.score_max_runup = score_metrics.max_runup
+                r.score_max_runup_percent = score_metrics.max_runup_percent
+                r.bars_processed = score_metrics.bars_processed
         else:
             wins = [t.profit for t in self.closed_trades if t.profit > 0]
             losses = [t.profit for t in self.closed_trades if t.profit < 0]

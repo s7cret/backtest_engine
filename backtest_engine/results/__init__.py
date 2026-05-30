@@ -15,6 +15,7 @@ from .equity_curve import (
 )
 from .metrics import sharpe_ratio, sortino_ratio, summary_metrics, trade_profits
 from .result import BacktestResult
+from .score_window import ScoreWindowMetrics, calculate_score_window_metrics
 from .trade_log import closed_trade_rows, trade_to_row, trades_to_rows
 from .writers import CSVTradeWriter, JSONResultWriter
 
@@ -44,6 +45,8 @@ __all__ = [
     "summary_metrics",
     "sharpe_ratio",
     "sortino_ratio",
+    "ScoreWindowMetrics",
+    "calculate_score_window_metrics",
     "trade_to_row",
     "trades_to_rows",
     "closed_trade_rows",
