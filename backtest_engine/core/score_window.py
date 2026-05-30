@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from backtest_engine.models import Trade
+from backtest_engine.models.window import Phase, TradeResult
+
 
 @dataclass(frozen=True, slots=True)
 class ScoreWindowPlan:
@@ -44,3 +47,42 @@ def build_score_window_plan(
         ),
         effective_pre_bars=effective_pre_bars,
     )
+
+
+def phase_for_bar(bar_index: int | None, bar_phases: list[str]) -> Phase | None:
+    if bar_index is None or bar_index < 0 or bar_index >= len(bar_phases):
+        return None
+    phase = bar_phases[bar_index]
+    if phase == "prehistory" or phase == "score":
+        return phase
+    return None
+
+
+def build_phase_trades(
+    *,
+    closed_trades: list[Trade],
+    bar_phases: list[str],
+) -> list[TradeResult]:
+    phase_trades: list[TradeResult] = []
+    for trade in closed_trades:
+        entry_phase = phase_for_bar(trade.entry_bar_index, bar_phases)
+        exit_phase = phase_for_bar(trade.exit_bar_index, bar_phases)
+        crosses_score_boundary = (
+            entry_phase == "prehistory" and exit_phase == "score"
+        ) or (entry_phase == "score" and exit_phase == "prehistory")
+        if entry_phase is not None:
+            phase_trades.append(
+                TradeResult(
+                    entry_time=trade.entry_time,
+                    exit_time=trade.exit_time,
+                    direction=trade.direction,
+                    entry_price=trade.entry_price,
+                    exit_price=trade.exit_price,
+                    qty=trade.qty,
+                    profit=trade.profit,
+                    entry_phase=entry_phase,
+                    exit_phase=exit_phase,
+                    crosses_score_boundary=crosses_score_boundary,
+                )
+            )
+    return phase_trades

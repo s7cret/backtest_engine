@@ -30,8 +30,6 @@ from backtest_engine.models import (
 from backtest_engine.models.window import (
     ExecutionWindow,
     WarmupQuality,
-    TradeResult,
-    Phase,
 )
 from backtest_engine.models.timeframe import infer_close_from_timeframe
 from backtest_engine.broker.commission import calculate_commission
@@ -46,7 +44,7 @@ from backtest_engine.core.realtime import (
     RuntimeTickUpdate,
     validate_realtime_order_fill_oracle_proof,
 )
-from backtest_engine.core.score_window import build_score_window_plan
+from backtest_engine.core.score_window import build_phase_trades, build_score_window_plan
 from backtest_engine.core.state_snapshot import BrokerSnapshot, RealtimeBrokerSnapshot, RealtimeExecutionCheckpoint, build_resume_state, clone_state
 from backtest_engine.core.validation import data_fingerprint, validate_bars
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
@@ -2042,31 +2040,10 @@ class BacktestEngine:
 
         # D5-C: phase-aware trade results — compute only in score mode
         if self._score_mode and self._bar_phases:
-            def _phase_of(bar_idx: int | None) -> Phase | None:
-                if bar_idx is None or bar_idx < 0 or bar_idx >= len(self._bar_phases):
-                    return None
-                return self._bar_phases[bar_idx]  # type: ignore[return-value]
-
-            phase_trades: list[TradeResult] = []
-            for t in self.closed_trades:
-                ep = _phase_of(t.entry_bar_index)
-                xp = _phase_of(t.exit_bar_index)
-                crosses = (
-                    ep == "prehistory" and xp == "score"
-                ) or (ep == "score" and xp == "prehistory")
-                if ep is not None:
-                    phase_trades.append(TradeResult(
-                        entry_time=t.entry_time,
-                        exit_time=t.exit_time,
-                        direction=t.direction,
-                        entry_price=t.entry_price,
-                        exit_price=t.exit_price,
-                        qty=t.qty,
-                        profit=t.profit,
-                        entry_phase=ep,
-                        exit_phase=xp,
-                        crosses_score_boundary=crosses,
-                    ))
+            phase_trades = build_phase_trades(
+                closed_trades=self.closed_trades,
+                bar_phases=self._bar_phases,
+            )
             r.phase_trades = phase_trades or None
         else:
             r.phase_trades = None
