@@ -900,6 +900,23 @@ class BacktestEngine:
         if o.qty <= 0:
             self._diag("ORDER_REJECTED_ZERO_QTY", "order qty is zero", "warning", i, bar.time, o.id)
             return
+        if (
+            self.config.max_position_size is not None
+            and o.kind in {"entry", "order"}
+            and o.direction in {"long", "short"}
+        ):
+            signed_qty = o.qty if o.direction == "long" else -o.qty
+            projected = self.position.size + signed_qty
+            if abs(projected) > float(self.config.max_position_size):
+                self._diag(
+                    "ORDER_REJECTED_RISK_MAX_POSITION_SIZE",
+                    "order rejected by risk.max_position_size",
+                    "warning",
+                    i,
+                    bar.time,
+                    o.id,
+                )
+                return
         if o.active_from_bar_index <= i:
             o.status = "active"
         self.orders.append(o)

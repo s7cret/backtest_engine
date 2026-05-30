@@ -211,6 +211,21 @@ class _BridgeStrategyContext:
     def opentrades_max_drawdown(self, index: int | float) -> float:
         return self._engine_ctx.state.opentrades_max_drawdown(int(index))
 
+    def risk_allow_entry_in(self, direction: str) -> None:
+        self._engine_ctx.risk_allow_entry_in(direction)
+
+    def risk_max_drawdown(self, value: float, type: str) -> None:
+        self._engine_ctx.risk_max_drawdown(value, type)
+
+    def risk_max_position_size(self, value: float, type: str = "fixed") -> None:
+        self._engine_ctx.risk_max_position_size(value, type)
+
+    def risk_max_intraday_loss(self, value: float, type: str) -> None:
+        self._engine_ctx.risk_max_intraday_loss(value, type)
+
+    def risk_max_intraday_filled_orders(self, value: float, type: str = "fixed") -> None:
+        self._engine_ctx.risk_max_intraday_filled_orders(value, type)
+
     def entry(
         self,
         id: str,

@@ -115,3 +115,44 @@ class StrategyContext:
 
     def cancel_all(self) -> None:
         self.buffer.add("cancel_all")
+
+    def risk_allow_entry_in(self, direction: str) -> None:
+        value = str(direction).lower()
+        if value in {"long", "strategy.direction.long"}:
+            self.config.allow_long = True
+            self.config.allow_short = False
+            return
+        if value in {"short", "strategy.direction.short"}:
+            self.config.allow_long = False
+            self.config.allow_short = True
+            return
+        if value in {"all", "both", "strategy.direction.all"}:
+            self.config.allow_long = True
+            self.config.allow_short = True
+            return
+        raise ValueError(f"unsupported risk_allow_entry_in direction: {direction!r}")
+
+    def risk_max_drawdown(self, value: float, type: str) -> None:
+        self.config.early_stop_enabled = True
+        value_type = str(type).lower()
+        if value_type in {"percent", "percent_of_equity", "strategy.percent_of_equity"}:
+            self.config.max_drawdown_stop_percent = float(value)
+            return
+        if value_type in {"cash", "currency", "strategy.cash"}:
+            self.config.min_equity_stop = float(self.config.initial_capital) - float(value)
+            return
+        raise ValueError(f"unsupported risk_max_drawdown type: {type!r}")
+
+    def risk_max_position_size(self, value: float, type: str = "fixed") -> None:
+        value_type = str(type).lower()
+        if value_type not in {"fixed", "contracts", "shares"}:
+            raise ValueError(f"unsupported risk_max_position_size type: {type!r}")
+        self.config.max_position_size = float(value)
+
+    def risk_max_intraday_loss(self, value: float, type: str) -> None:
+        raise NotImplementedError("risk_max_intraday_loss is not implemented in BacktestEngine")
+
+    def risk_max_intraday_filled_orders(self, value: float, type: str = "fixed") -> None:
+        raise NotImplementedError(
+            "risk_max_intraday_filled_orders is not implemented in BacktestEngine"
+        )

@@ -92,3 +92,73 @@ def test_trade_max_runup_drawdown_are_stored_for_long_and_short():
     assert short_trade.max_runup == pytest.approx(15.0)
     assert short_trade.max_drawdown == pytest.approx(3.0)
     assert result.max_runup == pytest.approx(15.0)
+
+
+class RiskMaxPositionStrategy:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.risk_max_position_size(1)
+            self.ctx.entry("too_large", "long", qty=2)
+        if bar_index == 1:
+            self.ctx.entry("allowed", "long", qty=1)
+
+
+def test_risk_max_position_size_is_enforced_by_engine():
+    bars = [
+        Bar(1, 100, 100, 100, 100),
+        Bar(2, 100, 100, 100, 100),
+        Bar(3, 100, 100, 100, 100),
+    ]
+    cfg = BacktestConfig(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=3,
+        commission_type="none",
+        process_orders_on_close=True,
+    )
+
+    result = BacktestEngine(cfg).run(RiskMaxPositionStrategy, bars=bars)
+
+    assert result.open_trades is not None
+    assert [trade.entry_id for trade in result.open_trades] == ["allowed"]
+    assert any(
+        d.code == "ORDER_REJECTED_RISK_MAX_POSITION_SIZE"
+        for d in result.warnings
+    )
+
+
+class RiskAllowEntryStrategy:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.risk_allow_entry_in("short")
+            self.ctx.entry("blocked_long", "long", qty=1)
+        if bar_index == 1:
+            self.ctx.entry("allowed_short", "short", qty=1)
+
+
+def test_risk_allow_entry_direction_is_enforced_by_engine():
+    bars = [
+        Bar(1, 100, 100, 100, 100),
+        Bar(2, 100, 100, 100, 100),
+        Bar(3, 100, 100, 100, 100),
+    ]
+    cfg = BacktestConfig(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=3,
+        commission_type="none",
+        process_orders_on_close=True,
+    )
+
+    result = BacktestEngine(cfg).run(RiskAllowEntryStrategy, bars=bars)
+
+    assert result.open_trades is not None
+    assert [trade.entry_id for trade in result.open_trades] == ["allowed_short"]
