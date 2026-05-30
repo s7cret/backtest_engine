@@ -3,7 +3,7 @@ import time
 from dataclasses import replace
 from inspect import signature
 from typing import Any
-from backtest_engine.config import BacktestConfig, ProviderConfig
+from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext, StrategyStateView
 from backtest_engine.errors import (
     BarMagnifierUnavailableError,
@@ -372,21 +372,10 @@ class BacktestEngine:
             except Exception as e:
                 raise ProviderError(str(e)) from e
         if src is None and self.config.provider:
-            # D5-D: fetch via structured ProviderConfig
-            try:
-                cfg = self.config.provider
-                # Override start/end from config if provider doesn't have them set
-                fetch_cfg = ProviderConfig(
-                    provider=cfg.provider,
-                    symbol=cfg.symbol,
-                    timeframe=cfg.timeframe,
-                    start_time=cfg.start_time if cfg.start_time is not None else self.config.start_time,
-                    end_time=cfg.end_time if cfg.end_time is not None else self.config.end_time,
-                    max_pre_bars=cfg.max_pre_bars,
-                )
-                src = fetch_cfg.fetch_bars()
-            except Exception as e:
-                raise ProviderError(f"Provider fetch failed: {e}") from e
+            raise ProviderError(
+                "BacktestEngine production path is compute-only; load market data in OpenPine "
+                "and pass bars/preloaded_bars/data_provider explicitly"
+            )
         if src is None:
             raise ProviderError("No bars, data_provider, or provider supplied")
         if isinstance(src, BarSeries):

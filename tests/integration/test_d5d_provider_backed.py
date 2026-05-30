@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from unittest import mock
-
 import pytest
 from backtest_engine.config import BacktestConfig, ProviderConfig
 from backtest_engine.core.engine import BacktestEngine
+from backtest_engine.errors import ProviderError
 from backtest_engine.models import Bar, BarSeries
 from backtest_engine.models.window import WarmupQuality
 
@@ -151,7 +150,7 @@ class TestWarmupQuality:
 
 
 class TestProviderConfig:
-    """Phase 5: ProviderConfig dataclass and provider fetching."""
+    """Provider descriptors are metadata; production engine runs are compute-only."""
 
     def test_provider_config_dataclass_fields(self):
         """ProviderConfig has required fields with correct defaults."""
@@ -190,8 +189,8 @@ class TestProviderConfig:
         assert config.provider is not None
         assert config.provider.provider == "binance"
 
-    def test_resolve_bars_uses_provider_when_no_bars(self):
-        """When bars=None and provider is set, engine fetches via provider."""
+    def test_provider_config_does_not_fetch_in_engine(self):
+        """ProviderConfig no longer gives BacktestEngine a market data ingress path."""
         bars = make_bars(20)
 
         config = BacktestConfig(
@@ -202,17 +201,13 @@ class TestProviderConfig:
             provider=ProviderConfig(provider="binance"),
         )
 
-        # Patch at class level so internal fetch_cfg also uses mock
-        with mock.patch.object(ProviderConfig, "fetch_bars", lambda self: bars):
-            engine = BacktestEngine(config)
-            result = engine.run(NoopStrategy, bars=None)
+        engine = BacktestEngine(config)
+        with pytest.raises(ProviderError, match="compute-only"):
+            engine.run(NoopStrategy, bars=None)
 
-        assert result.status == "completed"
-
-    def test_provider_fetch_preserves_explicit_provider_bounds(self):
-        """ProviderConfig bounds are authoritative when supplied."""
+    def test_explicit_bars_are_authoritative_when_provider_metadata_exists(self):
+        """OpenPine can keep provider metadata while passing normalized bars explicitly."""
         bars = make_bars(20)
-        seen: dict[str, int | None] = {}
 
         config = BacktestConfig(
             symbol="BTCUSDT",
@@ -226,23 +221,16 @@ class TestProviderConfig:
             ),
         )
 
-        def fetch(self):
-            seen["start_time"] = self.start_time
-            seen["end_time"] = self.end_time
-            return bars
-
-        with mock.patch.object(ProviderConfig, "fetch_bars", fetch):
-            result = BacktestEngine(config).run(NoopStrategy, bars=None)
+        result = BacktestEngine(config).run(NoopStrategy, bars=bars)
 
         assert result.status == "completed"
-        assert seen == {"start_time": bars.time[2], "end_time": bars.time[10]}
 
 
 class TestProviderWithScoreWindow:
-    """Phase 5 + D5-C: provider fetch with score window execution."""
+    """Phase 5 + D5-C: preloaded bars with score window execution."""
 
-    def test_provider_fetch_with_prehistory(self):
-        """Provider fetches with pre-bars, score window execution works."""
+    def test_preloaded_bars_with_prehistory(self):
+        """Caller-loaded pre-bars feed score window execution."""
         bars = make_bars(20)
 
         config = score_config(
@@ -252,13 +240,12 @@ class TestProviderWithScoreWindow:
             provider=ProviderConfig(provider="binance", max_pre_bars=5),
         )
 
-        with mock.patch.object(ProviderConfig, "fetch_bars", lambda self: bars):
-            engine = BacktestEngine(config)
-            result = engine.run(
-                ScorePhaseTradeStrategy,
-                bars=None,  # fetch via provider
-                effective_pre_bars=5,
-            )
+        engine = BacktestEngine(config)
+        result = engine.run(
+            ScorePhaseTradeStrategy,
+            bars=bars,
+            effective_pre_bars=5,
+        )
 
         assert result.status == "completed"
         assert result.warmup is not None

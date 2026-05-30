@@ -7,87 +7,18 @@ from .models.instrument import InstrumentModel
 
 @dataclass
 class ProviderConfig:
-    """Configuration for a marketdata provider source.
+    """Provider descriptor retained for config snapshots only.
 
-    Used when BacktestEngine fetches bars directly from a provider
-    (Binance, Bybit, etc.) instead of receiving pre-loaded bars.
+    Production BacktestEngine runs are compute-only: callers must pass bars
+    explicitly or inject a data_provider object. Engine-owned market data
+    fetching lives outside the production API.
     """
     provider: Literal["binance", "bybit"]
     symbol: str = "BTCUSDT"
     timeframe: str = "15m"
-    # Time bounds for the fetch (Unix ms)
     start_time: int | None = None
     end_time: int | None = None
-    # Maximum pre-history bars to fetch before start_time
     max_pre_bars: int = 1000
-
-    def fetch_bars(self) -> "BarSeries":
-        """Fetch bars from the configured provider.
-
-        Returns:
-            BarSeries with fetched bars
-        """
-        # Import here to avoid circular imports at module level
-        from backtest_engine.models import BarSeries
-
-        # D5-D: compute timeframe duration locally (ms)
-        _TF_MAP = {
-            "1s": 1_000, "5s": 5_000, "15s": 15_000, "30s": 30_000,
-            "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
-            "30m": 1_800_000, "1h": 3_600_000, "2h": 7_200_000,
-            "3h": 10_800_000, "4h": 14_400_000, "6h": 21_600_000,
-            "8h": 28_800_000, "12h": 43_200_000,
-            "1d": 86_400_000, "3d": 259_200_000, "1w": 604_800_000,
-        }
-        tf_dur = _TF_MAP.get(self.timeframe)
-        if tf_dur is None:
-            raise ValueError(f"Unsupported timeframe: {self.timeframe}")
-
-        # If start_time is set and max_pre_bars > 0, extend fetch to include pre-bars
-        if self.start_time is not None and self.max_pre_bars > 0:
-            fetch_start = self.start_time - self.max_pre_bars * tf_dur
-        elif self.start_time is not None:
-            fetch_start = self.start_time
-        else:
-            fetch_start = None
-
-        if self.provider == "binance":
-            from marketdata_provider.exchanges.binance.provider import (
-                binance_get_bars,
-            )
-            raw_bars = binance_get_bars(
-                symbol=self.symbol,
-                interval=self.timeframe,
-                start=fetch_start,
-                end=self.end_time,
-                max_bars=None,
-            )
-        elif self.provider == "bybit":
-            from marketdata_provider.exchanges.bybit.provider import (
-                bybit_get_bars,
-            )
-            raw_bars = bybit_get_bars(
-                symbol=self.symbol,
-                interval=self.timeframe,
-                start=fetch_start,
-                end=self.end_time,
-                max_bars=None,
-            )
-        else:
-            raise ValueError(f"Unknown provider: {self.provider}")
-
-        if not raw_bars:
-            return BarSeries([], [], [], [], [], [])
-
-        # Convert marketdata_provider bars to backtest_engine BarSeries
-        times = [b.time for b in raw_bars]
-        opens = [b.open for b in raw_bars]
-        highs = [b.high for b in raw_bars]
-        lows = [b.low for b in raw_bars]
-        closes = [b.close for b in raw_bars]
-        volumes = [getattr(b, 'volume', 0.0) for b in raw_bars]
-
-        return BarSeries(times, opens, highs, lows, closes, volumes)
 
 
 @dataclass
@@ -186,7 +117,7 @@ class BacktestConfig:
     data_provider: object | None = None
     runtime: object | None = None
     preloaded_bars: object | None = None
-    # D5-D: structured provider config — supersedes data_provider object when set
+    # Provider descriptors are metadata only; production runs must receive bars explicitly.
     provider: ProviderConfig | None = None
     reuse_preloaded_bars: bool = True
     store_backtest_result_in_memory: bool = True
