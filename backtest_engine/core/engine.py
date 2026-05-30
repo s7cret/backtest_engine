@@ -47,7 +47,7 @@ from backtest_engine.core.score_window import (
     classify_warmup_quality,
 )
 from backtest_engine.core.state_snapshot import BrokerSnapshot, RealtimeBrokerSnapshot, RealtimeExecutionCheckpoint, build_resume_state, clone_state
-from backtest_engine.core.validation import data_fingerprint, validate_bars
+from backtest_engine.core.validation import data_fingerprint, infer_price_tick, validate_bars
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
 from backtest_engine.results import (
     BacktestResult,
@@ -130,7 +130,7 @@ class BacktestEngine:
         self._reset_state()
         self._validate_config()
         series = self._resolve_bars(bars)
-        self._effective_mintick = self.config.mintick or self._infer_price_tick(series)
+        self._effective_mintick = self.config.mintick or infer_price_tick(series)
         series = self._slice_range(series)
 
         plan = build_score_window_plan(
@@ -351,17 +351,6 @@ class BacktestEngine:
         if isinstance(bars, BarSeries):
             return bars
         return BarSeries.from_bars(bars)
-
-    def _infer_price_tick(self, series: BarSeries) -> float | None:
-        places = 0
-        sample = min(len(series), 100)
-        for i in range(sample):
-            b = series.get_bar(i)
-            for value in (b.open, b.high, b.low, b.close):
-                text = (f"{value:.10f}").rstrip("0").rstrip(".")
-                if "." in text:
-                    places = max(places, len(text.rsplit(".", 1)[1]))
-        return 10.0 ** (-places) if places else 1.0
 
     def _call_strategy(self, strategy: Any, bar: Bar, i: int) -> None:
         try:

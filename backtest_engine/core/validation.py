@@ -4,6 +4,18 @@ from backtest_engine.models import BarSeries, Diagnostic
 from backtest_engine.errors import BarValidationError
 
 
+def infer_price_tick(series: BarSeries, *, sample_size: int = 100) -> float | None:
+    places = 0
+    sample = min(len(series), sample_size)
+    for i in range(sample):
+        b = series.get_bar(i)
+        for value in (b.open, b.high, b.low, b.close):
+            text = (f"{value:.10f}").rstrip("0").rstrip(".")
+            if "." in text:
+                places = max(places, len(text.rsplit(".", 1)[1]))
+    return 10.0 ** (-places) if places else 1.0
+
+
 def validate_bars(
     series: BarSeries, duplicate_policy: str = "error"
 ) -> tuple[BarSeries, list[Diagnostic]]:

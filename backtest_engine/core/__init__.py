@@ -15,11 +15,12 @@ from .state_snapshot import (
     StateSerializer,
     build_resume_state,
 )
-from .validation import data_fingerprint, validate_bars
+from .validation import data_fingerprint, infer_price_tick, validate_bars
 
 __all__ = [
     "BacktestEngine",
     "validate_bars",
+    "infer_price_tick",
     "data_fingerprint",
     "sha256_obj",
     "BarRunState",
