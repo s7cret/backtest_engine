@@ -113,6 +113,12 @@ def test_pine_runtime_backend_phase_labels_closed_trade() -> None:
 
     assert result.closed_trades is not None
     assert len(result.closed_trades) == 1
+    trade = result.closed_trades[0]
+    assert trade.profit_percent == pytest.approx(2.941176470588235)
+    assert trade.max_runup == pytest.approx(4.0)
+    assert trade.max_drawdown == pytest.approx(1.0)
+    assert trade.mfe == pytest.approx(4.0)
+    assert trade.mae == pytest.approx(-1.0)
     assert result.phase_trades is not None
     assert result.phase_trades[0].entry_phase == "prehistory"
     assert result.phase_trades[0].exit_phase == "score"

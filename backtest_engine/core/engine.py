@@ -501,7 +501,10 @@ class BacktestEngine:
 
     def _trade_from_backend_trade(self, trade: Any, idx: int) -> Trade:
         entry_id = str(getattr(trade, "entry_id", f"entry_{idx}"))
-        commission = float(getattr(trade, "commission", 0.0) or 0.0)
+        commission_entry = self._required_backend_trade_float(trade, "commission_entry", idx)
+        commission_exit = self._required_backend_trade_float(trade, "commission_exit", idx)
+        max_runup = self._required_backend_trade_float(trade, "max_runup", idx)
+        max_drawdown = self._required_backend_trade_float(trade, "max_drawdown", idx)
         return Trade(
             id=f"pine_{idx}",
             entry_id=entry_id,
@@ -514,13 +517,14 @@ class BacktestEngine:
             exit_bar_index=getattr(trade, "exit_bar_index", None),
             exit_price=getattr(trade, "exit_price", None),
             qty=float(getattr(trade, "qty")),
-            commission_entry=commission,
-            commission_exit=0.0,
-            profit=float(getattr(trade, "profit", 0.0) or 0.0),
-            profit_percent=float(getattr(trade, "profit_percent", 0.0) or 0.0),
-            mfe=getattr(trade, "max_runup", None),
-            max_runup=getattr(trade, "max_runup", None),
-            max_drawdown=getattr(trade, "max_drawdown", None),
+            commission_entry=commission_entry,
+            commission_exit=commission_exit,
+            profit=self._required_backend_trade_float(trade, "profit", idx),
+            profit_percent=self._required_backend_trade_float(trade, "profit_percent", idx),
+            mfe=max_runup,
+            mae=-max_drawdown,
+            max_runup=max_runup,
+            max_drawdown=max_drawdown,
             exit_reason=getattr(trade, "exit_reason", None),
             bars_held=(
                 None
@@ -528,6 +532,15 @@ class BacktestEngine:
                 else int(getattr(trade, "exit_bar_index")) - int(getattr(trade, "entry_bar_index"))
             ),
         )
+
+    @staticmethod
+    def _required_backend_trade_float(trade: Any, field: str, idx: int) -> float:
+        value = getattr(trade, field, None)
+        if value is None:
+            raise StrategyRuntimeError(
+                f"Pine runtime trade {idx} is missing required ledger field {field!r}"
+            )
+        return float(value)
 
     def _flush(
         self,
