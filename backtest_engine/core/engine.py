@@ -48,6 +48,7 @@ from backtest_engine.core.realtime import (
 )
 from backtest_engine.core.state_snapshot import BrokerSnapshot, RealtimeBrokerSnapshot, RealtimeExecutionCheckpoint, build_resume_state, clone_state
 from backtest_engine.core.validation import data_fingerprint, validate_bars
+from backtest_engine.ledger.runup_drawdown import trade_excursion_values
 from backtest_engine.results import BacktestResult
 from backtest_engine.results.statistics import summarize
 from backtest_engine.results.metrics import sharpe_ratio, sortino_ratio
@@ -1576,15 +1577,7 @@ class BacktestEngine:
             self._cb("on_trade_update", tr)
 
     def _trade_excursion_values(self, tr: Trade, bar: Bar) -> tuple[float, float, float, float]:
-        if tr.direction == "long":
-            fav = self.instrument.pnl(tr.entry_price, bar.high, tr.qty, tr.direction)
-            adv = self.instrument.pnl(tr.entry_price, bar.low, tr.qty, tr.direction)
-        else:
-            fav = self.instrument.pnl(tr.entry_price, bar.low, tr.qty, tr.direction)
-            adv = self.instrument.pnl(tr.entry_price, bar.high, tr.qty, tr.direction)
-        mfe = fav if tr.mfe is None else max(tr.mfe, fav)
-        mae = adv if tr.mae is None else min(tr.mae, adv)
-        return mfe, mae, max(0.0, mfe), max(0.0, -mae)
+        return trade_excursion_values(tr, bar, self.instrument)
 
     def _apply_oca(self, o: Order, bar: Bar, i: int) -> None:
         if not o.oca_name:

@@ -13,7 +13,8 @@ from backtest_engine.core import (
     is_fast_mode,
 )
 from backtest_engine.core.state_snapshot import BrokerSnapshot
-from backtest_engine.models import BarSeries, Order
+from backtest_engine.models import BarSeries, InstrumentModel, Order, Trade
+from backtest_engine.ledger import trade_excursion_values
 from backtest_engine.results import (
     calculate_drawdowns,
     equity_values,
@@ -94,6 +95,41 @@ def test_engine_uses_canonical_timeframe_parser_for_parent_close():
     assert "parse_timeframe" in source
     assert ".endswith(" not in source
     assert ".isdigit(" not in source
+
+
+def test_trade_excursion_math_lives_in_ledger_module():
+    source = Path("backtest_engine/core/engine.py").read_text(encoding="utf-8")
+
+    assert "def trade_excursion_values" not in source
+    assert "trade_excursion_values" in source
+    trade = Trade(
+        id="t1",
+        entry_id="t1",
+        exit_id=None,
+        direction="long",
+        entry_time=1,
+        entry_bar_index=0,
+        entry_price=100,
+        exit_time=None,
+        exit_bar_index=None,
+        exit_price=None,
+        qty=1,
+        commission_entry=0,
+        commission_exit=0,
+        profit=0,
+        profit_percent=0,
+        is_open=True,
+    )
+    mfe, mae, max_runup, max_drawdown = trade_excursion_values(
+        trade,
+        Bar(2, 100, 110, 95, 105),
+        InstrumentModel(),
+    )
+
+    assert mfe == 10
+    assert mae == -5
+    assert max_runup == 10
+    assert max_drawdown == 5
 
 
 def test_engine_slice_preserves_bar_close_times():
