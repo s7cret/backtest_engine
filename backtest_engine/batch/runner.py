@@ -8,9 +8,7 @@ from backtest_engine.models import BacktestJob
 
 def _run_job(config: BacktestConfig, job: BacktestJob) -> object:
     cfg = replace(config, **job.config_overrides)
-    return BacktestEngine(cfg).run(
-        job.strategy_class, params=job.params, bars=job.bars or cfg.preloaded_bars
-    )
+    return BacktestEngine(cfg).run(job.strategy_class, params=job.params, bars=job.bars)
 
 
 class BatchBacktestRunner:

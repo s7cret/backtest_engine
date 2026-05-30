@@ -151,12 +151,11 @@ class BacktestEngine:
             series, _ = validate_bars(series, self.config.duplicate_bar_policy)
         if self.config.use_bar_magnifier and (
             not self.config.bar_magnifier_lower_tf
-            or not self.config.data_provider
-            or not hasattr(self.config.data_provider, "get_lower_tf_bars")
+            or self.config.bar_magnifier_bars is None
         ):
             if self.config.bar_magnifier_missing_policy == "error":
                 raise BarMagnifierUnavailableError(
-                    "bar magnifier lower timeframe/provider unavailable"
+                    "bar magnifier lower timeframe bars unavailable"
                 )
             self._diag(
                 "BAR_MAGNIFIER_FALLBACK", "bar magnifier unavailable; using OHLC path", "warning"
@@ -360,27 +359,11 @@ class BacktestEngine:
         )
 
     def _resolve_bars(self, bars: BarSeries | list[Bar] | None) -> BarSeries:
-        src = bars if bars is not None else self.config.preloaded_bars
-        if src is None and self.config.data_provider:
-            try:
-                src = self.config.data_provider.get_bars(
-                    self.config.symbol,
-                    self.config.timeframe,
-                    self.config.start_time,
-                    self.config.end_time,
-                )
-            except Exception as e:
-                raise ProviderError(str(e)) from e
-        if src is None and self.config.provider:
-            raise ProviderError(
-                "BacktestEngine production path is compute-only; load market data in OpenPine "
-                "and pass bars/preloaded_bars/data_provider explicitly"
-            )
-        if src is None:
-            raise ProviderError("No bars, data_provider, or provider supplied")
-        if isinstance(src, BarSeries):
-            return src
-        return BarSeries.from_bars(src)
+        if bars is None:
+            raise ProviderError("No bars supplied; load market data outside BacktestEngine")
+        if isinstance(bars, BarSeries):
+            return bars
+        return BarSeries.from_bars(bars)
 
     def _infer_price_tick(self, series: BarSeries) -> float | None:
         places = 0
@@ -1235,17 +1218,10 @@ class BacktestEngine:
             return [(bar.close, "close")]
         if not self.config.use_bar_magnifier:
             return build_price_path(bar)
-        provider = self.config.data_provider
-        if (
-            not provider
-            or not self.config.bar_magnifier_lower_tf
-            or not hasattr(provider, "get_lower_tf_bars")
-        ):
+        if not self.config.bar_magnifier_lower_tf or self.config.bar_magnifier_bars is None:
             return build_price_path(bar)
         try:
-            lower = provider.get_lower_tf_bars(
-                self.config.symbol, self.config.timeframe, self.config.bar_magnifier_lower_tf, bar
-            )
+            lower = self.config.bar_magnifier_bars.get(bar.time, ())
             lower_series = lower if isinstance(lower, BarSeries) else BarSeries.from_bars(lower)
             self._validate_lower_timeframe_bars(lower_series, bar)
         except Exception as e:

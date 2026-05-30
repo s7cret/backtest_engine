@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from backtest_engine.config import BacktestConfig, ProviderConfig
+from backtest_engine.config import BacktestConfig
 from backtest_engine.core.engine import BacktestEngine
 from backtest_engine.errors import ProviderError
 from backtest_engine.models import Bar, BarSeries
@@ -149,76 +149,29 @@ class TestWarmupQuality:
         assert result.warmup.capped_by_max_pre_bars is True
 
 
-class TestProviderConfig:
-    """Provider descriptors are metadata; production engine runs are compute-only."""
+class TestBarsOnlyBoundary:
+    """Production engine runs are compute-only and require explicit bars."""
 
-    def test_provider_config_dataclass_fields(self):
-        """ProviderConfig has required fields with correct defaults."""
-        cfg = ProviderConfig(provider="binance", symbol="ETHUSDT")
-        assert cfg.provider == "binance"
-        assert cfg.symbol == "ETHUSDT"
-        assert cfg.timeframe == "15m"
-        assert cfg.start_time is None
-        assert cfg.end_time is None
-        assert cfg.max_pre_bars == 1000
-
-    def test_provider_config_with_time_bounds(self):
-        """ProviderConfig stores time bounds."""
-        cfg = ProviderConfig(
-            provider="bybit",
-            symbol="BTCUSDT",
-            timeframe="1h",
-            start_time=1700000000000,
-            end_time=1700100000000,
-            max_pre_bars=500,
-        )
-        assert cfg.start_time == 1700000000000
-        assert cfg.end_time == 1700100000000
-        assert cfg.max_pre_bars == 500
-
-    def test_backtest_config_provider_field(self):
-        """BacktestConfig accepts provider field."""
-        cfg = ProviderConfig(provider="binance")
-        config = BacktestConfig(
-            symbol="BTCUSDT",
-            timeframe="15m",
-            start_time=1700000000000,
-            end_time=1700100000000,
-            provider=cfg,
-        )
-        assert config.provider is not None
-        assert config.provider.provider == "binance"
-
-    def test_provider_config_does_not_fetch_in_engine(self):
-        """ProviderConfig no longer gives BacktestEngine a market data ingress path."""
+    def test_engine_requires_explicit_bars(self):
         bars = make_bars(20)
-
         config = BacktestConfig(
             symbol="BTCUSDT",
             timeframe="15m",
             start_time=bars.time[0],
             end_time=bars.time[-1],
-            provider=ProviderConfig(provider="binance"),
         )
 
         engine = BacktestEngine(config)
-        with pytest.raises(ProviderError, match="compute-only"):
+        with pytest.raises(ProviderError, match="No bars supplied"):
             engine.run(NoopStrategy, bars=None)
 
-    def test_explicit_bars_are_authoritative_when_provider_metadata_exists(self):
-        """OpenPine can keep provider metadata while passing normalized bars explicitly."""
+    def test_explicit_bars_are_authoritative(self):
         bars = make_bars(20)
-
         config = BacktestConfig(
             symbol="BTCUSDT",
             timeframe="15m",
             start_time=bars.time[0],
             end_time=bars.time[-1],
-            provider=ProviderConfig(
-                provider="binance",
-                start_time=bars.time[2],
-                end_time=bars.time[10],
-            ),
         )
 
         result = BacktestEngine(config).run(NoopStrategy, bars=bars)
@@ -229,7 +182,7 @@ class TestProviderConfig:
 class TestProviderWithScoreWindow:
     """Phase 5 + D5-C: preloaded bars with score window execution."""
 
-    def test_preloaded_bars_with_prehistory(self):
+    def test_explicit_bars_with_prehistory(self):
         """Caller-loaded pre-bars feed score window execution."""
         bars = make_bars(20)
 
@@ -237,7 +190,6 @@ class TestProviderWithScoreWindow:
             score_start_ms=bars.time[5],
             score_end_ms=bars.time[19],
             warmup_metadata={"recommended_pre_bars_raw": 5},
-            provider=ProviderConfig(provider="binance", max_pre_bars=5),
         )
 
         engine = BacktestEngine(config)

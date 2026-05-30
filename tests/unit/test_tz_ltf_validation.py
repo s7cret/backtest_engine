@@ -4,14 +4,6 @@ from backtest_engine import BacktestConfig, BacktestEngine, Bar
 from backtest_engine.errors import BarMagnifierUnavailableError
 
 
-class Provider:
-    def __init__(self, bars):
-        self.bars = bars
-
-    def get_lower_tf_bars(self, *args):
-        return self.bars
-
-
 class Noop:
     def __init__(self, params, runtime, ctx):
         pass
@@ -21,6 +13,7 @@ class Noop:
 
 
 def cfg(lower):
+    parent = Bar(0, 10, 12, 8, 11, time_close=3600)
     return BacktestConfig(
         symbol="S",
         timeframe="60",
@@ -29,7 +22,7 @@ def cfg(lower):
         commission_type="none",
         use_bar_magnifier=True,
         bar_magnifier_lower_tf="15",
-        data_provider=Provider(lower),
+        bar_magnifier_bars={parent.time: lower},
     )
 
 

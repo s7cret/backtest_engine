@@ -1,3 +1,5 @@
+from dataclasses import fields
+
 import pytest
 
 from backtest_engine import BacktestConfig, BacktestEngine, Bar
@@ -75,6 +77,14 @@ def test_architecture_helpers_are_real():
     order = Order("x", "entry", "long", "buy", "open", "market", 1, 0, 1, 1, "long")
     assert activate_orders_for_bar([order], 1) == [order]
     assert order.status == "active"
+
+
+def test_backtest_config_has_no_market_data_ingress_fields():
+    names = {field.name for field in fields(BacktestConfig)}
+
+    assert "data_provider" not in names
+    assert "preloaded_bars" not in names
+    assert "provider" not in names
 
 
 def test_result_helpers_are_public_functions():

@@ -130,6 +130,6 @@ def test_pyramiding_reject_and_force_close():
 
 
 def test_early_stop_and_preloaded():
-    c = cfg(preloaded_bars=BARS, early_stop_enabled=True, min_equity_stop=9999)
-    r = BacktestEngine(c).run(BuyOnce)
+    c = cfg(early_stop_enabled=True, min_equity_stop=9999)
+    r = BacktestEngine(c).run(BuyOnce, bars=BARS)
     assert r.status == "early_stopped"

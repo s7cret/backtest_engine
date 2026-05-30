@@ -36,21 +36,6 @@ class BuyThenReadState:
             self.ctx.close("L", immediately=True)
 
 
-class Provider:
-    def __init__(self):
-        self.called = 0
-        self.lower_called = 0
-
-    def get_bars(self, *a):
-        self.called += 1
-        return BARS
-
-    def get_lower_tf_bars(self, *a):
-        self.lower_called += 1
-        # Better intrabar path reaches long limit at 10 before parent synthetic high/low ambiguity matters.
-        return [Bar(20, 12, 12, 10, 11, time_close=21)]
-
-
 class LimitEntry:
     def __init__(self, params, runtime, ctx):
         self.ctx = ctx
@@ -127,12 +112,19 @@ def test_config_validation_margin_and_streaming_compare():
 
 
 def test_bar_magnifier_uses_provider_lower_timeframe():
-    p = Provider()
+    lower = [Bar(2, 12, 12, 10, 11, time_close=3)]
     r = BacktestEngine(
-        cfg(data_provider=p, use_bar_magnifier=True, bar_magnifier_lower_tf="60")
-    ).run(LimitEntry)
-    assert p.called == 1
-    assert p.lower_called >= 1
+        cfg(
+            use_bar_magnifier=True,
+            bar_magnifier_lower_tf="60",
+            bar_magnifier_bars={
+                1: [Bar(1, 10, 10, 9, 10, time_close=2)],
+                2: lower,
+                3: [Bar(3, 14, 14, 13, 14, time_close=4)],
+                4: [Bar(4, 13, 13, 10, 11, time_close=5)],
+            },
+        )
+    ).run(LimitEntry, bars=BARS)
     assert r.open_trades[0].entry_price == 10
 
 
@@ -148,15 +140,6 @@ def test_bar_magnifier_recalc_uses_lower_timeframe_sequence_not_parent_ohlc():
         Bar(3600, 10, 12, 9, 10, time_close=7200),
         Bar(7200, 10, 10, 10, 10, time_close=10800),
     ]
-
-    class SequenceProvider:
-        def get_lower_tf_bars(self, symbol, parent_timeframe, lower_timeframe, parent_bar):
-            if parent_bar.time == 3600:
-                return [
-                    Bar(3600, 10, 12, 10, 12, time_close=3900),
-                    Bar(3900, 12, 12, 9, 9.5, time_close=4200),
-                ]
-            return []
 
     class LimitThenTp:
         def __init__(self, params, runtime, ctx):
@@ -179,7 +162,12 @@ def test_bar_magnifier_recalc_uses_lower_timeframe_sequence_not_parent_ohlc():
             bar_magnifier_lower_tf="5",
             bar_magnifier_missing_policy="fallback",
             calc_on_order_fills=True,
-            data_provider=SequenceProvider(),
+            bar_magnifier_bars={
+                3600: [
+                    Bar(3600, 10, 12, 10, 12, time_close=3900),
+                    Bar(3900, 12, 12, 9, 9.5, time_close=4200),
+                ],
+            },
         )
     ).run(LimitThenTp, bars=parent)
 

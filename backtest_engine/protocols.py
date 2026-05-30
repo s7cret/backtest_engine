@@ -5,15 +5,6 @@ from typing import Any, Protocol, Sequence
 from .models import BacktestResumeState, Bar, BarSeries, Fill, Order, Tick
 
 
-class DataProvider(Protocol):
-    def get_bars(
-        self, symbol: str, timeframe: str, start_time: int, end_time: int
-    ) -> Sequence[Bar] | BarSeries: ...
-    def get_lower_tf_bars(
-        self, symbol: str, parent_timeframe: str, lower_timeframe: str, parent_bar: Bar
-    ) -> Sequence[Bar] | BarSeries: ...
-
-
 class RealtimeTickProvider(Protocol):
     def get_ticks(
         self, symbol: str, timeframe: str, start_time: int, end_time: int

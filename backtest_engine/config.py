@@ -6,22 +6,6 @@ from .models.instrument import InstrumentModel
 
 
 @dataclass
-class ProviderConfig:
-    """Provider descriptor retained for config snapshots only.
-
-    Production BacktestEngine runs are compute-only: callers must pass bars
-    explicitly or inject a data_provider object. Engine-owned market data
-    fetching lives outside the production API.
-    """
-    provider: Literal["binance", "bybit"]
-    symbol: str = "BTCUSDT"
-    timeframe: str = "15m"
-    start_time: int | None = None
-    end_time: int | None = None
-    max_pre_bars: int = 1000
-
-
-@dataclass
 class BacktestConfig:
     symbol: str
     timeframe: str
@@ -114,23 +98,21 @@ class BacktestConfig:
     max_bars_without_trade: int | None = None
     force_close_on_end: bool = False
     strategy_config_priority: bool = True
-    data_provider: object | None = None
     runtime: object | None = None
-    preloaded_bars: object | None = None
-    # Provider descriptors are metadata only; production runs must receive bars explicitly.
-    provider: ProviderConfig | None = None
-    reuse_preloaded_bars: bool = True
+    bar_magnifier_bars: dict[int, object] | None = None
     store_backtest_result_in_memory: bool = True
     output_dir: Path | None = None
 
     def snapshot(self) -> dict:
         d = {field.name: getattr(self, field.name) for field in fields(self)}
-        d["data_provider"] = type(self.data_provider).__name__ if self.data_provider else None
         d["realtime_tick_provider"] = (
             type(self.realtime_tick_provider).__name__ if self.realtime_tick_provider else None
         )
         d["realtime_ticks"] = type(self.realtime_ticks).__name__ if self.realtime_ticks else None
         d["runtime"] = type(self.runtime).__name__ if self.runtime else None
+        d["bar_magnifier_bars"] = (
+            type(self.bar_magnifier_bars).__name__ if self.bar_magnifier_bars else None
+        )
         d["tradingview_reference_path"] = (
             str(self.tradingview_reference_path) if self.tradingview_reference_path else None
         )

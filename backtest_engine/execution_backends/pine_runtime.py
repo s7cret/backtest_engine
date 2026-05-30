@@ -120,7 +120,7 @@ class PineRuntimeBackend:
         runtime = imports["PineRuntime"](
             symbol_info=symbol_info,
             timeframe=timeframe,
-            data_provider=runtime_kwargs.pop("data_provider", getattr(config, "data_provider", None)),
+            data_provider=runtime_kwargs.pop("data_provider", None),
             config=runtime_config,
             **runtime_kwargs,
         )
