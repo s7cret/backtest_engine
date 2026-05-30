@@ -19,10 +19,7 @@ from backtest_engine.batch import BatchBacktestRunner, BacktestJob
 
 def _load_class(path: str, name: str):
     strategy_path = Path(path).resolve()
-    module_name = strategy_path.stem
-    parent = str(strategy_path.parent)
-    if parent not in sys.path:
-        sys.path.insert(0, parent)
+    module_name = f"_backtest_strategy_{strategy_path.stem}_{abs(hash(strategy_path))}"
     spec = spec_from_file_location(module_name, strategy_path)
     mod = module_from_spec(spec)
     assert spec and spec.loader
