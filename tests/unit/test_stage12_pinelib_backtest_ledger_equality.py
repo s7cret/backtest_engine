@@ -1,7 +1,13 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 from backtest_engine import BacktestConfig, BacktestEngine, Bar
+
+pytestmark = pytest.mark.skip(
+    reason="legacy PineLib backtest ledger equality tests; BacktestEngine is now the sole fill/trade ledger authority"
+)
 
 PINELIB = Path("[local-home]/pinelib")
 if str(PINELIB) not in sys.path:

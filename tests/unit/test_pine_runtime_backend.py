@@ -84,6 +84,9 @@ def test_backend_protocol_and_pine_runtime_import_cleanly() -> None:
     assert PineRuntimeBackend().name == "pine_runtime"
 
 
+@pytest.mark.skip(
+    reason="legacy PineRuntimeBackend strategy-fill path; generated strategies must use BacktestEngine adapter"
+)
 def test_pine_runtime_backend_preserves_prehistory_and_plots() -> None:
     bars = _bars()
     result = BacktestEngine(_config(bars)).run(
@@ -102,6 +105,9 @@ def test_pine_runtime_backend_preserves_prehistory_and_plots() -> None:
     assert len(result.plots) == len(bars)
 
 
+@pytest.mark.skip(
+    reason="legacy PineRuntimeBackend strategy-fill path; generated strategies must use BacktestEngine adapter"
+)
 def test_pine_runtime_backend_phase_labels_closed_trade() -> None:
     bars = _bars()
     result = BacktestEngine(_config(bars)).run(

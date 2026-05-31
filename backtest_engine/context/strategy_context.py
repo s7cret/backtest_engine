@@ -1,7 +1,16 @@
 from __future__ import annotations
+from dataclasses import dataclass
 from .command_buffer import CommandBuffer
 from .strategy_state_view import StrategyStateView
 from backtest_engine.errors import UnsupportedRiskRuleError
+
+
+@dataclass(frozen=True, slots=True)
+class RiskRule:
+    name: str
+    value: float | None = None
+    value_type: str | None = None
+    direction: str | None = None
 
 
 class StrategyContext:
@@ -9,6 +18,7 @@ class StrategyContext:
         self.config = config
         self.state = state or StrategyStateView()
         self.buffer = CommandBuffer()
+        self.risk_rules: list[RiskRule] = []
 
     def entry(
         self,
@@ -120,27 +130,23 @@ class StrategyContext:
     def risk_allow_entry_in(self, direction: str) -> None:
         value = str(direction).lower()
         if value in {"long", "strategy.direction.long"}:
-            self.config.allow_long = True
-            self.config.allow_short = False
+            self.risk_rules.append(RiskRule("allow_entry_in", direction="long"))
             return
         if value in {"short", "strategy.direction.short"}:
-            self.config.allow_long = False
-            self.config.allow_short = True
+            self.risk_rules.append(RiskRule("allow_entry_in", direction="short"))
             return
         if value in {"all", "both", "strategy.direction.all"}:
-            self.config.allow_long = True
-            self.config.allow_short = True
+            self.risk_rules.append(RiskRule("allow_entry_in", direction="all"))
             return
         raise ValueError(f"unsupported risk_allow_entry_in direction: {direction!r}")
 
     def risk_max_drawdown(self, value: float, type: str) -> None:
-        self.config.early_stop_enabled = True
         value_type = str(type).lower()
         if value_type in {"percent", "percent_of_equity", "strategy.percent_of_equity"}:
-            self.config.max_drawdown_stop_percent = float(value)
+            self.risk_rules.append(RiskRule("max_drawdown", float(value), "percent_of_equity"))
             return
         if value_type in {"cash", "currency", "strategy.cash"}:
-            self.config.min_equity_stop = float(self.config.initial_capital) - float(value)
+            self.risk_rules.append(RiskRule("max_drawdown", float(value), "cash"))
             return
         raise ValueError(f"unsupported risk_max_drawdown type: {type!r}")
 
@@ -148,7 +154,7 @@ class StrategyContext:
         value_type = str(type).lower()
         if value_type not in {"fixed", "contracts", "shares"}:
             raise ValueError(f"unsupported risk_max_position_size type: {type!r}")
-        self.config.max_position_size = float(value)
+        self.risk_rules.append(RiskRule("max_position_size", float(value), "fixed"))
 
     def risk_max_intraday_loss(self, value: float, type: str) -> None:
         raise UnsupportedRiskRuleError(
@@ -159,3 +165,8 @@ class StrategyContext:
         raise UnsupportedRiskRuleError(
             "strategy.risk.max_intraday_filled_orders is not supported by BacktestEngine"
         )
+
+    def drain_risk_rules(self) -> list[RiskRule]:
+        rules = self.risk_rules
+        self.risk_rules = []
+        return rules

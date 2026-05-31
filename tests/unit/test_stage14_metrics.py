@@ -2,6 +2,7 @@ import pytest
 
 from backtest_engine import BacktestConfig, BacktestEngine, Bar
 from backtest_engine.errors import UnsupportedRiskRuleError
+from backtest_engine.context import StrategyContext
 
 
 class TwoTrades:
@@ -130,6 +131,25 @@ def test_risk_max_position_size_is_enforced_by_engine():
         d.code == "ORDER_REJECTED_RISK_MAX_POSITION_SIZE"
         for d in result.warnings
     )
+
+
+def test_strategy_context_registers_risk_rules_without_mutating_config():
+    cfg = BacktestConfig(symbol="S", timeframe="1D", start_time=1, end_time=1)
+    ctx = StrategyContext(cfg)
+
+    ctx.risk_allow_entry_in("short")
+    ctx.risk_max_drawdown(10, "percent_of_equity")
+    ctx.risk_max_position_size(1)
+
+    assert cfg.allow_long is True
+    assert cfg.allow_short is True
+    assert cfg.max_drawdown_stop_percent is None
+    assert cfg.max_position_size is None
+    assert [(r.name, r.value, r.value_type, r.direction) for r in ctx.risk_rules] == [
+        ("allow_entry_in", None, None, "short"),
+        ("max_drawdown", 10.0, "percent_of_equity", None),
+        ("max_position_size", 1.0, "fixed", None),
+    ]
 
 
 class RiskAllowEntryStrategy:

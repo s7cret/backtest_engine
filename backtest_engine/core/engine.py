@@ -13,6 +13,7 @@ from backtest_engine.errors import (
     ProviderError,
     ResumeUnsupportedError,
     StrategyRuntimeError,
+    UnsupportedRiskRuleError,
 )
 from backtest_engine.models import (
     Bar,
@@ -445,6 +446,7 @@ class BacktestEngine:
         *,
         recalc_after_fill: bool = False,
     ) -> None:
+        self._apply_risk_rules(ctx)
         for c in ctx.buffer.drain():
             k = c.name
             kw = c.kwargs
@@ -751,6 +753,36 @@ class BacktestEngine:
                 )
             else:
                 self._add_order(new, bar, i)
+
+    def _apply_risk_rules(self, ctx: StrategyContext) -> None:
+        for rule in ctx.drain_risk_rules():
+            if rule.name == "allow_entry_in":
+                if rule.direction == "long":
+                    self.config.allow_long = True
+                    self.config.allow_short = False
+                    continue
+                if rule.direction == "short":
+                    self.config.allow_long = False
+                    self.config.allow_short = True
+                    continue
+                if rule.direction == "all":
+                    self.config.allow_long = True
+                    self.config.allow_short = True
+                    continue
+            elif rule.name == "max_drawdown":
+                self.config.early_stop_enabled = True
+                if rule.value_type == "percent_of_equity":
+                    self.config.max_drawdown_stop_percent = float(rule.value or 0.0)
+                    continue
+                if rule.value_type == "cash":
+                    self.config.min_equity_stop = (
+                        float(self.config.initial_capital) - float(rule.value or 0.0)
+                    )
+                    continue
+            elif rule.name == "max_position_size" and rule.value_type == "fixed":
+                self.config.max_position_size = float(rule.value or 0.0)
+                continue
+            raise UnsupportedRiskRuleError(f"unsupported risk rule: {rule.name}")
 
     def _qty_from_args(self, kw: dict, current_size: float | None, price: float) -> float:
         if kw.get("qty") is not None:
