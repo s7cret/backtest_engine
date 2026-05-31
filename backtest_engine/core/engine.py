@@ -7,7 +7,6 @@ from backtest_engine.context import StrategyContext, StrategyStateView
 from backtest_engine.errors import (
     BacktestEngineError,
     BarMagnifierUnavailableError,
-    ConfigError,
     ProviderError,
     ResumeUnsupportedError,
     StrategyRuntimeError,
@@ -28,13 +27,17 @@ from backtest_engine.models import (
 from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.broker.slippage import slippage_value
 from backtest_engine.broker.rounding import round_to_step
-from backtest_engine.broker.fill_simulator import limit_reached, stop_reached
 from backtest_engine.core.deterministic_hash import sha256_obj
 from backtest_engine.core.execution_backend_adapter import run_execution_backend
+from backtest_engine.core.fill_scanner import process_bar_fills, update_trailing_order
 from backtest_engine.core.risk_rules import (
     apply_risk_rules,
     max_position_size_allows,
     pending_entry_position_delta,
+)
+from backtest_engine.core.realtime_tick_loop import (
+    guarded_realtime_strategy_tick_loop_skeleton,
+    guarded_realtime_tick_loop_skeleton,
 )
 from backtest_engine.core.resume_state import export_resume_state, restore_resume_state
 from backtest_engine.core.strategy_command_processor import flush_strategy_commands
@@ -42,8 +45,6 @@ from backtest_engine.core.realtime import (
     BarTickSlice,
     RealtimeTickAttempt,
     RealtimeTickCommitPolicy,
-    RuntimeTickUpdate,
-    validate_realtime_order_fill_oracle_proof,
 )
 from backtest_engine.core.score_window import (
     build_score_window_plan,
@@ -534,23 +535,7 @@ class BacktestEngine:
         )
 
     def _update_trailing_order(self, o: Order, price: float) -> None:
-        if o.trail_price is None and o.trail_offset is None and o.trail_points is None:
-            return
-        offset = float(o.trail_offset or 0.0)
-        if o.direction == "long":
-            if not o.trail_activated and (o.trail_price is None or price >= o.trail_price):
-                o.trail_activated = True
-            if o.trail_activated:
-                o.stop_price = max(
-                    o.stop_price if o.stop_price is not None else float("-inf"), price - offset
-                )
-        else:
-            if not o.trail_activated and (o.trail_price is None or price <= o.trail_price):
-                o.trail_activated = True
-            if o.trail_activated:
-                o.stop_price = min(
-                    o.stop_price if o.stop_price is not None else float("inf"), price + offset
-                )
+        update_trailing_order(o, price)
 
     def _process_bar_fills(
         self,
@@ -561,163 +546,7 @@ class BacktestEngine:
         open_only: bool = False,
         skip_open: bool = False,
     ) -> None:
-        recalc = 0
-        path = self._price_path(bar)
-        path_cursor = 0
-        while True:
-            filled = False
-            restart_after_recalc = False
-            for path_index, (price, point) in enumerate(path[path_cursor:], start=path_cursor):
-                path_is_open = point == "open" or point.endswith(".open")
-                if open_only and not path_is_open:
-                    continue
-                if skip_open and path_is_open:
-                    continue
-                for o in list(self.orders):
-                    current_bar_close_activation = (
-                        self.config.process_orders_on_close and o.created_bar_index == i
-                    )
-                    if current_bar_close_activation and not (
-                        point == "close" or point.endswith(".close")
-                    ):
-                        continue
-                    if o.status != "active":
-                        if not (
-                            o.status == "pending"
-                            and o.created_bar_index == i
-                            and o.trail_price is not None
-                        ):
-                            continue
-                        self._update_trailing_order(o, price)
-                        continue
-                    was_trail_activated = o.trail_activated
-                    self._update_trailing_order(o, price)
-                    if (
-                        path_is_open
-                        and o.trail_price is not None
-                        and not was_trail_activated
-                        and o.trail_activated
-                    ):
-                        o.stop_price = price
-                    if (
-                        o.kind == "exit"
-                        and o.from_entry is not None
-                        and not self._matching_open_trades(o.from_entry)
-                    ):
-                        continue
-                    if o.order_type == "stop" and o.stop_price is None:
-                        continue
-                    is_open_point = path_is_open
-                    is_close_point = point == "close" or point.endswith(".close")
-                    fill_price = price
-                    if o.order_type == "market" and (
-                        (is_open_point and o.created_bar_index < i)
-                        or (
-                            self.config.calc_on_order_fills
-                            and o.created_bar_index == i
-                            and o.active_from_bar_index <= i
-                        )
-                        or (
-                            is_close_point
-                            and (self.config.process_orders_on_close or o.immediately)
-                        )
-                    ):
-                        pass
-                    elif o.order_type == "limit" and limit_reached(
-                        o,
-                        price,
-                        bar,
-                        self.config.mintick,
-                        self.config.backtest_fill_limits_assumption_ticks,
-                    ):
-                        fill_price = self._limit_fill_price(o, price, is_open_point)
-                    elif o.order_type == "stop" and stop_reached(o, price):
-                        if self.config.stop_gap_fill_policy == "stop_price":
-                            fill_price = o.stop_price or price
-                        elif not is_open_point and not self.config.fill_worse_stop_at_path_price:
-                            fill_price = (
-                                o.stop_price
-                                if (
-                                    o.stop_price is not None
-                                    and not (
-                                        self.config.calc_on_order_fills
-                                        and o.created_bar_index == i
-                                        and o.active_from_bar_index <= i
-                                    )
-                                )
-                                else price
-                            )
-                    elif o.order_type == "stop_limit":
-                        if not o.stop_limit_activated and stop_reached(o, price):
-                            o.stop_limit_activated = True
-                            self._event(
-                                "STOP_LIMIT_ACTIVATED",
-                                f"stop-limit {o.id} activated",
-                                i,
-                                bar.time,
-                                o.id,
-                            )
-                        if not (
-                            o.stop_limit_activated
-                            and limit_reached(
-                                o,
-                                price,
-                                bar,
-                                self.config.mintick,
-                                self.config.backtest_fill_limits_assumption_ticks,
-                            )
-                        ):
-                            continue
-                        fill_price = self._limit_fill_price(o, price, is_open_point)
-                    else:
-                        continue
-                    self._fill(o, bar, i, fill_price, point)
-                    filled = True
-                    if self.config.calc_on_order_fills and not current_bar_close_activation:
-                        self._update_open_profit(fill_price)
-                        self._update_state()
-                        recalc += 1
-                        if recalc > self.config.max_recalc_depth:
-                            self._diag(
-                                "MAX_RECALC_DEPTH_REACHED",
-                                "max recalc depth reached",
-                                "warning",
-                                i,
-                                bar.time,
-                            )
-                            return
-                        self._call_strategy(strategy, bar, i)
-                        self._flush(ctx, bar, i, recalc_after_fill=True)
-                        path_cursor = path_index
-                        restart_after_recalc = True
-                        break
-                if restart_after_recalc:
-                    break
-                if self._maybe_margin_call(price, bar, i, point):
-                    filled = True
-                    if self.config.calc_on_order_fills:
-                        self._update_open_profit(price)
-                        self._update_state()
-                        recalc += 1
-                        if recalc > self.config.max_recalc_depth:
-                            self._diag(
-                                "MAX_RECALC_DEPTH_REACHED",
-                                "max recalc depth reached",
-                                "warning",
-                                i,
-                                bar.time,
-                            )
-                            return
-                        self._call_strategy(strategy, bar, i)
-                        self._flush(ctx, bar, i, recalc_after_fill=True)
-                        path_cursor = path_index
-                        restart_after_recalc = True
-                        break
-            if restart_after_recalc and path_cursor < len(path):
-                continue
-            if not (self.config.calc_on_order_fills and filled):
-                break
-            break
+        process_bar_fills(self, strategy, ctx, bar, i, open_only=open_only, skip_open=skip_open)
 
     def _maybe_margin_call(self, price: float, bar: Bar, i: int, point: str) -> bool:
         return maybe_margin_call(self, price, bar, i, point)
@@ -1086,26 +915,14 @@ class BacktestEngine:
         ``run()`` while ``calc_on_every_tick`` remains fail-closed.
         """
 
-        attempts: list[RealtimeTickAttempt] = []
-        for tick_index, tick in enumerate(tick_slice.ticks):
-            checkpoint = self._export_realtime_execution_checkpoint(
-                strategy=strategy, runtime=runtime
-            )
-            if callable(on_attempt):
-                on_attempt(tick, tick_index)
-            self._restore_realtime_execution_checkpoint(
-                checkpoint, ctx=ctx, strategy=strategy, runtime=runtime
-            )
-            attempts.append(
-                RealtimeTickAttempt(
-                    bar_index=tick_slice.bar_index,
-                    tick_index=tick_index,
-                    tick=tick,
-                    checkpoint=checkpoint,
-                    rolled_back=True,
-                )
-            )
-        return tuple(attempts)
+        return guarded_realtime_tick_loop_skeleton(
+            self,
+            tick_slice,
+            ctx=ctx,
+            strategy=strategy,
+            runtime=runtime,
+            on_attempt=on_attempt,
+        )
 
     def _guarded_realtime_strategy_tick_loop_skeleton(
         self,
@@ -1123,59 +940,14 @@ class BacktestEngine:
         strategy, and command-buffer state after every attempted tick.
         """
 
-        policy = commit_policy or RealtimeTickCommitPolicy()
-        if policy.allow_intrabar_order_fills:
-            validate_realtime_order_fill_oracle_proof(policy.intrabar_order_fill_oracle_proof)
-        attempts: list[RealtimeTickAttempt] = []
-        update_realtime_tick = (
-            getattr(runtime, "update_realtime_tick", None) if runtime is not None else None
+        return guarded_realtime_strategy_tick_loop_skeleton(
+            self,
+            tick_slice,
+            ctx=ctx,
+            strategy=strategy,
+            runtime=runtime,
+            commit_policy=commit_policy,
         )
-        total_ticks = len(tick_slice.ticks)
-        for tick_index, tick in enumerate(tick_slice.ticks):
-            action = policy.action_for(tick_index, total_ticks)
-            checkpoint = self._export_realtime_execution_checkpoint(
-                strategy=strategy, runtime=runtime
-            )
-            buffered_commands = clone_state(ctx.buffer.commands)
-            committed = False
-            try:
-                current_bar = tick_slice.bar
-                if callable(update_realtime_tick):
-                    maybe_bar = update_realtime_tick(
-                        RuntimeTickUpdate(
-                            price=tick.price,
-                            volume=float(tick.volume or 0.0),
-                            time=tick.time,
-                            is_final=tick_index == total_ticks - 1,
-                        )
-                    )
-                    if maybe_bar is not None:
-                        current_bar = maybe_bar
-                self._call_strategy(strategy, current_bar, tick_slice.bar_index)
-                if action == "commit_final" and len(ctx.buffer.commands) != len(buffered_commands):
-                    raise ConfigError(
-                        "realtime order commands require TradingView intrabar order/fill oracle evidence"
-                    )
-                committed = action == "commit_final"
-            finally:
-                if not committed:
-                    self._restore_realtime_execution_checkpoint(
-                        checkpoint, ctx=ctx, strategy=strategy, runtime=runtime
-                    )
-                    ctx.buffer.commands = clone_state(buffered_commands) or []
-            attempts.append(
-                RealtimeTickAttempt(
-                    bar_index=tick_slice.bar_index,
-                    tick_index=tick_index,
-                    tick=tick,
-                    checkpoint=checkpoint,
-                    rolled_back=not committed,
-                    strategy_invoked=True,
-                    policy=action,
-                    committed=committed,
-                )
-            )
-        return tuple(attempts)
 
     def _restore_resume_state(
         self, resume_state: BacktestResumeState, strategy: Any, runtime: Any, ctx: StrategyContext
