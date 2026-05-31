@@ -47,7 +47,9 @@ from backtest_engine.core.score_window import (
     classify_warmup_quality,
 )
 from backtest_engine.core.state_snapshot import BrokerSnapshot, RealtimeBrokerSnapshot, RealtimeExecutionCheckpoint, build_resume_state, clone_state
+from backtest_engine.core.backend_result import required_backend_trade_float, trade_from_backend_trade
 from backtest_engine.core.validation import data_fingerprint, infer_price_tick, validate_bars
+from backtest_engine.core.engine_validation import validate_backtest_config
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
 from backtest_engine.results import (
     BacktestResult,
@@ -292,40 +294,7 @@ class BacktestEngine:
         )
 
     def _validate_config(self) -> None:
-        if self.config.margin_long <= 0.0 or self.config.margin_short <= 0.0:
-            raise ConfigError("margin_long and margin_short must be positive percentages")
-        if (
-            self.config.tradingview_compare_mode == "streaming"
-            and self.config.execution_mode != "debug"
-        ):
-            raise ConfigError("streaming TradingView compare requires execution_mode=debug")
-        if self.config.calc_on_every_tick:
-            if not self.config.experimental_intrabar_strategy_mode:
-                raise ConfigError(
-                    "calc_on_every_tick requires realtime rollback/varip semantics; "
-                    "BacktestEngine parity mode fails closed unless experimental_intrabar_strategy_mode=True"
-                )
-            if self.config.realtime_ticks is None and self.config.realtime_tick_provider is None:
-                raise ConfigError(
-                    "calc_on_every_tick requires explicit realtime_ticks or realtime_tick_provider; "
-                    "historical OHLC fallback is forbidden"
-                )
-            raise ConfigError(
-                "calc_on_every_tick tick replay is not implemented; realtime rollback/commit "
-                "semantics must be oracle-verified before enabling execution"
-            )
-        if "equity_curve" in self.config.required_outputs and not self.config.collect_equity_curve:
-            self.config.collect_equity_curve = True
-        if (
-            "order_lifecycle" in self.config.required_outputs
-            or "order_events" in self.config.required_outputs
-        ):
-            self.config.collect_events = True
-        if "mfe_mae" in self.config.required_outputs:
-            self.config.collect_mfe_mae = True
-            self.config.collect_trade_details = True
-        if self.config.required_metrics:
-            self.config.collect_equity_curve = True
+        validate_backtest_config(self.config)
 
     def _slice_range(self, series: BarSeries) -> BarSeries:
         start = self.config.start_time
@@ -466,47 +435,7 @@ class BacktestEngine:
                 )
 
     def _trade_from_backend_trade(self, trade: Any, idx: int) -> Trade:
-        entry_id = str(getattr(trade, "entry_id", f"entry_{idx}"))
-        commission_entry = self._required_backend_trade_float(trade, "commission_entry", idx)
-        commission_exit = self._required_backend_trade_float(trade, "commission_exit", idx)
-        max_runup = self._required_backend_trade_float(trade, "max_runup", idx)
-        max_drawdown = self._required_backend_trade_float(trade, "max_drawdown", idx)
-        return Trade(
-            id=f"pine_{idx}",
-            entry_id=entry_id,
-            exit_id=str(getattr(trade, "exit_reason", "") or "") or None,
-            direction=getattr(trade, "direction", "long"),
-            entry_time=int(getattr(trade, "entry_time")),
-            entry_bar_index=int(getattr(trade, "entry_bar_index")),
-            entry_price=float(getattr(trade, "entry_price")),
-            exit_time=getattr(trade, "exit_time", None),
-            exit_bar_index=getattr(trade, "exit_bar_index", None),
-            exit_price=getattr(trade, "exit_price", None),
-            qty=float(getattr(trade, "qty")),
-            commission_entry=commission_entry,
-            commission_exit=commission_exit,
-            profit=self._required_backend_trade_float(trade, "profit", idx),
-            profit_percent=self._required_backend_trade_float(trade, "profit_percent", idx),
-            mfe=max_runup,
-            mae=-max_drawdown,
-            max_runup=max_runup,
-            max_drawdown=max_drawdown,
-            exit_reason=getattr(trade, "exit_reason", None),
-            bars_held=(
-                None
-                if getattr(trade, "exit_bar_index", None) is None
-                else int(getattr(trade, "exit_bar_index")) - int(getattr(trade, "entry_bar_index"))
-            ),
-        )
-
-    @staticmethod
-    def _required_backend_trade_float(trade: Any, field: str, idx: int) -> float:
-        value = getattr(trade, field, None)
-        if value is None:
-            raise StrategyRuntimeError(
-                f"Pine runtime trade {idx} is missing required ledger field {field!r}"
-            )
-        return float(value)
+        return trade_from_backend_trade(trade, idx)
 
     def _flush(
         self,
