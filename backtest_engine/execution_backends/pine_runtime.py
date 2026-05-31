@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Sequence
 
 from .base import BackendExecutionResult
@@ -25,9 +26,22 @@ def _pinelib_imports() -> dict[str, Any]:
     }
 
 
-def _bar_to_pinelib(bar: Any, pine_bar_type: type) -> Any:
+def _bar_to_pinelib(
+    bar: Any,
+    pine_bar_type: type,
+    *,
+    fixed_timeframe_ms: int | None = None,
+    normalize_time_close_exclusive: bool = False,
+) -> Any:
     bar_time = getattr(bar, "time", getattr(bar, "timestamp", 0))
     bar_time_close = getattr(bar, "time_close", getattr(bar, "close_time_ms", None))
+    if (
+        normalize_time_close_exclusive
+        and fixed_timeframe_ms is not None
+        and bar_time_close is not None
+        and int(bar_time_close) == int(bar_time) + fixed_timeframe_ms - 1
+    ):
+        bar_time_close = int(bar_time) + fixed_timeframe_ms
     return pine_bar_type(
         time=int(bar_time),
         open=float(getattr(bar, "open")),
@@ -96,6 +110,10 @@ class PineRuntimeBackend:
         progress_callback = runtime_kwargs.pop("progress_callback", None)
         plot_from_ms = runtime_kwargs.pop("plot_from_ms", None)
         plot_to_ms = runtime_kwargs.pop("plot_to_ms", None)
+        tv_export_barstate = bool(runtime_kwargs.pop("tv_export_barstate", False))
+        normalize_time_close_exclusive = bool(
+            runtime_kwargs.pop("normalize_time_close_exclusive", False)
+        )
 
         runtime_config = imports["RuntimeConfig"](
             strict_tv_parity=getattr(config, "parity_mode", None) == "strict",
@@ -133,7 +151,15 @@ class PineRuntimeBackend:
         except TypeError:
             strategy = strategy_class(params, runtime)
 
-        pine_bars = [_bar_to_pinelib(bar, imports["PineBar"]) for bar in bars]
+        pine_bars = [
+            _bar_to_pinelib(
+                bar,
+                imports["PineBar"],
+                fixed_timeframe_ms=getattr(timeframe, "interval_ms", None),
+                normalize_time_close_exclusive=normalize_time_close_exclusive,
+            )
+            for bar in bars
+        ]
         if pine_bars:
             runtime.request_data_end_ms = pine_bars[-1].time_close or pine_bars[-1].time
 
@@ -147,6 +173,25 @@ class PineRuntimeBackend:
         # Indicators: run bar-by-bar so CLI callers can report progress.
         for idx, bar in enumerate(pine_bars):
             runtime.begin_bar(bar)
+            if tv_export_barstate:
+                is_visible = (
+                    (plot_from_ms is None or bar.time >= plot_from_ms)
+                    and (plot_to_ms is None or bar.time < plot_to_ms)
+                )
+                is_last_visible = bool(
+                    is_visible
+                    and plot_to_ms is not None
+                    and (bar.time_close or bar.time) >= plot_to_ms
+                )
+                if is_visible:
+                    runtime.barstate = replace(
+                        runtime.barstate,
+                        islast=is_last_visible,
+                        ishistory=not is_last_visible,
+                        isrealtime=is_last_visible,
+                        isnew=not is_last_visible,
+                        isconfirmed=not is_last_visible,
+                    )
             try:
                 strategy._process_bar(bar)
             finally:
