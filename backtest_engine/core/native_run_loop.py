@@ -3,11 +3,80 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Protocol
 
+from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext
-from backtest_engine.models import BacktestResumeState, Bar, BarSeries, EquityPoint
-from backtest_engine.results import BacktestResult
+from backtest_engine.context import StrategyStateView
+from backtest_engine.models import BacktestResumeState, Bar, BarSeries, EquityPoint, Order, Position
+from backtest_engine.results import BacktestResult, EquityExtremes
+
+
+class NativeRunEngine(Protocol):
+    config: BacktestConfig
+    state: StrategyStateView
+    orders: list[Order]
+    position: Position
+    cash: float
+    equity: float
+    _score_mode: bool
+    _score_start_index: int
+    _score_equity_points: list[EquityPoint]
+    _early_stop_enabled: bool
+    _min_equity_stop: float | None
+    _max_drawdown_stop_percent: float | None
+    _max_drawdown_stop_cash: float | None
+    _max_bars_without_trade: int | None
+    last_trade_bar: int | None
+
+    def _want(self, name: str) -> bool: ...
+    def _restore_resume_state(
+        self, resume_state: BacktestResumeState, strategy: Any, runtime: Any, ctx: StrategyContext
+    ) -> int: ...
+    def _cb(self, name: str, *args: Any) -> None: ...
+    def _event(
+        self,
+        code: str,
+        message: str,
+        bar_index: int | None = None,
+        time: int | None = None,
+        order_id: str | None = None,
+    ) -> None: ...
+    def _process_bar_fills(
+        self,
+        strategy: Any,
+        ctx: StrategyContext,
+        bar: Bar,
+        i: int,
+        *,
+        open_only: bool = False,
+        skip_open: bool = False,
+    ) -> None: ...
+    def _update_open_profit(self, price: float) -> None: ...
+    def _update_state(self) -> None: ...
+    def _call_strategy(self, strategy: Any, bar: Bar, i: int) -> None: ...
+    def _flush(
+        self,
+        ctx: StrategyContext,
+        bar: Bar,
+        i: int,
+        *,
+        recalc_after_fill: bool = False,
+    ) -> None: ...
+    def _update_intrabar_drawdown(self, bar: Bar) -> None: ...
+    def _update_trade_excursions(self, bar: Bar) -> None: ...
+    def _update_equity_extremes(self, equity: float) -> EquityExtremes: ...
+    def _force_close(self, bar: Bar, bar_index: int) -> None: ...
+    def _result(
+        self,
+        series: BarSeries,
+        equity_curve: list[EquityPoint] | None,
+        status: str,
+        early_reason: str | None,
+        duration_ms: float,
+        strategy: Any | None = None,
+        runtime: Any | None = None,
+    ) -> BacktestResult: ...
 
 
 class NoopRuntime:
@@ -19,7 +88,7 @@ class NoopRuntime:
 
 
 def run_native_strategy(
-    engine: Any,
+    engine: NativeRunEngine,
     strategy_class: type,
     params: dict[str, Any],
     series: BarSeries,
@@ -107,7 +176,9 @@ def run_native_strategy(
     )
 
 
-def _early_stop_state(engine: Any, bar_index: int, extremes: Any) -> tuple[bool, str, str | None]:
+def _early_stop_state(
+    engine: NativeRunEngine, bar_index: int, extremes: EquityExtremes
+) -> tuple[bool, str, str | None]:
     if not engine._early_stop_enabled:
         return False, "completed", None
     if engine._min_equity_stop is not None and engine.equity <= engine._min_equity_stop:
