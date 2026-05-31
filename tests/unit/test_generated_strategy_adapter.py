@@ -462,3 +462,51 @@ def test_generated_strategy_adapter_covers_close_all_immediately() -> None:
     assert result.total_trades == 2
     assert [trade.exit_id for trade in result.closed_trades] == ["close_all", "close_all"]
     assert result.net_profit == pytest.approx(0.0)
+
+
+class GeneratedCloseThenOppositeEntryStrategy:
+    def __init__(self, params=None, runtime=None):
+        self.params = params or {}
+        self.rt = runtime
+        self.ctx = None
+
+    def _process_bar(self, bar):
+        del bar
+        idx = self.rt.bar_index_series.current
+        if idx == 0:
+            self.ctx.entry("L", "long")
+        if idx == 2:
+            self.ctx.close("L")
+            self.ctx.entry("S", "short")
+
+
+def test_generated_strategy_close_then_opposite_entry_does_not_double_reversal_qty() -> None:
+    strategy_class = make_generated_strategy_adapter(GeneratedCloseThenOppositeEntryStrategy)
+    bars = [
+        Bar(0, 100, 100, 100, 100, 1.0),
+        Bar(1, 100, 100, 100, 100, 1.0),
+        Bar(2, 100, 100, 100, 100, 1.0),
+        Bar(3, 100, 100, 100, 100, 1.0),
+        Bar(4, 100, 100, 100, 100, 1.0),
+    ]
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=4,
+        commission_type="none",
+        commission_value=0.0,
+        default_qty_type="percent_of_equity",
+        default_qty_value=10.0,
+        initial_capital=10000.0,
+        force_close_on_end=False,
+    )
+
+    result = BacktestEngine(config).run(strategy_class, bars=bars)
+
+    assert result.status == "completed"
+    assert result.total_trades == 1
+    assert result.open_trades is not None
+    assert len(result.open_trades) == 1
+    assert result.open_trades[0].direction == "short"
+    assert result.open_trades[0].qty == pytest.approx(10.0)

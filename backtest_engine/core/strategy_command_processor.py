@@ -381,8 +381,11 @@ def _apply_entry_or_order_command(
         and engine.position.direction != direction
         and engine.config.reverse_on_opposite_entry
     ):
-        effect = "reverse"
-        qty = abs(engine.position.size) + qty
+        if _pending_full_close_for_current_position(engine):
+            effect = "open"
+        else:
+            effect = "reverse"
+            qty = abs(engine.position.size) + qty
     if kind == "entry" and not engine._entry_allowed(direction):
         engine._diag(
             "ORDER_REJECTED_PYRAMIDING",
@@ -442,3 +445,16 @@ def _apply_entry_or_order_command(
         )
     else:
         engine._add_order(new, bar, bar_index)
+
+
+def _pending_full_close_for_current_position(engine: Any) -> bool:
+    if engine.position.direction == "flat":
+        return False
+    pending_qty = sum(
+        order.qty
+        for order in engine.orders
+        if order.kind == "close"
+        and order.status in {"pending", "active"}
+        and order.position_direction == engine.position.direction
+    )
+    return pending_qty >= abs(engine.position.size) - 1e-12
