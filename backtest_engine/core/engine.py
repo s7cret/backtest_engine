@@ -48,9 +48,7 @@ from backtest_engine.core.realtime import (
     validate_realtime_order_fill_oracle_proof,
 )
 from backtest_engine.core.score_window import (
-    build_phase_trades,
     build_score_window_plan,
-    classify_warmup_quality,
 )
 from backtest_engine.core.state_snapshot import (
     BrokerSnapshot,
@@ -59,19 +57,15 @@ from backtest_engine.core.state_snapshot import (
     build_resume_state,
     clone_state,
 )
-from backtest_engine.core.validation import data_fingerprint, infer_price_tick, validate_bars
+from backtest_engine.core.validation import infer_price_tick, validate_bars
 from backtest_engine.core.engine_validation import validate_backtest_config
+from backtest_engine.core.result_builder import build_backtest_result
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
 from backtest_engine.results import (
     BacktestResult,
-    apply_full_window_equity_extremes,
-    apply_non_score_trade_metrics,
-    calculate_score_window_metrics,
     equity_move_from_baseline,
-    mark_available_outputs,
     update_equity_extremes,
 )
-from backtest_engine.results.statistics import summarize
 
 
 class _NoopRuntime:
@@ -1588,143 +1582,13 @@ class BacktestEngine:
         strategy: Any | None = None,
         runtime: Any | None = None,
     ) -> BacktestResult:
-        profits = [t.profit for t in self.closed_trades]
-        stats = summarize(profits, self.config.initial_capital, self.equity)
-        r = BacktestResult(
-            trades=(
-                self.closed_trades + self.open_trades if self.config.collect_trade_details else None
-            ),
-            closed_trades=(
-                self.closed_trades
-                if self._want("closed_trades") or self.config.collect_trade_details
-                else None
-            ),
-            open_trades=(
-                self.open_trades
-                if self._want("open_trades") or self.config.collect_trade_details
-                else None
-            ),
-            equity_curve=equity_curve,
-            available_outputs=set(),
-            initial_capital=self.config.initial_capital,
-            final_equity=self.equity,
-            bars_processed=len(series),
-            execution_time_ms=ms,
-            status=status,
-            early_stop_reason=reason,
-            config_snapshot=self.config.snapshot(),
-            warnings=self.warnings,
-            errors=self.errors,
-            events=(
-                self.events if self.config.collect_events or self._want("order_events") else None
-            ),
-            data_fingerprint=self.config.data_fingerprint or data_fingerprint(series),
-            strategy_fingerprint=self.config.strategy_fingerprint,
-            runtime_fingerprint=self.config.runtime_fingerprint,
+        return build_backtest_result(
+            self,
+            series,
+            equity_curve,
+            status,
+            reason,
+            ms,
+            strategy,
+            runtime,
         )
-
-        # D5-C: phase-aware trade results — compute only in score mode
-        if self._score_mode and self._bar_phases:
-            phase_trades = build_phase_trades(
-                closed_trades=self.closed_trades,
-                bar_phases=self._bar_phases,
-            )
-            r.phase_trades = phase_trades or None
-        else:
-            r.phase_trades = None
-
-        for k, v in stats.items():
-            setattr(r, k, v)
-        r.max_drawdown = self.max_drawdown
-        r.max_drawdown_percent = self.max_drawdown_percent
-        r.max_runup = self.max_runup
-        r.max_runup_percent = self.max_runup_percent
-
-        # D5-E: score-window metrics — add to score_* fields, keep full metrics intact
-        if self._score_mode and self._score_equity_points:
-            score_metrics = calculate_score_window_metrics(
-                closed_trades=self.closed_trades,
-                score_equity_points=self._score_equity_points,
-                score_start_index=self._score_start_index,
-            )
-            if score_metrics is not None:
-                r.score_net_profit = score_metrics.net_profit
-                r.score_net_profit_percent = score_metrics.net_profit_percent
-                r.score_total_trades = score_metrics.total_trades
-                r.score_winning_trades = score_metrics.winning_trades
-                r.score_losing_trades = score_metrics.losing_trades
-                r.score_win_rate = score_metrics.win_rate
-                r.score_profit_factor = score_metrics.profit_factor
-                r.score_avg_trade = score_metrics.avg_trade
-                r.score_sharpe_ratio = score_metrics.sharpe_ratio
-                r.score_sortino_ratio = score_metrics.sortino_ratio
-                r.score_max_drawdown = score_metrics.max_drawdown
-                r.score_max_drawdown_percent = score_metrics.max_drawdown_percent
-                r.score_max_runup = score_metrics.max_runup
-                r.score_max_runup_percent = score_metrics.max_runup_percent
-                r.bars_processed = score_metrics.bars_processed
-        else:
-            apply_non_score_trade_metrics(
-                r,
-                closed_trades=self.closed_trades,
-                open_trades=self.open_trades,
-                equity_curve=equity_curve,
-            )
-        for metric in self.config.required_metrics:
-            if metric == "sharpe":
-                if r.sharpe_ratio is not None:
-                    r.available_outputs.add("sharpe_ratio")
-            elif metric == "sortino":
-                if r.sortino_ratio is not None:
-                    r.available_outputs.add("sortino_ratio")
-            elif metric not in {"sharpe", "sortino"}:
-                self._diag(
-                    "REQUIRED_METRIC_UNSUPPORTED",
-                    f"required metric {metric} is unsupported",
-                    "error",
-                )
-        if "sharpe" in self.config.required_metrics and r.sharpe_ratio is None:
-            self._diag(
-                "REQUIRED_METRIC_UNAVAILABLE",
-                "sharpe requires at least two non-constant equity returns",
-                "error",
-            )
-        if "sortino" in self.config.required_metrics and r.sortino_ratio is None:
-            self._diag(
-                "REQUIRED_METRIC_UNAVAILABLE",
-                "sortino requires at least one downside return",
-                "error",
-            )
-        # D5-C: max_drawdown already set from score equity in score mode
-        if not self._score_mode:
-            apply_full_window_equity_extremes(
-                r,
-                max_drawdown=self.max_drawdown,
-                max_drawdown_percent=self.max_drawdown_percent,
-                max_runup=self.max_runup,
-                max_runup_percent=self.max_runup_percent,
-                equity_curve=equity_curve,
-            )
-        mark_available_outputs(r)
-        if self.config.export_resume_state:
-            r.resume_state = self._export_resume_state(len(series) - 1, strategy, runtime)
-        if self.config.content_hash_enabled:
-            r.content_hash_value = r.content_hash(
-                self.config.content_hash_include_equity_curve,
-                self.config.content_hash_include_events,
-            )
-
-        # D5-D: populate warmup quality metadata from execution results
-        recommended_raw = (
-            self.config.warmup_metadata.get("recommended_pre_bars_raw", 0)
-            if self.config.warmup_metadata
-            else 0
-        )
-        r.warmup = classify_warmup_quality(
-            bar_phases=self._bar_phases,
-            effective_pre_bars=getattr(self, "_effective_pre_bars", None),
-            recommended_pre_bars_raw=recommended_raw,
-            requested_max_pre_bars=self.config.max_pre_bars,
-        )
-
-        return r
