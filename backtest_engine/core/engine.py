@@ -8,7 +8,6 @@ from backtest_engine.context import StrategyContext, StrategyStateView
 from backtest_engine.errors import (
     BacktestEngineError,
     BarMagnifierUnavailableError,
-    BarValidationError,
     ConfigError,
     ProviderError,
     ResumeUnsupportedError,
@@ -27,11 +26,10 @@ from backtest_engine.models import (
     BacktestResumeState,
     InstrumentModel,
 )
-from backtest_engine.models.timeframe import infer_close_from_timeframe
 from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.broker.slippage import slippage_value
 from backtest_engine.broker.rounding import round_to_step
-from backtest_engine.broker.fill_simulator import build_price_path, limit_reached, stop_reached
+from backtest_engine.broker.fill_simulator import limit_reached, stop_reached
 from backtest_engine.core.deterministic_hash import sha256_obj
 from backtest_engine.core.execution_backend_adapter import run_execution_backend
 from backtest_engine.core.risk_rules import (
@@ -59,6 +57,13 @@ from backtest_engine.core.state_snapshot import (
 from backtest_engine.core.validation import infer_price_tick, validate_bars
 from backtest_engine.core.engine_validation import validate_backtest_config
 from backtest_engine.core.result_builder import build_backtest_result
+from backtest_engine.core.price_path import (
+    infer_parent_close,
+    limit_fill_price,
+    price_path,
+    validate_lower_timeframe_bars,
+    validate_supplied_bar_magnifier_bars,
+)
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
 from backtest_engine.results import (
     BacktestResult,
@@ -760,78 +765,20 @@ class BacktestEngine:
         return True
 
     def _limit_fill_price(self, o: Order, path_price: float, is_open_point: bool) -> float:
-        limit = o.limit_price if o.limit_price is not None else path_price
-        if is_open_point and self.config.limit_gap_fill_policy in ("tradingview", "open_price"):
-            if o.side == "sell" and path_price >= limit:
-                return path_price
-            if o.side == "buy" and path_price <= limit:
-                return path_price
-        return limit
+        return limit_fill_price(self, o, path_price, is_open_point)
 
     def _price_path(self, bar: Bar) -> list[tuple[float, str]]:
-        if self.config.fill_model == "close_only":
-            return [(bar.close, "close")]
-        if not self.config.use_bar_magnifier:
-            return build_price_path(bar)
-        if not self.config.bar_magnifier_lower_tf or self.config.bar_magnifier_bars is None:
-            return build_price_path(bar)
-        try:
-            lower = self.config.bar_magnifier_bars.get(bar.time, ())
-            lower_series = lower if isinstance(lower, BarSeries) else BarSeries.from_bars(lower)
-            self._validate_lower_timeframe_bars(lower_series, bar)
-        except Exception as e:
-            raise BarMagnifierUnavailableError(str(e)) from e
-        if len(lower_series) == 0:
-            raise BarMagnifierUnavailableError("empty lower timeframe bars")
-        path: list[tuple[float, str]] = []
-        for j in range(len(lower_series)):
-            lb = lower_series.get_bar(j)
-            for price, point in build_price_path(lb):
-                path.append((price, f"lower[{j}].{point}"))
-        return path
+        return price_path(self, bar)
 
     def _validate_lower_timeframe_bars(self, lower_series: BarSeries, parent: Bar) -> None:
         """Fail closed on malformed bar-magnifier data before using intrabars."""
-        parent_close = parent.time_close
-        if parent_close is None:
-            parent_close = self._infer_parent_close(parent.time)
-        last_time: int | None = None
-        seen: set[int] = set()
-        for j in range(len(lower_series)):
-            lb = lower_series.get_bar(j)
-            if last_time is not None and lb.time < last_time:
-                raise BarValidationError("lower timeframe bars are not sorted")
-            if lb.time in seen:
-                raise BarValidationError(f"duplicate lower timeframe bar time {lb.time}")
-            seen.add(lb.time)
-            last_time = lb.time
-            if lb.time < parent.time or lb.time >= parent_close:
-                raise BarValidationError("lower timeframe bar outside parent window")
-            if lb.time_close is None:
-                raise BarValidationError("lower timeframe bar missing time_close")
-            if lb.time_close <= lb.time:
-                raise BarValidationError("lower timeframe bar has invalid/open time_close")
-            if lb.time_close > parent_close:
-                raise BarValidationError("lower timeframe bar closes outside parent window")
-            if lb.high < max(lb.open, lb.close, lb.low):
-                raise BarValidationError("lower timeframe bar has invalid OHLC high")
-            if lb.low > min(lb.open, lb.close, lb.high):
-                raise BarValidationError("lower timeframe bar has invalid OHLC low")
+        validate_lower_timeframe_bars(self, lower_series, parent)
 
     def _validate_supplied_bar_magnifier_bars(self, series: BarSeries) -> None:
-        for i in range(len(series)):
-            parent = series.get_bar(i)
-            lower = self.config.bar_magnifier_bars.get(parent.time, ())
-            if not lower:
-                continue
-            lower_series = lower if isinstance(lower, BarSeries) else BarSeries.from_bars(lower)
-            try:
-                self._validate_lower_timeframe_bars(lower_series, parent)
-            except Exception as exc:
-                raise BarMagnifierUnavailableError(str(exc)) from exc
+        validate_supplied_bar_magnifier_bars(self, series)
 
     def _infer_parent_close(self, parent_open: int) -> int:
-        return infer_close_from_timeframe(parent_open, self.config.timeframe)
+        return infer_parent_close(self, parent_open)
 
     def _fill(self, o: Order, bar: Bar, i: int, price: float, point: str) -> None:
         if o.kind == "exit":
