@@ -8,8 +8,6 @@ Tests score-window mode where:
 - warmup/prehistory affects state but not score metrics
 """
 from __future__ import annotations
-
-import pytest
 from backtest_engine.config import BacktestConfig
 from backtest_engine.core.engine import BacktestEngine
 from backtest_engine.models import Bar, BarSeries

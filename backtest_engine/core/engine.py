@@ -28,7 +28,6 @@ from backtest_engine.models import (
     BacktestResumeState,
     InstrumentModel,
 )
-from backtest_engine.models.window import ExecutionWindow
 from backtest_engine.models.timeframe import infer_close_from_timeframe
 from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.broker.slippage import slippage_value
@@ -48,7 +47,7 @@ from backtest_engine.core.score_window import (
     classify_warmup_quality,
 )
 from backtest_engine.core.state_snapshot import BrokerSnapshot, RealtimeBrokerSnapshot, RealtimeExecutionCheckpoint, build_resume_state, clone_state
-from backtest_engine.core.backend_result import required_backend_trade_float, trade_from_backend_trade
+from backtest_engine.core.backend_result import trade_from_backend_trade
 from backtest_engine.core.validation import data_fingerprint, infer_price_tick, validate_bars
 from backtest_engine.core.engine_validation import validate_backtest_config
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
@@ -92,6 +91,14 @@ class BacktestEngine:
         self.max_drawdown_percent = 0.0
         self.max_runup = 0.0
         self.max_runup_percent = 0.0
+        self._allow_long = self.config.allow_long
+        self._allow_short = self.config.allow_short
+        self._early_stop_enabled = self.config.early_stop_enabled
+        self._min_equity_stop = self.config.min_equity_stop
+        self._max_drawdown_stop_percent = self.config.max_drawdown_stop_percent
+        self._max_drawdown_stop_cash: float | None = None
+        self._max_bars_without_trade = self.config.max_bars_without_trade
+        self._max_position_size = self.config.max_position_size
         self.orders: list[Order] = []
         self.fills: list[Fill] = []
         self.closed_trades: list[Trade] = []
@@ -226,27 +233,35 @@ class BacktestEngine:
                     self._score_equity_points.append(point)
                 self._cb("on_equity", point)
             stop_now = False
-            if self.config.early_stop_enabled:
+            if self._early_stop_enabled:
                 if (
-                    self.config.min_equity_stop is not None
-                    and self.equity <= self.config.min_equity_stop
+                    self._min_equity_stop is not None
+                    and self.equity <= self._min_equity_stop
                 ):
                     status = "early_stopped"
                     early_reason = "min_equity_stop"
                     stop_now = True
                 if (
                     not stop_now
-                    and self.config.max_drawdown_stop_percent is not None
-                    and extremes.drawdown_percent >= self.config.max_drawdown_stop_percent
+                    and self._max_drawdown_stop_percent is not None
+                    and extremes.drawdown_percent >= self._max_drawdown_stop_percent
                 ):
                     status = "early_stopped"
                     early_reason = "max_drawdown_stop_percent"
                     stop_now = True
                 if (
                     not stop_now
-                    and self.config.max_bars_without_trade is not None
+                    and self._max_drawdown_stop_cash is not None
+                    and extremes.drawdown >= self._max_drawdown_stop_cash
+                ):
+                    status = "early_stopped"
+                    early_reason = "max_drawdown_stop_cash"
+                    stop_now = True
+                if (
+                    not stop_now
+                    and self._max_bars_without_trade is not None
                     and self.last_trade_bar is not None
-                    and i - self.last_trade_bar >= self.config.max_bars_without_trade
+                    and i - self.last_trade_bar >= self._max_bars_without_trade
                 ):
                     status = "early_stopped"
                     early_reason = "max_bars_without_trade"
@@ -695,6 +710,43 @@ class BacktestEngine:
             side = "buy" if direction == "long" else "sell"
             uses_default_qty = kw.get("qty") is None and kw.get("qty_percent") is None
             qty = self._qty_from_args(kw, None, bar.close)
+            if k == "entry" and not self._entry_direction_allowed(direction):
+                if self.position.direction != "flat" and self.position.direction != direction:
+                    close_direction = self.position.direction
+                    close_side = "sell" if close_direction == "long" else "buy"
+                    self._add_order(
+                        Order(
+                            id=kw["id"],
+                            kind="close",
+                            direction=close_direction,
+                            side=close_side,
+                            position_effect="close",
+                            order_type=typ,
+                            qty=min(qty, abs(self.position.size)),
+                            created_bar_index=i,
+                            created_time=bar.time,
+                            active_from_bar_index=i
+                            if (self.config.process_orders_on_close or recalc_after_fill)
+                            else i + 1,
+                            position_direction=close_direction,
+                            reduce_only=True,
+                            limit_price=limit,
+                            stop_price=stop,
+                            comment=kw.get("comment"),
+                        ),
+                        bar,
+                        i,
+                    )
+                    continue
+                self._diag(
+                    "ORDER_REJECTED_RISK_ALLOW_ENTRY_IN",
+                    "entry rejected by risk.allow_entry_in",
+                    "warning",
+                    i,
+                    bar.time,
+                    kw["id"],
+                )
+                continue
             effect = "open"
             if (
                 k == "entry"
@@ -744,6 +796,8 @@ class BacktestEngine:
             )
             new.qty_is_default = uses_default_qty
             if existing:
+                if not self._risk_allows_order(new, bar, i, existing):
+                    continue
                 existing.qty = new.qty
                 existing.limit_price = new.limit_price
                 existing.stop_price = new.stop_price
@@ -758,31 +812,36 @@ class BacktestEngine:
         for rule in ctx.drain_risk_rules():
             if rule.name == "allow_entry_in":
                 if rule.direction == "long":
-                    self.config.allow_long = True
-                    self.config.allow_short = False
+                    self._allow_long = True
+                    self._allow_short = False
                     continue
                 if rule.direction == "short":
-                    self.config.allow_long = False
-                    self.config.allow_short = True
+                    self._allow_long = False
+                    self._allow_short = True
                     continue
                 if rule.direction == "all":
-                    self.config.allow_long = True
-                    self.config.allow_short = True
+                    self._allow_long = True
+                    self._allow_short = True
                     continue
             elif rule.name == "max_drawdown":
-                self.config.early_stop_enabled = True
+                self._early_stop_enabled = True
                 if rule.value_type == "percent_of_equity":
-                    self.config.max_drawdown_stop_percent = float(rule.value or 0.0)
+                    self._max_drawdown_stop_percent = float(rule.value or 0.0)
                     continue
                 if rule.value_type == "cash":
-                    self.config.min_equity_stop = (
-                        float(self.config.initial_capital) - float(rule.value or 0.0)
-                    )
+                    self._max_drawdown_stop_cash = float(rule.value or 0.0)
                     continue
             elif rule.name == "max_position_size" and rule.value_type == "fixed":
-                self.config.max_position_size = float(rule.value or 0.0)
+                self._max_position_size = float(rule.value or 0.0)
                 continue
             raise UnsupportedRiskRuleError(f"unsupported risk rule: {rule.name}")
+
+    def _entry_direction_allowed(self, direction: str) -> bool:
+        if direction == "long" and not self._allow_long:
+            return False
+        if direction == "short" and not self._allow_short:
+            return False
+        return True
 
     def _qty_from_args(self, kw: dict, current_size: float | None, price: float) -> float:
         if kw.get("qty") is not None:
@@ -809,10 +868,6 @@ class BacktestEngine:
         return abs(q)
 
     def _entry_allowed(self, direction: str) -> bool:
-        if direction == "long" and not self.config.allow_long:
-            return False
-        if direction == "short" and not self.config.allow_short:
-            return False
         if self.position.direction == direction and self.config.pyramiding <= 0:
             return False
         existing_orders = sum(
@@ -825,18 +880,31 @@ class BacktestEngine:
         active = sum(1 for t in self.open_trades if t.direction == direction)
         return active + existing_orders <= self.config.pyramiding
 
-    def _add_order(self, o: Order, bar: Bar, i: int) -> None:
-        if o.qty <= 0:
-            self._diag("ORDER_REJECTED_ZERO_QTY", "order qty is zero", "warning", i, bar.time, o.id)
-            return
+    def _pending_entry_position_delta(self, exclude_order: Order | None = None) -> float:
+        total = 0.0
+        for order in self.orders:
+            if order is exclude_order:
+                continue
+            if (
+                order.kind in {"entry", "order"}
+                and not order.reduce_only
+                and order.direction in {"long", "short"}
+                and order.status in {"pending", "active"}
+            ):
+                total += order.qty if order.direction == "long" else -order.qty
+        return total
+
+    def _risk_allows_order(
+        self, o: Order, bar: Bar, i: int, exclude_order: Order | None = None
+    ) -> bool:
         if (
-            self.config.max_position_size is not None
+            self._max_position_size is not None
             and o.kind in {"entry", "order"}
             and o.direction in {"long", "short"}
         ):
             signed_qty = o.qty if o.direction == "long" else -o.qty
-            projected = self.position.size + signed_qty
-            if abs(projected) > float(self.config.max_position_size):
+            projected = self.position.size + self._pending_entry_position_delta(exclude_order) + signed_qty
+            if abs(projected) > float(self._max_position_size):
                 self._diag(
                     "ORDER_REJECTED_RISK_MAX_POSITION_SIZE",
                     "order rejected by risk.max_position_size",
@@ -845,7 +913,15 @@ class BacktestEngine:
                     bar.time,
                     o.id,
                 )
-                return
+                return False
+        return True
+
+    def _add_order(self, o: Order, bar: Bar, i: int) -> None:
+        if o.qty <= 0:
+            self._diag("ORDER_REJECTED_ZERO_QTY", "order qty is zero", "warning", i, bar.time, o.id)
+            return
+        if not self._risk_allows_order(o, bar, i):
+            return
         if o.active_from_bar_index <= i:
             o.status = "active"
         self.orders.append(o)

@@ -1,7 +1,6 @@
 import pytest
 
 from backtest_engine import BacktestConfig, BacktestEngine, Bar
-from backtest_engine.errors import ConfigError
 
 
 def cfg(**kw):

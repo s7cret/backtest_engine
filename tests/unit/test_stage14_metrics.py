@@ -133,6 +133,42 @@ def test_risk_max_position_size_is_enforced_by_engine():
     )
 
 
+class RiskMaxPositionPendingEntriesStrategy:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.risk_max_position_size(1)
+            self.ctx.entry("first", "long", qty=1)
+            self.ctx.entry("second", "long", qty=1)
+
+
+def test_risk_max_position_size_counts_pending_same_bar_entries():
+    bars = [
+        Bar(1, 100, 100, 100, 100),
+        Bar(2, 100, 100, 100, 100),
+    ]
+    cfg = BacktestConfig(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=2,
+        commission_type="none",
+        process_orders_on_close=True,
+        pyramiding=2,
+    )
+
+    result = BacktestEngine(cfg).run(RiskMaxPositionPendingEntriesStrategy, bars=bars)
+
+    assert result.open_trades is not None
+    assert [trade.entry_id for trade in result.open_trades] == ["first"]
+    assert any(
+        d.code == "ORDER_REJECTED_RISK_MAX_POSITION_SIZE"
+        for d in result.warnings
+    )
+
+
 def test_strategy_context_registers_risk_rules_without_mutating_config():
     cfg = BacktestConfig(symbol="S", timeframe="1D", start_time=1, end_time=1)
     ctx = StrategyContext(cfg)
@@ -183,6 +219,123 @@ def test_risk_allow_entry_direction_is_enforced_by_engine():
 
     assert result.open_trades is not None
     assert [trade.entry_id for trade in result.open_trades] == ["allowed_short"]
+
+
+class RiskAllowEntryCloseOnlyStrategy:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("long", "long", qty=2)
+        if bar_index == 1:
+            self.ctx.risk_allow_entry_in("long")
+            self.ctx.entry("short_reduces", "short", qty=1)
+
+
+def test_risk_allow_entry_in_opposite_direction_reduces_existing_position():
+    bars = [
+        Bar(1, 100, 100, 100, 100),
+        Bar(2, 100, 100, 100, 100),
+        Bar(3, 100, 100, 100, 100),
+    ]
+    cfg = BacktestConfig(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=3,
+        commission_type="none",
+        process_orders_on_close=True,
+    )
+
+    result = BacktestEngine(cfg).run(RiskAllowEntryCloseOnlyStrategy, bars=bars)
+
+    assert result.closed_trades is not None
+    assert [(trade.entry_id, trade.exit_id, trade.qty) for trade in result.closed_trades] == [
+        ("long", "short_reduces", 1.0)
+    ]
+    assert result.open_trades is not None
+    assert [(trade.entry_id, trade.direction, trade.qty) for trade in result.open_trades] == [
+        ("long", "long", 1.0)
+    ]
+
+
+class RiskStateMutationStrategy:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.risk_allow_entry_in("short")
+            self.ctx.risk_max_drawdown(1, "percent_of_equity")
+            self.ctx.risk_max_position_size(1)
+
+
+class PlainLongStrategy:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("long", "long", qty=2)
+
+
+def test_engine_risk_rules_do_not_mutate_shared_config_between_runs():
+    bars = [
+        Bar(1, 100, 100, 100, 100),
+        Bar(2, 100, 100, 100, 100),
+    ]
+    cfg = BacktestConfig(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=2,
+        commission_type="none",
+        process_orders_on_close=True,
+    )
+
+    BacktestEngine(cfg).run(RiskStateMutationStrategy, bars=bars)
+    result = BacktestEngine(cfg).run(PlainLongStrategy, bars=bars)
+
+    assert cfg.allow_long is True
+    assert cfg.allow_short is True
+    assert cfg.early_stop_enabled is False
+    assert cfg.max_drawdown_stop_percent is None
+    assert cfg.max_position_size is None
+    assert result.open_trades is not None
+    assert [(trade.entry_id, trade.qty) for trade in result.open_trades] == [("long", 2.0)]
+
+
+class RiskCashDrawdownStrategy:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.risk_max_drawdown(5, "cash")
+            self.ctx.entry("long", "long", qty=1)
+
+
+def test_risk_max_drawdown_cash_uses_peak_equity_not_initial_capital():
+    bars = [
+        Bar(1, 100, 100, 100, 100),
+        Bar(2, 100, 120, 100, 120),
+        Bar(3, 120, 120, 114, 114),
+        Bar(4, 114, 114, 114, 114),
+    ]
+    cfg = BacktestConfig(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=4,
+        commission_type="none",
+        process_orders_on_close=True,
+    )
+
+    result = BacktestEngine(cfg).run(RiskCashDrawdownStrategy, bars=bars)
+
+    assert result.status == "early_stopped"
+    assert result.early_stop_reason == "max_drawdown_stop_cash"
 
 
 class UnsupportedIntradayRiskStrategy:
