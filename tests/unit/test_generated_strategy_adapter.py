@@ -9,6 +9,8 @@ from backtest_engine.adapters.generated_strategy import (  # noqa: E402
     UnsupportedGeneratedStrategySemantics,
     make_generated_strategy_adapter,
 )
+from backtest_engine.context import EntryOrderPayload, ExitPayload  # noqa: E402
+from backtest_engine.context.strategy_context import StrategyContext  # noqa: E402
 from backtest_engine.models import Bar  # noqa: E402
 
 
@@ -50,6 +52,22 @@ def test_generated_strategy_adapter_runs_orders_through_backtest_engine() -> Non
     assert result.closed_trades is not None
     assert result.closed_trades[0].entry_bar_index == 2
     assert result.closed_trades[0].exit_bar_index == 5
+
+
+def test_strategy_context_buffers_typed_command_payloads() -> None:
+    ctx = StrategyContext(BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=1))
+
+    ctx.entry("L", "long", qty=2.0)
+    ctx.exit("XL", from_entry="L", profit=3.0)
+
+    commands = ctx.buffer.drain()
+    assert isinstance(commands[0].payload, EntryOrderPayload)
+    assert commands[0].payload.id == "L"
+    assert commands[0].payload.direction == "long"
+    assert commands[0].kwargs["qty"] == 2.0
+    assert isinstance(commands[1].payload, ExitPayload)
+    assert commands[1].payload.from_entry == "L"
+    assert commands[1].kwargs["profit"] == 3.0
 
 
 def test_generated_strategy_adapter_preserves_score_window_phase_metrics() -> None:
