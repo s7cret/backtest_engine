@@ -39,6 +39,7 @@ from backtest_engine.core.risk_rules import (
     max_position_size_allows,
     pending_entry_position_delta,
 )
+from backtest_engine.core.resume_state import export_resume_state, restore_resume_state
 from backtest_engine.core.strategy_command_processor import flush_strategy_commands
 from backtest_engine.core.realtime import (
     BarTickSlice,
@@ -51,10 +52,8 @@ from backtest_engine.core.score_window import (
     build_score_window_plan,
 )
 from backtest_engine.core.state_snapshot import (
-    BrokerSnapshot,
     RealtimeBrokerSnapshot,
     RealtimeExecutionCheckpoint,
-    build_resume_state,
     clone_state,
 )
 from backtest_engine.core.validation import infer_price_tick, validate_bars
@@ -1480,97 +1479,12 @@ class BacktestEngine:
     def _restore_resume_state(
         self, resume_state: BacktestResumeState, strategy: Any, runtime: Any, ctx: StrategyContext
     ) -> int:
-        if resume_state.broker_state is None:
-            raise ResumeUnsupportedError(
-                "resume_state is missing broker_state; use BacktestEngine export_resume_state or provide a compatible snapshot"
-            )
-        expected_hash = self._config_hash()
-        if resume_state.config_snapshot_hash != expected_hash:
-            msg = "resume state config hash does not match current config snapshot"
-            if self.config.resume_validation_policy == "strict":
-                raise ResumeUnsupportedError(msg)
-            self._diag("RESUME_CONFIG_MISMATCH", msg, "warning")
-        broker = resume_state.broker_state
-        if not isinstance(broker, BrokerSnapshot):
-            raise ResumeUnsupportedError(
-                "resume_state.broker_state must be a BrokerSnapshot from core.state_snapshot"
-            )
-        self.cash = broker.cash
-        self.equity = broker.equity
-        self.peak_equity = broker.peak_equity
-        self.max_drawdown = broker.max_drawdown
-        self.max_drawdown_percent = broker.max_drawdown_percent
-        self.trough_equity = broker.trough_equity
-        self.max_runup = broker.max_runup
-        self.max_runup_percent = broker.max_runup_percent
-        self.position = broker.position
-        self.orders = broker.orders
-        self.fills = broker.fills
-        self.closed_trades = broker.closed_trades
-        self.open_trades = broker.open_trades
-        self.last_trade_bar = broker.last_trade_bar
-        self.state = StrategyStateView(
-            initial_capital=self.config.initial_capital,
-            cash=self.cash,
-            equity=self.equity,
-            _open_trades_ref=self.open_trades,
-            _closed_trades_ref=self.closed_trades,
-        )
-        ctx.state = self.state
-        self._update_state()
-        if resume_state.runtime_state is not None:
-            restore = getattr(runtime, "restore_state", None)
-            if not callable(restore):
-                raise ResumeUnsupportedError(
-                    "runtime_state is present but runtime does not implement restore_state(state)"
-                )
-            restore(resume_state.runtime_state)
-        if resume_state.strategy_state is not None:
-            restore = getattr(strategy, "restore_state", None)
-            if not callable(restore):
-                raise ResumeUnsupportedError(
-                    "strategy_state is present but strategy does not implement restore_state(state)"
-                )
-            restore(resume_state.strategy_state)
-        return max(0, resume_state.bar_index + 1)
+        return restore_resume_state(self, resume_state, strategy, runtime, ctx)
 
     def _export_resume_state(
         self, bar_index: int, strategy: Any | None = None, runtime: Any | None = None
     ) -> BacktestResumeState:
-        strategy_export = getattr(strategy, "export_state", None) if strategy is not None else None
-        runtime_export = getattr(runtime, "export_state", None) if runtime is not None else None
-        strategy_state = strategy_export() if callable(strategy_export) else None
-        runtime_state = runtime_export() if callable(runtime_export) else None
-        if strategy is not None and strategy_state is None:
-            self._diag(
-                "RESUME_STRATEGY_STATE_UNAVAILABLE",
-                "strategy does not implement export_state(); resume snapshot contains engine/runtime state only",
-                "warning",
-            )
-        broker = BrokerSnapshot(
-            self.cash,
-            self.equity,
-            self.peak_equity,
-            self.max_drawdown,
-            self.max_drawdown_percent,
-            self.trough_equity,
-            self.max_runup,
-            self.max_runup_percent,
-            self.position,
-            self.orders,
-            self.fills,
-            self.closed_trades,
-            self.open_trades,
-            self.last_trade_bar,
-        )
-        return build_resume_state(
-            bar_index=bar_index,
-            config_snapshot_hash=self._config_hash(),
-            broker_state=broker,
-            strategy_state=strategy_state,
-            runtime_state=runtime_state,
-            metadata={"resume_contract": "engine-broker-snapshot-v1"},
-        )
+        return export_resume_state(self, bar_index, strategy, runtime)
 
     def _result(
         self,
