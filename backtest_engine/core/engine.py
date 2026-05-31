@@ -25,6 +25,7 @@ from backtest_engine.models import (
     InstrumentModel,
 )
 from backtest_engine.broker.rounding import round_to_step
+from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.core.deterministic_hash import sha256_obj
 from backtest_engine.core.execution_backend_adapter import run_execution_backend
 from backtest_engine.core.fill_execution import execute_fill
@@ -512,9 +513,16 @@ class BacktestEngine:
             )
         )
         for trade in self.open_trades:
+            exit_commission = calculate_commission(
+                price,
+                trade.qty,
+                self.config.commission_type,
+                self.config.commission_value,
+            )
             trade.profit = (
                 self.instrument.pnl(trade.entry_price, price, trade.qty, trade.direction)
                 - trade.commission_entry
+                - exit_commission
             )
         self.equity = self.cash + self.position.open_profit
 
