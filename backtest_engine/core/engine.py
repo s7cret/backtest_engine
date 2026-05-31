@@ -56,6 +56,7 @@ from backtest_engine.core.state_snapshot import (
 from backtest_engine.core.validation import infer_price_tick, validate_bars
 from backtest_engine.core.engine_validation import validate_backtest_config
 from backtest_engine.core.result_builder import build_backtest_result
+from backtest_engine.core.oca import apply_oca
 from backtest_engine.core.price_path import (
     infer_parent_close,
     limit_fill_price,
@@ -876,36 +877,7 @@ class BacktestEngine:
         return trade_excursion_values(tr, bar, self.instrument)
 
     def _apply_oca(self, o: Order, bar: Bar, i: int) -> None:
-        if not o.oca_name:
-            return
-        for other in self.orders:
-            if (
-                other is not o
-                and other.status in ("pending", "active")
-                and other.oca_name == o.oca_name
-            ):
-                if o.oca_type == "cancel":
-                    other.status = "cancelled"
-                    self._cb("on_order_cancelled", other)
-                    self._event(
-                        "ORDER_CANCELLED", f"OCA cancelled order {other.id}", i, bar.time, other.id
-                    )
-                elif o.oca_type == "reduce":
-                    other.qty = max(0.0, other.qty - o.qty)
-                    if other.qty <= 0:
-                        other.status = "cancelled"
-                        self._cb("on_order_cancelled", other)
-                        self._event(
-                            "ORDER_CANCELLED",
-                            f"OCA reduced order {other.id} to zero",
-                            i,
-                            bar.time,
-                            other.id,
-                        )
-                    else:
-                        self._event(
-                            "ORDER_MODIFIED", f"OCA reduced order {other.id}", i, bar.time, other.id
-                        )
+        apply_oca(self, o, bar, i)
 
     def _force_close(self, bar: Bar, i: int) -> None:
         o = Order(
