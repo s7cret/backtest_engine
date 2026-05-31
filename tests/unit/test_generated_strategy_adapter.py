@@ -143,6 +143,110 @@ def test_generated_strategy_adapter_tracks_strategy_scalar_history() -> None:
     assert GeneratedClosedTradesChangeStrategy.events == [(5, 1.0)]
 
 
+class GeneratedReadsTradeAccessors:
+    open_seen: list[tuple[float, float, float, int]] = []
+    closed_seen: list[tuple[float, float, float, float, float, int, int]] = []
+
+    def __init__(self, params=None, runtime=None):
+        self.params = params or {}
+        self.rt = runtime
+        self.ctx = None
+
+    def _process_bar(self, bar):
+        del bar
+        idx = self.rt.bar_index_series.current
+        if idx == 1:
+            self.ctx.entry("L", "long", qty=2)
+        if self.ctx.opentrades > 0:
+            trade_idx = self.ctx.opentrades - 1
+            self.open_seen.append(
+                (
+                    self.ctx.opentrades_entry_price(trade_idx),
+                    self.ctx.opentrades_size(trade_idx),
+                    self.ctx.opentrades_profit(trade_idx),
+                    self.ctx.opentrades_entry_bar_index(trade_idx),
+                )
+            )
+        if idx == 4:
+            self.ctx.close("L")
+        if self.ctx.closedtrades > 0:
+            trade_idx = self.ctx.closedtrades - 1
+            self.closed_seen.append(
+                (
+                    self.ctx.closedtrades_profit(trade_idx),
+                    self.ctx.closedtrades_commission(trade_idx),
+                    self.ctx.closedtrades_size(trade_idx),
+                    self.ctx.closedtrades_entry_price(trade_idx),
+                    self.ctx.closedtrades_exit_price(trade_idx),
+                    self.ctx.closedtrades_entry_bar_index(trade_idx),
+                    self.ctx.closedtrades_exit_bar_index(trade_idx),
+                )
+            )
+
+
+def test_generated_strategy_adapter_exposes_trade_accessors() -> None:
+    GeneratedReadsTradeAccessors.open_seen = []
+    GeneratedReadsTradeAccessors.closed_seen = []
+    strategy_class = make_generated_strategy_adapter(GeneratedReadsTradeAccessors)
+    bars = [Bar(i, 100 + i, 101 + i, 99 + i, 100 + i, 1.0) for i in range(7)]
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=6,
+        commission_type="none",
+        commission_value=0.0,
+        default_qty_type="fixed",
+        default_qty_value=1.0,
+        force_close_on_end=False,
+    )
+
+    result = BacktestEngine(config).run(strategy_class, bars=bars)
+
+    assert result.status == "completed"
+    assert GeneratedReadsTradeAccessors.open_seen[-1] == pytest.approx((102.0, 2.0, 4.0, 2))
+    assert GeneratedReadsTradeAccessors.closed_seen[-1] == pytest.approx((6.0, 0.0, 2.0, 102.0, 105.0, 2, 5))
+
+
+class GeneratedRecordsPlots:
+    def __init__(self, params=None, runtime=None):
+        self.params = params or {}
+        self.rt = runtime
+        self.ctx = None
+
+    def _process_bar(self, bar):
+        del bar
+        self.rt.plot_recorder.record_plot(
+            bar_time=self.rt.current_bar.time,
+            bar_index=self.rt.bar_index,
+            value=self.rt.close.current,
+            title="close_plot",
+        )
+
+
+def test_generated_strategy_adapter_exports_plot_records() -> None:
+    strategy_class = make_generated_strategy_adapter(GeneratedRecordsPlots)
+    bars = [Bar(i, 100 + i, 101 + i, 99 + i, 100 + i, 1.0) for i in range(3)]
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=2,
+        commission_type="none",
+        commission_value=0.0,
+    )
+
+    result = BacktestEngine(config).run(strategy_class, bars=bars)
+
+    assert result.status == "completed"
+    assert result.plots == [
+        (0, -1, 100, "close_plot"),
+        (1000, 0, 101, "close_plot"),
+        (2000, 1, 102, "close_plot"),
+    ]
+    assert "plots" in result.available_outputs
+
+
 class _Declaration:
     calc_on_order_fills = True
     calc_on_every_tick = False

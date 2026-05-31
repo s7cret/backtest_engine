@@ -511,6 +511,11 @@ class BacktestEngine:
                 self.position.avg_price, price, abs(self.position.size), self.position.direction
             )
         )
+        for trade in self.open_trades:
+            trade.profit = (
+                self.instrument.pnl(trade.entry_price, price, trade.qty, trade.direction)
+                - trade.commission_entry
+            )
         self.equity = self.cash + self.position.open_profit
 
     def _update_intrabar_drawdown(self, bar: Bar) -> None:
@@ -566,7 +571,7 @@ class BacktestEngine:
         self.state.cash = self.cash
         self.state.equity = self.equity
         self.state.open_profit = self.position.open_profit
-        self.state.net_profit = self.equity - self.config.initial_capital
+        self.state.net_profit = self.position.realized_profit
         self.state.gross_profit = sum(t.profit for t in self.closed_trades if t.profit > 0)
         self.state.gross_loss = abs(sum(t.profit for t in self.closed_trades if t.profit < 0))
         self.state.max_drawdown = self.max_drawdown

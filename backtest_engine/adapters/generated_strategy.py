@@ -30,25 +30,25 @@ class UnsupportedGeneratedStrategySemantics(GeneratedStrategyBridgeError):
 class _BridgeScalarSeries:
     """Mutable scalar with Pine history semantics for strategy-owned fields."""
 
-    def __init__(self, value: float | int = 0.0) -> None:
-        self._current: float | int = value
-        self._history: list[float | int] = []
+    def __init__(self, value: Any = 0.0) -> None:
+        self._current: Any = value
+        self._history: list[Any] = []
 
     @property
-    def current(self) -> float | int:
+    def current(self) -> Any:
         return self._current
 
     @property
     def committed_length(self) -> int:
         return len(self._history)
 
-    def set_current(self, value: float | int) -> None:
+    def set_current(self, value: Any) -> None:
         self._current = value
 
     def commit_current(self) -> None:
         self._history.append(self._current)
 
-    def __getitem__(self, offset: int) -> float | int:
+    def __getitem__(self, offset: int) -> Any:
         if offset < 0:
             raise IndexError("negative history offsets are not supported")
         if offset == 0:
@@ -170,7 +170,9 @@ class _BridgeStrategyContext:
         self.grossprofit.set_current(float(state.gross_profit))
         self.grossloss.set_current(float(state.gross_loss))
         self.position_size.set_current(float(state.position_size))
-        self.position_avg_price.set_current(float(state.position_avg_price or 0.0))
+        self.position_avg_price.set_current(
+            _pine_na() if state.position_avg_price is None else float(state.position_avg_price)
+        )
         self.opentrades.set_current(int(state.open_trades))
         self.closedtrades.set_current(int(state.closed_trades))
         self.max_drawdown.set_current(float(state.max_drawdown))
@@ -205,11 +207,83 @@ class _BridgeStrategyContext:
     def closedtrades_max_drawdown(self, index: int | float) -> float:
         return self._engine_ctx.state.closedtrades_max_drawdown(int(index))
 
+    def closedtrades_entry_id(self, index: int | float) -> str:
+        return self._engine_ctx.state.closedtrades_entry_id(int(index))
+
+    def closedtrades_exit_id(self, index: int | float) -> str | None:
+        return self._engine_ctx.state.closedtrades_exit_id(int(index))
+
+    def closedtrades_entry_price(self, index: int | float) -> float:
+        return self._engine_ctx.state.closedtrades_entry_price(int(index))
+
+    def closedtrades_exit_price(self, index: int | float) -> float | None:
+        return self._engine_ctx.state.closedtrades_exit_price(int(index))
+
+    def closedtrades_entry_time(self, index: int | float) -> int:
+        return self._engine_ctx.state.closedtrades_entry_time(int(index))
+
+    def closedtrades_exit_time(self, index: int | float) -> int | None:
+        return self._engine_ctx.state.closedtrades_exit_time(int(index))
+
+    def closedtrades_commission(self, index: int | float) -> float:
+        return self._engine_ctx.state.closedtrades_commission(int(index))
+
+    def closedtrades_size(self, index: int | float) -> float:
+        return self._engine_ctx.state.closedtrades_size(int(index))
+
+    def closedtrades_qty(self, index: int | float) -> float:
+        return self._engine_ctx.state.closedtrades_qty(int(index))
+
+    def closedtrades_side(self, index: int | float) -> str:
+        return self._engine_ctx.state.closedtrades_side(int(index))
+
+    def closedtrades_profit(self, index: int | float) -> float:
+        return self._engine_ctx.state.closedtrades_profit(int(index))
+
+    def closedtrades_profit_percent(self, index: int | float) -> float:
+        return self._engine_ctx.state.closedtrades_profit_percent(int(index))
+
+    def closedtrades_entry_bar_index(self, index: int | float) -> int:
+        return self._engine_ctx.state.closedtrades_entry_bar_index(int(index))
+
+    def closedtrades_exit_bar_index(self, index: int | float) -> int | None:
+        return self._engine_ctx.state.closedtrades_exit_bar_index(int(index))
+
     def opentrades_max_runup(self, index: int | float) -> float:
         return self._engine_ctx.state.opentrades_max_runup(int(index))
 
     def opentrades_max_drawdown(self, index: int | float) -> float:
         return self._engine_ctx.state.opentrades_max_drawdown(int(index))
+
+    def opentrades_entry_id(self, index: int | float) -> str:
+        return self._engine_ctx.state.opentrades_entry_id(int(index))
+
+    def opentrades_entry_price(self, index: int | float) -> float:
+        return self._engine_ctx.state.opentrades_entry_price(int(index))
+
+    def opentrades_entry_time(self, index: int | float) -> int:
+        return self._engine_ctx.state.opentrades_entry_time(int(index))
+
+    def opentrades_entry_bar_index(self, index: int | float) -> int:
+        return self._engine_ctx.state.opentrades_entry_bar_index(int(index))
+
+    def opentrades_commission(self, index: int | float) -> float:
+        return self._engine_ctx.state.opentrades_commission(int(index))
+
+    def opentrades_size(self, index: int | float) -> float:
+        return self._engine_ctx.state.opentrades_size(int(index))
+
+    def opentrades_qty(self, index: int | float) -> float:
+        return self._engine_ctx.state.opentrades_qty(int(index))
+
+    def opentrades_side(self, index: int | float) -> str:
+        return self._engine_ctx.state.opentrades_side(int(index))
+
+    def opentrades_profit(self, index: int | float) -> float:
+        return self._engine_ctx.state.opentrades_profit(int(index))
+
+    def opentrades_profit_percent(self, index: int | float) -> float:
+        return self._engine_ctx.state.opentrades_profit_percent(int(index))
 
     def risk_allow_entry_in(self, direction: str) -> None:
         self._engine_ctx.risk_allow_entry_in(direction)
@@ -480,6 +554,14 @@ def _make_pine_runtime(options: GeneratedStrategyAdapterOptions) -> Any:
         timeframe=TimeframeInfo.from_string(options.timeframe),
         config=RuntimeConfig(),
     )
+
+
+def _pine_na() -> Any:
+    try:
+        from pinelib.core import na
+    except ImportError as exc:  # pragma: no cover - depends on optional install state
+        raise GeneratedStrategyBridgeError("PineLib is required for Pine na values") from exc
+    return na
 
 
 def _pine_timestamp(value: int | None) -> int | None:

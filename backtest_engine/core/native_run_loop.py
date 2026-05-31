@@ -124,7 +124,7 @@ def run_native_strategy(
                 engine._cb("on_order_activated", order)
         runtime.begin_bar(bar, i)
         engine._process_bar_fills(strategy, ctx, bar, i, open_only=True)
-        engine._update_open_profit(bar.open)
+        engine._update_open_profit(bar.close)
         engine._update_state()
         engine._call_strategy(strategy, bar, i)
         engine._flush(ctx, bar, i)

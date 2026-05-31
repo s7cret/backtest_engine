@@ -44,11 +44,31 @@ class StrategyStateView:
     def opentrades_entry_price(self, index: int) -> float:
         return self._open(index).entry_price
 
+    def opentrades_entry_bar_index(self, index: int) -> int:
+        return self._open(index).entry_bar_index
+
+    def opentrades_entry_time(self, index: int) -> int:
+        return self._open(index).entry_time
+
+    def opentrades_commission(self, index: int) -> float:
+        trade = self._open(index)
+        return trade.commission_entry + trade.commission_exit
+
     def opentrades_size(self, index: int) -> float:
+        trade = self._open(index)
+        return trade.qty if trade.direction == "long" else -trade.qty
+
+    def opentrades_qty(self, index: int) -> float:
         return self._open(index).qty
+
+    def opentrades_side(self, index: int) -> str:
+        return self._open(index).direction
 
     def opentrades_profit(self, index: int) -> float:
         return self._open(index).profit
+
+    def opentrades_profit_percent(self, index: int) -> float:
+        return self._open(index).profit_percent
 
     def opentrades_max_runup(self, index: int) -> float:
         value = self._open(index).max_runup
@@ -68,8 +88,37 @@ class StrategyStateView:
     def closedtrades_exit_id(self, index: int) -> str | None:
         return self._closed(index).exit_id
 
+    def closedtrades_entry_price(self, index: int) -> float:
+        return self._closed(index).entry_price
+
+    def closedtrades_exit_price(self, index: int) -> float | None:
+        return self._closed(index).exit_price
+
+    def closedtrades_entry_time(self, index: int) -> int:
+        return self._closed(index).entry_time
+
+    def closedtrades_exit_time(self, index: int) -> int | None:
+        return self._closed(index).exit_time
+
+    def closedtrades_commission(self, index: int) -> float:
+        trade = self._closed(index)
+        return trade.commission_entry + trade.commission_exit
+
+    def closedtrades_size(self, index: int) -> float:
+        trade = self._closed(index)
+        return trade.qty if trade.direction == "long" else -trade.qty
+
+    def closedtrades_qty(self, index: int) -> float:
+        return self._closed(index).qty
+
+    def closedtrades_side(self, index: int) -> str:
+        return self._closed(index).direction
+
     def closedtrades_profit(self, index: int) -> float:
         return self._closed(index).profit
+
+    def closedtrades_profit_percent(self, index: int) -> float:
+        return self._closed(index).profit_percent
 
     def closedtrades_max_runup(self, index: int) -> float:
         value = self._closed(index).max_runup

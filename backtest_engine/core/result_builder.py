@@ -100,6 +100,10 @@ def build_backtest_result(
             max_runup_percent=engine.max_runup_percent,
             equity_curve=equity_curve,
         )
+    plots = _strategy_plot_records(strategy, runtime)
+    if plots is not None:
+        result.plots = plots
+        result.available_outputs.add("plots")
     mark_available_outputs(result)
     if engine.config.export_resume_state:
         result.resume_state = engine._export_resume_state(len(series) - 1, strategy, runtime)
@@ -122,6 +126,18 @@ def build_backtest_result(
     )
 
     return result
+
+
+def _strategy_plot_records(strategy: Any | None, runtime: Any | None) -> Any | None:
+    """Return plot records captured by Pine-backed native strategies, if any."""
+
+    for candidate in (runtime, getattr(strategy, "_pine_runtime", None)):
+        recorder = getattr(candidate, "plot_recorder", None)
+        if recorder is None:
+            continue
+        get_records = getattr(recorder, "get_records", None)
+        return get_records() if callable(get_records) else recorder
+    return None
 
 
 def _apply_score_window_metrics(engine: Any, result: BacktestResult) -> None:
