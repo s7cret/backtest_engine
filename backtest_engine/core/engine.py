@@ -58,6 +58,7 @@ from backtest_engine.core.engine_validation import validate_backtest_config
 from backtest_engine.core.result_builder import build_backtest_result
 from backtest_engine.core.oca import apply_oca
 from backtest_engine.core.margin_call import maybe_margin_call
+from backtest_engine.core.native_run_loop import run_native_strategy
 from backtest_engine.core.price_path import (
     infer_parent_close,
     limit_fill_price,
@@ -72,14 +73,6 @@ from backtest_engine.results import (
     equity_move_from_baseline,
     update_equity_extremes,
 )
-
-
-class _NoopRuntime:
-    def begin_bar(self, bar: Bar, bar_index: int) -> None:
-        pass
-
-    def end_bar(self) -> None:
-        pass
 
 
 class BacktestEngine:
@@ -183,111 +176,14 @@ class BacktestEngine:
                 effective_pre_bars or 0,
                 runtime_kwargs,
             )
-        ctx = StrategyContext(self.config, self.state)
-        runtime = self.config.runtime or _NoopRuntime()
-        try:
-            strategy = strategy_class(params=params, runtime=runtime, ctx=ctx)
-        except TypeError:
-            strategy = strategy_class(params, runtime)
-            strategy.ctx = ctx
-        start_index = 0
-        if resume_state is not None:
-            start_index = self._restore_resume_state(resume_state, strategy, runtime, ctx)
-        equity_curve = (
-            [] if self._want("equity_curve") or self.config.collect_equity_curve else None
-        )
-        status = "completed"
-        early_reason = None
-        for i in range(start_index, len(series)):
-            bar = series.get_bar(i)
-            self._cb("on_bar_start", bar, i)
-            for o in self.orders:
-                if o.status == "pending" and o.active_from_bar_index <= i:
-                    o.status = "active"
-                    self._event("ORDER_ACTIVATED", f"order {o.id} activated", i, bar.time, o.id)
-                    self._cb("on_order_activated", o)
-            runtime.begin_bar(bar, i)
-            self._process_bar_fills(strategy, ctx, bar, i, open_only=True)
-            self._update_open_profit(bar.open)
-            self._update_state()
-            self._call_strategy(strategy, bar, i)
-            self._flush(ctx, bar, i)
-            self._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
-            self._update_intrabar_drawdown(bar)
-            self._update_open_profit(bar.close)
-            self._update_trade_excursions(bar)
-            self._update_state()
-            extremes = self._update_equity_extremes(self.equity)
-            self._update_state()
-            if equity_curve is not None:
-                point = EquityPoint(
-                    i,
-                    bar.time,
-                    self.equity,
-                    self.cash,
-                    self.position.size,
-                    self.position.avg_price if self.position.direction != "flat" else None,
-                    self.position.open_profit,
-                    self.position.realized_profit,
-                    extremes.drawdown,
-                    extremes.drawdown_percent,
-                    extremes.runup,
-                    extremes.runup_percent,
-                )
-                equity_curve.append(point)
-                if self._score_mode and i >= self._score_start_index:
-                    self._score_equity_points.append(point)
-                self._cb("on_equity", point)
-            stop_now = False
-            if self._early_stop_enabled:
-                if self._min_equity_stop is not None and self.equity <= self._min_equity_stop:
-                    status = "early_stopped"
-                    early_reason = "min_equity_stop"
-                    stop_now = True
-                if (
-                    not stop_now
-                    and self._max_drawdown_stop_percent is not None
-                    and extremes.drawdown_percent >= self._max_drawdown_stop_percent
-                ):
-                    status = "early_stopped"
-                    early_reason = "max_drawdown_stop_percent"
-                    stop_now = True
-                if (
-                    not stop_now
-                    and self._max_drawdown_stop_cash is not None
-                    and extremes.drawdown >= self._max_drawdown_stop_cash
-                ):
-                    status = "early_stopped"
-                    early_reason = "max_drawdown_stop_cash"
-                    stop_now = True
-                if (
-                    not stop_now
-                    and self._max_bars_without_trade is not None
-                    and self.last_trade_bar is not None
-                    and i - self.last_trade_bar >= self._max_bars_without_trade
-                ):
-                    status = "early_stopped"
-                    early_reason = "max_bars_without_trade"
-                    stop_now = True
-            runtime.end_bar()
-            self._cb("on_bar_end", bar, i, self.state)
-            if stop_now:
-                break
-        finalize = getattr(strategy, "_finalize", None)
-        if callable(finalize):
-            finalize()
-        if self.config.force_close_on_end and self.position.direction != "flat" and len(series):
-            self._force_close(series.get_bar(len(series) - 1), len(series) - 1)
-        result = self._result(
+        return run_native_strategy(
+            self,
+            strategy_class,
+            params,
             series,
-            equity_curve,
-            status,
-            early_reason,
-            (time.perf_counter() - t0) * 1000,
-            strategy,
-            runtime,
+            t0,
+            resume_state,
         )
-        return result
 
     def process_next_bar(
         self,

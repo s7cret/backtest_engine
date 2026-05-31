@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, cast
 
 from backtest_engine.config import BacktestConfig
 from backtest_engine.core.backend_result import trade_from_backend_trade
 from backtest_engine.errors import ConfigError
+from backtest_engine.execution_backends.base import BackendExecutionResult, ExecutionBackend
 from backtest_engine.models import BarSeries, Diagnostic, EquityPoint, Trade
 from backtest_engine.results import equity_point, summarize_equity_curve
 from backtest_engine.results.result import BacktestResult
 
 
-def resolve_execution_backend(execution_backend: Any) -> Any:
+def resolve_execution_backend(execution_backend: ExecutionBackend | str) -> ExecutionBackend:
     if isinstance(execution_backend, str):
         if execution_backend != "pine_runtime":
             raise ConfigError(f"unknown execution backend: {execution_backend}")
@@ -21,16 +22,16 @@ def resolve_execution_backend(execution_backend: Any) -> Any:
     return execution_backend
 
 
-def ensure_executable_backend(execution_backend: Any) -> Any:
+def ensure_executable_backend(execution_backend: ExecutionBackend | str) -> ExecutionBackend:
     backend = resolve_execution_backend(execution_backend)
     execute = getattr(backend, "execute", None)
     if not callable(execute):
         raise ConfigError("execution_backend must provide execute(...)")
-    return backend
+    return cast(ExecutionBackend, backend)
 
 
 def backend_equity_curve(
-    backend_result: Any,
+    backend_result: BackendExecutionResult,
     *,
     initial_capital: float,
 ) -> tuple[list[EquityPoint], list[EquityPoint]]:
@@ -38,43 +39,40 @@ def backend_equity_curve(
     score_equity_points: list[EquityPoint] = []
     peak = initial_capital
     trough = initial_capital
-    for idx, item in enumerate(getattr(backend_result, "bar_results", []) or []):
-        equity = getattr(item, "equity", None)
+    for idx, item in enumerate(backend_result.bar_results):
+        equity = item.equity
         if equity is None:
             continue
         equity = float(equity)
         peak = max(peak, equity)
         trough = min(trough, equity)
-        open_profit = float(getattr(item, "openprofit", 0.0) or 0.0)
-        netprofit = float(getattr(item, "netprofit", 0.0) or 0.0)
+        open_profit = float(item.openprofit or 0.0)
+        netprofit = float(item.netprofit or 0.0)
         point = equity_point(
             bar_index=idx,
-            time=int(getattr(item, "time")),
+            time=int(item.time),
             equity=equity,
             cash=equity - open_profit,
-            position_size=float(getattr(item, "position_size", 0.0) or 0.0),
-            position_avg_price=getattr(item, "position_avg_price", None),
+            position_size=float(item.position_size or 0.0),
+            position_avg_price=item.position_avg_price,
             open_profit=open_profit,
             realized_profit=netprofit,
             peak=peak,
             trough=trough,
         )
         equity_curve.append(point)
-        if getattr(item, "phase", "score") == "score":
+        if item.phase == "score":
             score_equity_points.append(point)
     return equity_curve, score_equity_points
 
 
-def backend_trades(backend_result: Any) -> list[Trade]:
-    return [
-        trade_from_backend_trade(trade, idx)
-        for idx, trade in enumerate(getattr(backend_result, "trades", []) or [])
-    ]
+def backend_trades(backend_result: BackendExecutionResult) -> list[Trade]:
+    return [trade_from_backend_trade(trade, idx) for idx, trade in enumerate(backend_result.trades)]
 
 
-def backend_runtime_warnings(backend_result: Any) -> list[Diagnostic]:
+def backend_runtime_warnings(backend_result: BackendExecutionResult) -> list[Diagnostic]:
     warnings: list[Diagnostic] = []
-    diagnostics = getattr(backend_result, "diagnostics", {}) or {}
+    diagnostics = backend_result.diagnostics
     for raw in diagnostics.get("runtime_diagnostics", []) or []:
         if isinstance(raw, dict):
             warnings.append(
@@ -88,7 +86,11 @@ def backend_runtime_warnings(backend_result: Any) -> list[Diagnostic]:
     return warnings
 
 
-def apply_backend_result(engine: Any, backend_result: Any, config: BacktestConfig) -> None:
+def apply_backend_result(
+    engine: Any,
+    backend_result: BackendExecutionResult,
+    config: BacktestConfig,
+) -> None:
     engine.closed_trades = backend_trades(backend_result)
     engine.open_trades = []
     equity_curve, score_points = backend_equity_curve(
@@ -111,7 +113,7 @@ def apply_backend_result(engine: Any, backend_result: Any, config: BacktestConfi
 
 def run_execution_backend(
     engine: Any,
-    execution_backend: Any,
+    execution_backend: ExecutionBackend | str,
     strategy_class: type,
     params: dict[str, Any],
     series: BarSeries,
@@ -137,13 +139,13 @@ def run_execution_backend(
         "completed",
         None,
         (time.perf_counter() - t0) * 1000,
-        getattr(backend_result, "raw_context", None),
-        getattr(backend_result, "raw_result", None),
+        backend_result.raw_context,
+        backend_result.raw_result,
     )
-    result.plots = getattr(backend_result, "plots", None)
+    result.plots = backend_result.plots
     if result.plots is not None:
         result.available_outputs.add("plots")
-    result.bar_results = getattr(backend_result, "bar_results", None)
-    result.performance["execution_backend"] = getattr(backend, "name", type(backend).__name__)
-    result.performance["backend_diagnostics"] = getattr(backend_result, "diagnostics", {})
+    result.bar_results = backend_result.bar_results
+    result.performance["execution_backend"] = backend.name
+    result.performance["backend_diagnostics"] = backend_result.diagnostics
     return result
