@@ -21,7 +21,7 @@ def bootstrap_trade_profits(
 ) -> list[MonteCarloRun]:
     source = list(profits)
     if not source or runs <= 0:
-        return []
+        return list()
     rng = random.Random(seed)
     output: list[MonteCarloRun] = []
     for _ in range(runs):
