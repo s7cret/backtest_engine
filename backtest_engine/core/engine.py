@@ -57,6 +57,7 @@ from backtest_engine.core.validation import infer_price_tick, validate_bars
 from backtest_engine.core.engine_validation import validate_backtest_config
 from backtest_engine.core.result_builder import build_backtest_result
 from backtest_engine.core.oca import apply_oca
+from backtest_engine.core.margin_call import maybe_margin_call
 from backtest_engine.core.price_path import (
     infer_parent_close,
     limit_fill_price,
@@ -719,51 +720,7 @@ class BacktestEngine:
             break
 
     def _maybe_margin_call(self, price: float, bar: Bar, i: int, point: str) -> bool:
-        if self.position.direction == "flat" or self.position.avg_price is None:
-            return False
-        margin_percent = (
-            self.config.margin_long
-            if self.position.direction == "long"
-            else self.config.margin_short
-        )
-        if margin_percent >= 100.0:
-            return False
-        margin_ratio = margin_percent / 100.0
-        qty_abs = abs(self.position.size)
-        if qty_abs <= 0.0 or price <= 0.0 or margin_ratio <= 0.0:
-            return False
-        self._update_open_profit(price)
-        margin_required = price * qty_abs * margin_ratio
-        available_funds = self.equity - margin_required
-        if available_funds > 1e-12:
-            return False
-        cover_raw = (-available_funds / margin_ratio) / price
-        liquidation_qty = 1.0 if cover_raw < 1.0 else float(int(cover_raw) * 4)
-        if self.config.qty_step:
-            liquidation_qty = round_to_step(liquidation_qty, self.config.qty_step, "floor")
-        liquidation_qty = min(qty_abs, liquidation_qty)
-        if liquidation_qty <= 0.0:
-            return False
-        order = Order(
-            "Margin call",
-            "close",
-            self.position.direction,
-            "sell" if self.position.direction == "long" else "buy",
-            "close",
-            "market",
-            liquidation_qty,
-            i,
-            bar.time,
-            i,
-            self.position.direction,
-            True,
-            immediately=True,
-        )
-        self._fill(order, bar, i, price, point)
-        self._event(
-            "MARGIN_CALL", f"margin call liquidated {liquidation_qty}", i, bar.time, order.id
-        )
-        return True
+        return maybe_margin_call(self, price, bar, i, point)
 
     def _limit_fill_price(self, o: Order, path_price: float, is_open_point: bool) -> float:
         return limit_fill_price(self, o, path_price, is_open_point)
