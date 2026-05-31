@@ -1,28 +1,27 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any, Sequence
 
-from .base import BackendBarResult, BackendExecutionResult
+from .base import BackendExecutionResult
+
+
+class UnsupportedPineRuntimeBackendMode(RuntimeError):
+    """Raised when the legacy PineRuntime backend is used for broker execution."""
 
 
 def _pinelib_imports() -> dict[str, Any]:
     try:
-        from pinelib.backtest import run_generated_strategy
         from pinelib.core import PineRuntime
         from pinelib.core.bar import Bar as PineBar
         from pinelib.core.types import RuntimeConfig, SymbolInfo, TimeframeInfo
-        from pinelib.strategy import StrategyContext
     except ImportError as exc:  # pragma: no cover - exercised when optional dep is absent
         raise ImportError("PineRuntimeBackend requires pinelib installed") from exc
     return {
-        "run_generated_strategy": run_generated_strategy,
         "PineRuntime": PineRuntime,
         "PineBar": PineBar,
         "RuntimeConfig": RuntimeConfig,
         "SymbolInfo": SymbolInfo,
         "TimeframeInfo": TimeframeInfo,
-        "StrategyContext": StrategyContext,
     }
 
 
@@ -71,10 +70,10 @@ def _sync_strategy_context_from_config(strategy_ctx: Any, config: Any) -> None:
 
 
 class PineRuntimeBackend:
-    """Official BacktestEngine bridge to ast2python-generated Pine strategies.
+    """PineRuntime handoff backend for generated indicators.
 
-    BacktestEngine owns data/window orchestration. This backend owns only the
-    handoff into pinelib's PineRuntime + StrategyContext execution stack.
+    Strategy/broker execution must use ``backtest_engine.adapters.generated_strategy``
+    so BacktestEngine remains the sole fill/trade ledger authority.
     """
 
     name = "pine_runtime"
@@ -138,86 +137,22 @@ class PineRuntimeBackend:
         if pine_bars:
             runtime.request_data_end_ms = pine_bars[-1].time_close or pine_bars[-1].time
 
-        if is_indicator:
-            # Indicators: run bar-by-bar so CLI callers can report progress.
-            for idx, bar in enumerate(pine_bars):
-                runtime.begin_bar(bar)
-                try:
-                    strategy._process_bar(bar)
-                finally:
-                    runtime.end_bar()
-                if progress_callback is not None:
-                    progress_callback(idx + 1, len(pine_bars))
-            bar_results: list[BackendBarResult] = []
-            plots = None
-            plot_recorder = getattr(runtime, "plot_recorder", None)
-            if plot_recorder is not None:
-                get_records = getattr(plot_recorder, "get_records", None)
-                plots = get_records() if callable(get_records) else plot_recorder
-            return BackendExecutionResult(
-                bar_results=bar_results,
-                trades=[],
-                plots=plots,
-                diagnostics={
-                    "runtime_diagnostics": list(getattr(runtime.config, "diagnostics", []) or []),
-                    "backend": self.name,
-                },
-                raw_context=None,
-                raw_result=None,
+        if not is_indicator:
+            raise UnsupportedPineRuntimeBackendMode(
+                "PineRuntimeBackend no longer runs generated strategy broker paths; "
+                "wrap generated strategy classes with make_generated_strategy_adapter(...) "
+                "and run them through BacktestEngine native execution"
             )
 
-        # Strategy path (existing behavior)
-        strategy_ctx = getattr(strategy, "ctx", None)
-        if not isinstance(strategy_ctx, imports["StrategyContext"]):
-            strategy_ctx = imports["StrategyContext"](
-                initial_capital=getattr(config, "initial_capital", 100000.0),
-                currency=getattr(config, "currency", "USD"),
-                default_qty_type=getattr(config, "default_qty_type", "fixed"),
-                default_qty_value=getattr(config, "default_qty_value", 1.0),
-                pyramiding=getattr(config, "pyramiding", 1),
-                commission_type=getattr(config, "commission_type", "percent"),
-                commission_value=getattr(config, "commission_value", 0.0),
-                slippage=getattr(config, "slippage", 0.0),
-                process_orders_on_close=getattr(config, "process_orders_on_close", False),
-                calc_on_order_fills=getattr(config, "calc_on_order_fills", False),
-                calc_on_every_tick=getattr(config, "calc_on_every_tick", False),
-                use_bar_magnifier=getattr(config, "use_bar_magnifier", False),
-                margin_long=getattr(config, "margin_long", 100.0),
-                margin_short=getattr(config, "margin_short", 100.0),
-                qty_step=getattr(config, "qty_step", None),
-                qty_rounding_mode=getattr(config, "qty_rounding_mode", getattr(config, "qty_rounding", "none")),
-            )
-            setattr(strategy, "ctx", strategy_ctx)
-        else:
-            _sync_strategy_context_from_config(strategy_ctx, config)
-        strategy_ctx.attach_runtime(runtime)
-
-        result = imports["run_generated_strategy"](
-            strategy,
-            runtime,
-            strategy_ctx,
-            pine_bars,
-            progress_callback=progress_callback,
-        )
-
-        bar_results = []
-        for idx, snapshot in enumerate(result.snapshots):
-            phase = "prehistory" if idx < max(0, effective_pre_bars) else "score"
-            raw = asdict(snapshot)
-            bar_results.append(
-                BackendBarResult(
-                    time=int(snapshot.time),
-                    phase=phase,
-                    equity=float(snapshot.equity),
-                    netprofit=float(snapshot.netprofit),
-                    openprofit=float(snapshot.openprofit),
-                    position_size=float(snapshot.position_size),
-                    position_avg_price=float(snapshot.position_avg_price),
-                    closedtrades=int(snapshot.closedtrades),
-                    raw=raw,
-                )
-            )
-
+        # Indicators: run bar-by-bar so CLI callers can report progress.
+        for idx, bar in enumerate(pine_bars):
+            runtime.begin_bar(bar)
+            try:
+                strategy._process_bar(bar)
+            finally:
+                runtime.end_bar()
+            if progress_callback is not None:
+                progress_callback(idx + 1, len(pine_bars))
         plots = None
         plot_recorder = getattr(runtime, "plot_recorder", None)
         if plot_recorder is not None:
@@ -225,13 +160,13 @@ class PineRuntimeBackend:
             plots = get_records() if callable(get_records) else plot_recorder
 
         return BackendExecutionResult(
-            bar_results=bar_results,
-            trades=list(getattr(strategy_ctx, "closed_trade_log", []) or []),
+            bar_results=[],
+            trades=[],
             plots=plots,
             diagnostics={
                 "runtime_diagnostics": list(getattr(runtime.config, "diagnostics", []) or []),
                 "backend": self.name,
             },
-            raw_context=strategy_ctx,
-            raw_result=result,
+            raw_context=None,
+            raw_result=None,
         )

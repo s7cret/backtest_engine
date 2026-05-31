@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-import sys
-
 import pytest
 
-PINELIB_REPO = "[local-home]/pinelib"
-if PINELIB_REPO not in sys.path:
-    sys.path.insert(0, PINELIB_REPO)
 pytest.importorskip("pinelib")
 
 from backtest_engine import BacktestConfig, BacktestEngine  # noqa: E402
@@ -55,6 +50,34 @@ def test_generated_strategy_adapter_runs_orders_through_backtest_engine() -> Non
     assert result.closed_trades is not None
     assert result.closed_trades[0].entry_bar_index == 2
     assert result.closed_trades[0].exit_bar_index == 5
+
+
+def test_generated_strategy_adapter_preserves_score_window_phase_metrics() -> None:
+    strategy_class = make_generated_strategy_adapter(GeneratedLikeStrategy)
+    bars = [Bar(i, 100 + i, 101 + i, 99 + i, 100 + i, 1.0) for i in range(8)]
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=7,
+        score_start_time=3,
+        score_end_time=7,
+        commission_type="none",
+        commission_value=0.0,
+        default_qty_type="fixed",
+        default_qty_value=1.0,
+        force_close_on_end=False,
+    )
+
+    result = BacktestEngine(config).run(strategy_class, bars=bars, effective_pre_bars=3)
+
+    assert result.status == "completed"
+    assert result.bars_processed == 5
+    assert result.score_net_profit == pytest.approx(2.0)
+    assert result.phase_trades is not None
+    assert result.phase_trades[0].entry_phase == "prehistory"
+    assert result.phase_trades[0].exit_phase == "score"
+    assert result.phase_trades[0].crosses_score_boundary is True
 
 
 class GeneratedClosedTradesChangeStrategy:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,13 @@ from backtest_engine.context import StrategyContext
 from backtest_engine.core.realtime import BarTickSlice
 from backtest_engine.errors import ConfigError
 
-TRACE = Path('[local-home]/[workspace-root]/workspace/tv_strategy_oracle/realtime_probe/stage7j_to_9g_next50_2026-04-30/stage7n_guarded_tick_attempt_trace.json')
+WORKSPACE = Path(
+    os.environ.get(
+        "OPENCLAW_WORKSPACE",
+        Path(__file__).resolve().parents[3] / "[workspace-root]" / "workspace",
+    )
+)
+TRACE = WORKSPACE / "tv_strategy_oracle/realtime_probe/stage7j_to_9g_next50_2026-04-30/stage7n_guarded_tick_attempt_trace.json"
 
 
 class NoopStrategy:
@@ -28,6 +35,8 @@ def _config(**kw) -> BacktestConfig:
 
 
 def test_stage7i_boundary_trace_can_drive_guarded_skeleton_but_run_remains_fail_closed() -> None:
+    if not TRACE.exists():
+        pytest.skip(f"optional TradingView realtime trace not found: {TRACE}")
     trace = json.loads(TRACE.read_text(encoding='utf-8'))
     bar_payload = trace['bar']
     attempts_payload = trace['attempts']
