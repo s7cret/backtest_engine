@@ -13,7 +13,6 @@ from backtest_engine.errors import (
     ProviderError,
     ResumeUnsupportedError,
     StrategyRuntimeError,
-    UnsupportedRiskRuleError,
 )
 from backtest_engine.models import (
     Bar,
@@ -34,6 +33,12 @@ from backtest_engine.broker.slippage import slippage_value
 from backtest_engine.broker.rounding import round_to_step
 from backtest_engine.broker.fill_simulator import build_price_path, limit_reached, stop_reached
 from backtest_engine.core.deterministic_hash import sha256_obj
+from backtest_engine.core.execution_backend_adapter import run_execution_backend
+from backtest_engine.core.risk_rules import (
+    apply_risk_rules,
+    max_position_size_allows,
+    pending_entry_position_delta,
+)
 from backtest_engine.core.realtime import (
     BarTickSlice,
     RealtimeTickAttempt,
@@ -46,8 +51,13 @@ from backtest_engine.core.score_window import (
     build_score_window_plan,
     classify_warmup_quality,
 )
-from backtest_engine.core.state_snapshot import BrokerSnapshot, RealtimeBrokerSnapshot, RealtimeExecutionCheckpoint, build_resume_state, clone_state
-from backtest_engine.core.backend_result import trade_from_backend_trade
+from backtest_engine.core.state_snapshot import (
+    BrokerSnapshot,
+    RealtimeBrokerSnapshot,
+    RealtimeExecutionCheckpoint,
+    build_resume_state,
+    clone_state,
+)
 from backtest_engine.core.validation import data_fingerprint, infer_price_tick, validate_bars
 from backtest_engine.core.engine_validation import validate_backtest_config
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
@@ -57,9 +67,7 @@ from backtest_engine.results import (
     apply_non_score_trade_metrics,
     calculate_score_window_metrics,
     equity_move_from_baseline,
-    equity_point,
     mark_available_outputs,
-    summarize_equity_curve,
     update_equity_extremes,
 )
 from backtest_engine.results.statistics import summarize
@@ -118,9 +126,9 @@ class BacktestEngine:
         self._effective_mintick: float | None = self.config.mintick
         # D5-C: score window state
         self._score_mode: bool = False
-        self._prehistory_end_index: int = 0   # last prehistory bar index (inclusive)
-        self._score_start_index: int = 0      # first score bar index
-        self._bar_phases: list[str] = []       # "prehistory" or "score" per bar index
+        self._prehistory_end_index: int = 0  # last prehistory bar index (inclusive)
+        self._score_start_index: int = 0  # first score bar index
+        self._bar_phases: list[str] = []  # "prehistory" or "score" per bar index
 
     def run(
         self,
@@ -159,12 +167,9 @@ class BacktestEngine:
         if self.config.validate_bars:
             series, _ = validate_bars(series, self.config.duplicate_bar_policy)
         if self.config.use_bar_magnifier and (
-            not self.config.bar_magnifier_lower_tf
-            or self.config.bar_magnifier_bars is None
+            not self.config.bar_magnifier_lower_tf or self.config.bar_magnifier_bars is None
         ):
-            raise BarMagnifierUnavailableError(
-                "bar magnifier lower timeframe bars unavailable"
-            )
+            raise BarMagnifierUnavailableError("bar magnifier lower timeframe bars unavailable")
         if self.config.use_bar_magnifier and self.config.bar_magnifier_bars is not None:
             self._validate_supplied_bar_magnifier_bars(series)
         if execution_backend is not None:
@@ -234,10 +239,7 @@ class BacktestEngine:
                 self._cb("on_equity", point)
             stop_now = False
             if self._early_stop_enabled:
-                if (
-                    self._min_equity_stop is not None
-                    and self.equity <= self._min_equity_stop
-                ):
+                if self._min_equity_stop is not None and self.equity <= self._min_equity_stop:
                     status = "early_stopped"
                     early_reason = "min_equity_stop"
                     stop_now = True
@@ -355,103 +357,16 @@ class BacktestEngine:
         effective_pre_bars: int,
         runtime_kwargs: dict[str, Any] | None = None,
     ) -> BacktestResult:
-        if isinstance(execution_backend, str):
-            if execution_backend != "pine_runtime":
-                raise ConfigError(f"unknown execution backend: {execution_backend}")
-            from backtest_engine.execution_backends import PineRuntimeBackend
-
-            backend = PineRuntimeBackend()
-        else:
-            backend = execution_backend
-
-        execute = getattr(backend, "execute", None)
-        if not callable(execute):
-            raise ConfigError("execution_backend must provide execute(...)")
-
-        bars = [series.get_bar(i) for i in range(len(series))]
-        backend_result = execute(
+        return run_execution_backend(
+            self,
+            execution_backend,
             strategy_class,
-            bars,
-            config=self.config,
-            execution_window=None,
-            effective_pre_bars=effective_pre_bars,
-            runtime_kwargs=runtime_kwargs,
-            params=params,
-        )
-        self._apply_backend_result(backend_result)
-        result = self._result(
+            params,
             series,
-            self._backend_equity_curve,
-            "completed",
-            None,
-            (time.perf_counter() - t0) * 1000,
-            getattr(backend_result, "raw_context", None),
-            getattr(backend_result, "raw_result", None),
+            t0,
+            effective_pre_bars,
+            runtime_kwargs,
         )
-        result.plots = getattr(backend_result, "plots", None)
-        if result.plots is not None:
-            result.available_outputs.add("plots")
-        result.bar_results = getattr(backend_result, "bar_results", None)
-        result.performance["execution_backend"] = getattr(backend, "name", type(backend).__name__)
-        result.performance["backend_diagnostics"] = getattr(backend_result, "diagnostics", {})
-        return result
-
-    def _apply_backend_result(self, backend_result: Any) -> None:
-        self.closed_trades = [
-            self._trade_from_backend_trade(t, idx)
-            for idx, t in enumerate(getattr(backend_result, "trades", []) or [])
-        ]
-        self.open_trades = []
-        self._backend_equity_curve: list[EquityPoint] | None = []
-        peak = self.config.initial_capital
-        trough = self.config.initial_capital
-        for idx, item in enumerate(getattr(backend_result, "bar_results", []) or []):
-            equity = getattr(item, "equity", None)
-            if equity is None:
-                continue
-            equity = float(equity)
-            peak = max(peak, equity)
-            trough = min(trough, equity)
-            open_profit = float(getattr(item, "openprofit", 0.0) or 0.0)
-            netprofit = float(getattr(item, "netprofit", 0.0) or 0.0)
-            point = equity_point(
-                bar_index=idx,
-                time=int(getattr(item, "time")),
-                equity=equity,
-                cash=equity - open_profit,
-                position_size=float(getattr(item, "position_size", 0.0) or 0.0),
-                position_avg_price=getattr(item, "position_avg_price", None),
-                open_profit=open_profit,
-                realized_profit=netprofit,
-                peak=peak,
-                trough=trough,
-            )
-            self._backend_equity_curve.append(point)
-            if getattr(item, "phase", "score") == "score":
-                self._score_equity_points.append(point)
-        if self._backend_equity_curve:
-            summary = summarize_equity_curve(self._backend_equity_curve)
-            self.equity = summary.final_equity
-            self.cash = summary.final_cash
-            self.max_drawdown = summary.max_drawdown
-            self.max_drawdown_percent = summary.max_drawdown_percent
-            self.trough_equity = summary.trough_equity
-            self.max_runup = summary.max_runup
-            self.max_runup_percent = summary.max_runup_percent
-        diagnostics = getattr(backend_result, "diagnostics", {}) or {}
-        for raw in diagnostics.get("runtime_diagnostics", []) or []:
-            if isinstance(raw, dict):
-                self.warnings.append(
-                    Diagnostic(
-                        str(raw.get("code", "PINELIB_RUNTIME_DIAGNOSTIC")),
-                        str(raw.get("message", raw)),
-                        "warning",
-                        context=dict(raw),
-                    )
-                )
-
-    def _trade_from_backend_trade(self, trade: Any, idx: int) -> Trade:
-        return trade_from_backend_trade(trade, idx)
 
     def _flush(
         self,
@@ -470,18 +385,14 @@ class BacktestEngine:
                     if o.status in ("pending", "active"):
                         o.status = "cancelled"
                         self._cb("on_order_cancelled", o)
-                        self._event(
-                            "ORDER_CANCELLED", f"order {o.id} cancelled", i, bar.time, o.id
-                        )
+                        self._event("ORDER_CANCELLED", f"order {o.id} cancelled", i, bar.time, o.id)
                 continue
             if k == "cancel":
                 for o in self.orders:
                     if o.id == kw["id"] and o.status in ("pending", "active"):
                         o.status = "cancelled"
                         self._cb("on_order_cancelled", o)
-                        self._event(
-                            "ORDER_CANCELLED", f"order {o.id} cancelled", i, bar.time, o.id
-                        )
+                        self._event("ORDER_CANCELLED", f"order {o.id} cancelled", i, bar.time, o.id)
                 continue
             if k in ("close", "close_all"):
                 if self.position.direction == "flat":
@@ -809,32 +720,7 @@ class BacktestEngine:
                 self._add_order(new, bar, i)
 
     def _apply_risk_rules(self, ctx: StrategyContext) -> None:
-        for rule in ctx.drain_risk_rules():
-            if rule.name == "allow_entry_in":
-                if rule.direction == "long":
-                    self._allow_long = True
-                    self._allow_short = False
-                    continue
-                if rule.direction == "short":
-                    self._allow_long = False
-                    self._allow_short = True
-                    continue
-                if rule.direction == "all":
-                    self._allow_long = True
-                    self._allow_short = True
-                    continue
-            elif rule.name == "max_drawdown":
-                self._early_stop_enabled = True
-                if rule.value_type == "percent_of_equity":
-                    self._max_drawdown_stop_percent = float(rule.value or 0.0)
-                    continue
-                if rule.value_type == "cash":
-                    self._max_drawdown_stop_cash = float(rule.value or 0.0)
-                    continue
-            elif rule.name == "max_position_size" and rule.value_type == "fixed":
-                self._max_position_size = float(rule.value or 0.0)
-                continue
-            raise UnsupportedRiskRuleError(f"unsupported risk rule: {rule.name}")
+        apply_risk_rules(self, ctx)
 
     def _entry_direction_allowed(self, direction: str) -> bool:
         if direction == "long" and not self._allow_long:
@@ -881,39 +767,27 @@ class BacktestEngine:
         return active + existing_orders <= self.config.pyramiding
 
     def _pending_entry_position_delta(self, exclude_order: Order | None = None) -> float:
-        total = 0.0
-        for order in self.orders:
-            if order is exclude_order:
-                continue
-            if (
-                order.kind in {"entry", "order"}
-                and not order.reduce_only
-                and order.direction in {"long", "short"}
-                and order.status in {"pending", "active"}
-            ):
-                total += order.qty if order.direction == "long" else -order.qty
-        return total
+        return pending_entry_position_delta(self.orders, exclude_order=exclude_order)
 
     def _risk_allows_order(
         self, o: Order, bar: Bar, i: int, exclude_order: Order | None = None
     ) -> bool:
-        if (
-            self._max_position_size is not None
-            and o.kind in {"entry", "order"}
-            and o.direction in {"long", "short"}
+        if not max_position_size_allows(
+            max_position_size=self._max_position_size,
+            current_size=self.position.size,
+            orders=self.orders,
+            order=o,
+            exclude_order=exclude_order,
         ):
-            signed_qty = o.qty if o.direction == "long" else -o.qty
-            projected = self.position.size + self._pending_entry_position_delta(exclude_order) + signed_qty
-            if abs(projected) > float(self._max_position_size):
-                self._diag(
-                    "ORDER_REJECTED_RISK_MAX_POSITION_SIZE",
-                    "order rejected by risk.max_position_size",
-                    "warning",
-                    i,
-                    bar.time,
-                    o.id,
-                )
-                return False
+            self._diag(
+                "ORDER_REJECTED_RISK_MAX_POSITION_SIZE",
+                "order rejected by risk.max_position_size",
+                "warning",
+                i,
+                bar.time,
+                o.id,
+            )
+            return False
         return True
 
     def _add_order(self, o: Order, bar: Bar, i: int) -> None:
@@ -1043,7 +917,9 @@ class BacktestEngine:
                     current_bar_close_activation = (
                         self.config.process_orders_on_close and o.created_bar_index == i
                     )
-                    if current_bar_close_activation and not (point == "close" or point.endswith(".close")):
+                    if current_bar_close_activation and not (
+                        point == "close" or point.endswith(".close")
+                    ):
                         continue
                     if o.status != "active":
                         if not (
@@ -1187,7 +1063,9 @@ class BacktestEngine:
         if self.position.direction == "flat" or self.position.avg_price is None:
             return False
         margin_percent = (
-            self.config.margin_long if self.position.direction == "long" else self.config.margin_short
+            self.config.margin_long
+            if self.position.direction == "long"
+            else self.config.margin_short
         )
         if margin_percent >= 100.0:
             return False
@@ -1223,7 +1101,9 @@ class BacktestEngine:
             immediately=True,
         )
         self._fill(order, bar, i, price, point)
-        self._event("MARGIN_CALL", f"margin call liquidated {liquidation_qty}", i, bar.time, order.id)
+        self._event(
+            "MARGIN_CALL", f"margin call liquidated {liquidation_qty}", i, bar.time, order.id
+        )
         return True
 
     def _limit_fill_price(self, o: Order, path_price: float, is_open_point: bool) -> float:
@@ -1326,7 +1206,9 @@ class BacktestEngine:
             # A stop market order becomes marketable only once the stop level is
             # reached on the instrument tick grid. TradingView rounds buy stops
             # up and sell stops down before applying slippage.
-            price = round_to_step(price, self.config.mintick, "ceil" if o.side == "buy" else "floor")
+            price = round_to_step(
+                price, self.config.mintick, "ceil" if o.side == "buy" else "floor"
+            )
         slip_raw = 0.0 if o.order_type in {"limit", "stop_limit"} else self.config.slippage
         slip = slippage_value(
             price,
@@ -1580,15 +1462,25 @@ class BacktestEngine:
                 if o.oca_type == "cancel":
                     other.status = "cancelled"
                     self._cb("on_order_cancelled", other)
-                    self._event("ORDER_CANCELLED", f"OCA cancelled order {other.id}", i, bar.time, other.id)
+                    self._event(
+                        "ORDER_CANCELLED", f"OCA cancelled order {other.id}", i, bar.time, other.id
+                    )
                 elif o.oca_type == "reduce":
                     other.qty = max(0.0, other.qty - o.qty)
                     if other.qty <= 0:
                         other.status = "cancelled"
                         self._cb("on_order_cancelled", other)
-                        self._event("ORDER_CANCELLED", f"OCA reduced order {other.id} to zero", i, bar.time, other.id)
+                        self._event(
+                            "ORDER_CANCELLED",
+                            f"OCA reduced order {other.id} to zero",
+                            i,
+                            bar.time,
+                            other.id,
+                        )
                     else:
-                        self._event("ORDER_MODIFIED", f"OCA reduced order {other.id}", i, bar.time, other.id)
+                        self._event(
+                            "ORDER_MODIFIED", f"OCA reduced order {other.id}", i, bar.time, other.id
+                        )
 
     def _force_close(self, bar: Bar, i: int) -> None:
         o = Order(
@@ -1627,7 +1519,10 @@ class BacktestEngine:
             self.position.avg_price, adverse_price, abs(self.position.size), self.position.direction
         )
         favorable_profit = self.instrument.pnl(
-            self.position.avg_price, favorable_price, abs(self.position.size), self.position.direction
+            self.position.avg_price,
+            favorable_price,
+            abs(self.position.size),
+            self.position.direction,
         )
         adverse_equity = self.cash + adverse_profit
         favorable_equity = self.cash + favorable_profit
