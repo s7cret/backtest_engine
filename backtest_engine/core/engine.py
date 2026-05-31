@@ -24,11 +24,10 @@ from backtest_engine.models import (
     BacktestResumeState,
     InstrumentModel,
 )
-from backtest_engine.broker.commission import calculate_commission
-from backtest_engine.broker.slippage import slippage_value
 from backtest_engine.broker.rounding import round_to_step
 from backtest_engine.core.deterministic_hash import sha256_obj
 from backtest_engine.core.execution_backend_adapter import run_execution_backend
+from backtest_engine.core.fill_execution import execute_fill
 from backtest_engine.core.fill_scanner import process_bar_fills, update_trailing_order
 from backtest_engine.core.risk_rules import (
     apply_risk_rules,
@@ -568,82 +567,7 @@ class BacktestEngine:
         return infer_parent_close(self, parent_open)
 
     def _fill(self, o: Order, bar: Bar, i: int, price: float, point: str) -> None:
-        if o.kind == "exit":
-            avail = self._available_exit_qty(o.from_entry, exclude_order=o)
-            if avail <= 0:
-                code = (
-                    "ORDER_REJECTED_NO_MATCHING_ENTRY"
-                    if o.from_entry is not None
-                    else "ORDER_REJECTED_NO_AVAILABLE_POSITION_QTY"
-                )
-                self._diag(
-                    code,
-                    "reduce order has no matching unreserved qty",
-                    "warning",
-                    i,
-                    bar.time,
-                    o.id,
-                )
-                return
-            o.qty = min(o.qty, avail)
-        # TradingView applies `slippage` to market/stop-style fills, not to passive
-        # limit fills. Applying tick slippage to limit orders makes buy limits fill
-        # worse than their own limit price and breaks the Stage 2B TV oracle.
-        if o.order_type == "stop" and self.config.mintick:
-            # A stop market order becomes marketable only once the stop level is
-            # reached on the instrument tick grid. TradingView rounds buy stops
-            # up and sell stops down before applying slippage.
-            price = round_to_step(
-                price, self.config.mintick, "ceil" if o.side == "buy" else "floor"
-            )
-        slip_raw = 0.0 if o.order_type in {"limit", "stop_limit"} else self.config.slippage
-        slip = slippage_value(
-            price,
-            o.side,
-            o.position_effect,
-            slip_raw,
-            self.config.slippage_type,
-            self.config.mintick,
-        )
-        rounding_mode = self.config.price_rounding
-        if o.order_type in {"limit", "stop_limit"} and self.config.mintick:
-            # Passive limit fills must remain executable on the tick grid without
-            # crossing the order side. For buy limits, do not round up above the
-            # fill/limit price; for sell limits, do not round down below it.
-            # Buy → round DOWN (floor) to stay at or below limit.
-            # Sell → round DOWN (floor) to stay at or below limit, which is the
-            # conservative side for fills (matches TV equity fill semantics).
-            rounding_mode = "floor"
-        fprice = round_to_step(price + slip, self.config.mintick, rounding_mode)
-        before = self.position.direction
-        com = calculate_commission(
-            fprice, o.qty, self.config.commission_type, self.config.commission_value
-        )
-        self.cash -= com
-        self.position.realized_profit -= com
-        after = self._apply_position(o, fprice, bar, i, com)
-        fill = Fill(
-            o.id,
-            i,
-            bar.time,
-            fprice,
-            o.qty,
-            o.direction,
-            o.side,
-            o.position_effect,
-            before,
-            after,
-            "filled",
-            com,
-            slip,
-            point,
-        )
-        self.fills.append(fill)
-        o.status = "filled"
-        self.last_trade_bar = i
-        self._cb("on_fill", fill)
-        self._event("ORDER_FILLED", f"order {o.id} filled", i, bar.time, o.id)
-        self._apply_oca(o, bar, i)
+        execute_fill(self, o, bar, i, price, point)
 
     def _apply_position(self, o: Order, price: float, bar: Bar, i: int, commission: float) -> str:
         return apply_position(self, o, price, bar, i, commission)
