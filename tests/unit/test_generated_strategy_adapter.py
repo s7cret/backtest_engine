@@ -230,7 +230,9 @@ def test_generated_strategy_adapter_config_handshake_accepts_empty_diff() -> Non
         commission_type="none",
         commission_value=0.0,
     )
-    result = BacktestEngine(config).run(strategy_class, bars=[Bar(0, 1, 1, 1, 1), Bar(1, 1, 1, 1, 1)])
+    result = BacktestEngine(config).run(
+        strategy_class, bars=[Bar(0, 1, 1, 1, 1), Bar(1, 1, 1, 1, 1)]
+    )
     assert result.status == "completed"
 
 
@@ -276,3 +278,169 @@ def test_generated_strategy_adapter_converts_second_timestamps_to_pine_milliseco
     BacktestEngine(config).run(strategy_class, bars=[Bar(1_000, 1, 1, 1, 1)])
 
     assert GeneratedRecordsPineTime.seen_times == [1_000_000]
+
+
+class GeneratedProcessOrdersOnCloseStrategy:
+    def __init__(self, params=None, runtime=None):
+        self.params = params or {}
+        self.rt = runtime
+        self.ctx = None
+
+    def _process_bar(self, bar):
+        del bar
+        if self.rt.bar_index_series.current == 0:
+            self.ctx.entry("L", "long", qty=1)
+
+
+def test_generated_strategy_adapter_covers_process_orders_on_close_entry() -> None:
+    strategy_class = make_generated_strategy_adapter(GeneratedProcessOrdersOnCloseStrategy)
+    bars = [
+        Bar(0, 10, 10, 10, 10, 1.0),
+        Bar(1, 20, 20, 20, 20, 1.0),
+    ]
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=1,
+        commission_type="none",
+        commission_value=0.0,
+        default_qty_type="fixed",
+        default_qty_value=1.0,
+        process_orders_on_close=True,
+    )
+
+    result = BacktestEngine(config).run(strategy_class, bars=bars)
+
+    assert result.status == "completed"
+    assert result.open_trades[0].entry_bar_index == 0
+    assert result.open_trades[0].entry_price == pytest.approx(10.0)
+
+
+class GeneratedProfitLossExitStrategy:
+    def __init__(self, params=None, runtime=None):
+        self.params = params or {}
+        self.rt = runtime
+        self.ctx = None
+
+    def _process_bar(self, bar):
+        del bar
+        idx = self.rt.bar_index_series.current
+        if idx == 0:
+            self.ctx.entry("L", "long", qty=1)
+        if idx == 1:
+            self.ctx.exit("XP", from_entry="L", qty=1, profit=3, loss=2)
+
+
+def test_generated_strategy_adapter_covers_profit_loss_exit() -> None:
+    strategy_class = make_generated_strategy_adapter(GeneratedProfitLossExitStrategy)
+    bars = [
+        Bar(0, 10, 10, 10, 10, 1.0),
+        Bar(1, 10, 10, 10, 10, 1.0),
+        Bar(2, 10, 13, 9, 12, 1.0),
+    ]
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=2,
+        commission_type="none",
+        commission_value=0.0,
+        default_qty_type="fixed",
+        default_qty_value=1.0,
+        mintick=1.0,
+    )
+
+    result = BacktestEngine(config).run(strategy_class, bars=bars)
+
+    assert result.status == "completed"
+    assert result.total_trades == 1
+    assert result.closed_trades[0].exit_id == "XP:L"
+    assert result.closed_trades[0].exit_price == pytest.approx(13.0)
+    assert result.net_profit == pytest.approx(3.0)
+
+
+class GeneratedTrailingExitStrategy:
+    def __init__(self, params=None, runtime=None):
+        self.params = params or {}
+        self.rt = runtime
+        self.ctx = None
+
+    def _process_bar(self, bar):
+        del bar
+        idx = self.rt.bar_index_series.current
+        if idx == 0:
+            self.ctx.entry("L", "long", qty=1)
+        if idx == 1:
+            self.ctx.exit("TR", from_entry="L", qty=1, trail_price=12, trail_offset=1)
+
+
+def test_generated_strategy_adapter_covers_trailing_exit() -> None:
+    strategy_class = make_generated_strategy_adapter(GeneratedTrailingExitStrategy)
+    bars = [
+        Bar(0, 10, 10, 10, 10, 1.0),
+        Bar(1, 10, 10, 10, 10, 1.0),
+        Bar(2, 10, 13, 10, 12, 1.0),
+    ]
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=2,
+        commission_type="none",
+        commission_value=0.0,
+        default_qty_type="fixed",
+        default_qty_value=1.0,
+        mintick=1.0,
+    )
+
+    result = BacktestEngine(config).run(strategy_class, bars=bars)
+
+    assert result.status == "completed"
+    assert result.total_trades == 1
+    assert result.closed_trades[0].exit_id == "TR:T"
+    assert result.closed_trades[0].exit_price == pytest.approx(12.0)
+    assert result.net_profit == pytest.approx(2.0)
+
+
+class GeneratedCloseAllStrategy:
+    def __init__(self, params=None, runtime=None):
+        self.params = params or {}
+        self.rt = runtime
+        self.ctx = None
+
+    def _process_bar(self, bar):
+        del bar
+        idx = self.rt.bar_index_series.current
+        if idx == 0:
+            self.ctx.entry("L1", "long", qty=1)
+            self.ctx.entry("L2", "long", qty=1)
+        if idx == 1:
+            self.ctx.close_all(immediately=True)
+
+
+def test_generated_strategy_adapter_covers_close_all_immediately() -> None:
+    strategy_class = make_generated_strategy_adapter(GeneratedCloseAllStrategy)
+    bars = [
+        Bar(0, 10, 10, 10, 10, 1.0),
+        Bar(1, 11, 11, 11, 11, 1.0),
+        Bar(2, 12, 12, 12, 12, 1.0),
+    ]
+    config = BacktestConfig(
+        symbol="TEST",
+        timeframe="1",
+        start_time=0,
+        end_time=2,
+        commission_type="none",
+        commission_value=0.0,
+        default_qty_type="fixed",
+        default_qty_value=1.0,
+        pyramiding=2,
+    )
+
+    result = BacktestEngine(config).run(strategy_class, bars=bars)
+
+    assert result.status == "completed"
+    assert result.total_trades == 2
+    assert [trade.exit_id for trade in result.closed_trades] == ["close_all", "close_all"]
+    assert result.net_profit == pytest.approx(0.0)
