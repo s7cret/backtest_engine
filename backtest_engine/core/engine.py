@@ -1,6 +1,5 @@
 from __future__ import annotations
 import time
-from dataclasses import replace
 from inspect import signature
 from typing import Any
 from backtest_engine.config import BacktestConfig
@@ -64,6 +63,7 @@ from backtest_engine.core.price_path import (
     validate_lower_timeframe_bars,
     validate_supplied_bar_magnifier_bars,
 )
+from backtest_engine.core.position_accounting import apply_position
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
 from backtest_engine.results import (
     BacktestResult,
@@ -859,182 +859,7 @@ class BacktestEngine:
         self._apply_oca(o, bar, i)
 
     def _apply_position(self, o: Order, price: float, bar: Bar, i: int, commission: float) -> str:
-        signed = o.qty if o.side == "buy" else -o.qty
-        if self.position.direction == "flat" or (self.position.size == 0):
-            self.position.size = signed
-            self.position.direction = "long" if signed > 0 else "short"
-            self.position.avg_price = price
-            tr = Trade(
-                o.id,
-                o.id,
-                None,
-                self.position.direction,
-                bar.time,
-                i,
-                price,
-                None,
-                None,
-                None,
-                abs(signed),
-                commission,
-                0.0,
-                -commission,
-                0.0,
-                is_open=True,
-            )
-            self.open_trades.append(tr)
-            self._cb("on_trade_open", tr)
-            return self.position.direction
-        cur_sign = 1 if self.position.direction == "long" else -1
-        if signed * cur_sign > 0:
-            newabs = abs(self.position.size) + abs(signed)
-            self.position.avg_price = (
-                self.position.avg_price * abs(self.position.size) + price * abs(signed)
-            ) / newabs
-            self.position.size += signed
-            tr = Trade(
-                o.id,
-                o.id,
-                None,
-                self.position.direction,
-                bar.time,
-                i,
-                price,
-                None,
-                None,
-                None,
-                abs(signed),
-                commission,
-                0.0,
-                -commission,
-                0.0,
-                is_open=True,
-            )
-            self.open_trades.append(tr)
-            self._cb("on_trade_open", tr)
-            return self.position.direction
-        qty_close = min(abs(signed), abs(self.position.size))
-        targets = [
-            t for t in self.open_trades if o.from_entry is None or t.entry_id == o.from_entry
-        ]
-        if not targets:
-            self._diag(
-                "ORDER_REJECTED_NO_MATCHING_ENTRY",
-                "reduce order has no matching from_entry",
-                "warning",
-                i,
-                bar.time,
-                o.id,
-            )
-            return self.position.direction
-        reserved = self._reserved_qty_by_entry(exclude_order=o)
-        target_caps = {
-            id(t): max(
-                0.0, t.qty - (reserved.get(t.entry_id, 0.0) if o.from_entry is None else 0.0)
-            )
-            for t in targets
-        }
-        targets = [t for t in targets if target_caps[id(t)] > 0]
-        if not targets:
-            self._diag(
-                "ORDER_REJECTED_NO_AVAILABLE_POSITION_QTY",
-                "reduce order has no matching unreserved qty",
-                "warning",
-                i,
-                bar.time,
-                o.id,
-            )
-            return self.position.direction
-        qty_close = min(qty_close, sum(target_caps[id(t)] for t in targets))
-        gross = 0.0
-        rem_for_profit = qty_close
-        for trp in targets:
-            if rem_for_profit <= 0:
-                break
-            q = min(target_caps[id(trp)], rem_for_profit)
-            gross += self.instrument.pnl(trp.entry_price, price, q, trp.direction)
-            rem_for_profit -= q
-        # _fill debits commission exactly once for the whole order.  Closing a
-        # position therefore adds only gross PnL to cash/realized PnL here,
-        # while the closed-trade ledger remains net of prorated entry + exit
-        # commission.  For reversals, only the close portion of the order's
-        # commission belongs to the closed trade; the remainder becomes the
-        # entry commission of the newly opened opposite lot.
-        exit_commission_total = commission * (qty_close / o.qty) if o.qty else commission
-        opening_commission = max(0.0, commission - exit_commission_total)
-        self.cash += gross
-        self.position.realized_profit += gross
-        remaining = qty_close
-        for tr in list(targets):
-            if remaining <= 0:
-                break
-            q = min(target_caps[id(tr)], remaining)
-            exit_commission = exit_commission_total * (q / qty_close) if qty_close else 0.0
-            entry_commission = tr.commission_entry * (q / tr.qty) if tr.qty else 0.0
-            p = (
-                self.instrument.pnl(tr.entry_price, price, q, tr.direction)
-                - exit_commission
-                - entry_commission
-            )
-            mfe, mae, max_runup, max_drawdown = self._trade_excursion_values(tr, bar)
-            closed = replace(
-                tr,
-                exit_id=o.id,
-                exit_time=bar.time,
-                exit_bar_index=i,
-                exit_price=price,
-                qty=q,
-                commission_entry=entry_commission,
-                commission_exit=exit_commission,
-                profit=p,
-                profit_percent=(p / (tr.entry_price * q) * 100 if tr.entry_price * q else 0.0),
-                mfe=mfe,
-                mae=mae,
-                max_runup=max_runup,
-                max_drawdown=max_drawdown,
-                exit_reason=o.id,
-                bars_held=i - tr.entry_bar_index,
-                is_open=False,
-            )
-            self.closed_trades.append(closed)
-            self._cb("on_trade_close", closed)
-            tr.qty -= q
-            tr.commission_entry -= entry_commission
-            remaining -= q
-            if tr.qty <= 1e-12:
-                self.open_trades.remove(tr)
-        self.position.size += signed
-        if abs(self.position.size) < 1e-12:
-            self.position = Position(realized_profit=self.position.realized_profit)
-            return "flat"
-        same_dir = [t for t in self.open_trades if t.direction == self.position.direction]
-        if same_dir:
-            q = sum(t.qty for t in same_dir)
-            self.position.avg_price = sum(t.entry_price * t.qty for t in same_dir) / q
-        if self.position.size * cur_sign < 0:
-            self.position.direction = "long" if self.position.size > 0 else "short"
-            self.position.avg_price = price
-            tr = Trade(
-                o.id,
-                o.id,
-                None,
-                self.position.direction,
-                bar.time,
-                i,
-                price,
-                None,
-                None,
-                None,
-                abs(self.position.size),
-                opening_commission,
-                0.0,
-                -opening_commission,
-                0.0,
-                is_open=True,
-            )
-            self.open_trades.append(tr)
-            self._cb("on_trade_open", tr)
-        return self.position.direction
+        return apply_position(self, o, price, bar, i, commission)
 
     def _update_trade_excursions(self, bar: Bar) -> None:
         if not self.config.collect_mfe_mae:
