@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from backtest_engine.context import StrategyContext
+from backtest_engine.context import (
+    CancelPayload,
+    ClosePayload,
+    EntryOrderPayload,
+    ExitPayload,
+    StrategyContext,
+)
 from backtest_engine.models import Bar, Order
 
 
@@ -19,7 +25,7 @@ def flush_strategy_commands(
     engine._apply_risk_rules(ctx)
     for command in ctx.buffer.drain():
         kind = command.name
-        kw = command.kwargs
+        payload = command.payload
         if kind == "cancel_all":
             for order in engine.orders:
                 if order.status in ("pending", "active"):
@@ -34,8 +40,9 @@ def flush_strategy_commands(
                     )
             continue
         if kind == "cancel":
+            assert isinstance(payload, CancelPayload)
             for order in engine.orders:
-                if order.id == kw["id"] and order.status in ("pending", "active"):
+                if order.id == payload.id and order.status in ("pending", "active"):
                     order.status = "cancelled"
                     engine._cb("on_order_cancelled", order)
                     engine._event(
@@ -47,15 +54,13 @@ def flush_strategy_commands(
                     )
             continue
         if kind in ("close", "close_all"):
-            _apply_close_command(engine, kind, kw, bar, bar_index, recalc_after_fill)
+            assert isinstance(payload, ClosePayload)
+            _apply_close_command(engine, kind, payload, bar, bar_index, recalc_after_fill)
             continue
 
-        limit = kw.get("limit")
-        stop = kw.get("stop")
-        if limit != limit:
-            limit = None
-        if stop != stop:
-            stop = None
+        assert isinstance(payload, EntryOrderPayload | ExitPayload)
+        limit = _clean_price(payload.limit)
+        stop = _clean_price(payload.stop)
         order_type = (
             "market"
             if limit is None and stop is None
@@ -66,9 +71,10 @@ def flush_strategy_commands(
             else "stop_limit"
         )
         if kind == "exit":
+            assert isinstance(payload, ExitPayload)
             _apply_exit_command(
                 engine,
-                kw,
+                payload,
                 bar,
                 bar_index,
                 recalc_after_fill,
@@ -77,10 +83,11 @@ def flush_strategy_commands(
             )
             continue
 
+        assert isinstance(payload, EntryOrderPayload)
         _apply_entry_or_order_command(
             engine,
             kind,
-            kw,
+            payload,
             bar,
             bar_index,
             recalc_after_fill,
@@ -90,20 +97,30 @@ def flush_strategy_commands(
         )
 
 
+def _clean_price(value: float | None) -> float | None:
+    if value != value:
+        return None
+    return value
+
+
+def _qty_args(qty: float | None, qty_percent: float | None = None) -> dict[str, float | None]:
+    return {"qty": qty, "qty_percent": qty_percent}
+
+
 def _apply_close_command(
     engine: Any,
     kind: str,
-    kw: dict[str, Any],
+    payload: ClosePayload,
     bar: Bar,
     bar_index: int,
     recalc_after_fill: bool,
 ) -> None:
     if engine.position.direction == "flat":
         return
-    from_entry = kw.get("id") if kind == "close" else None
+    from_entry = payload.id if kind == "close" else None
     if kind == "close_all":
         qty = abs(engine.position.size)
-    elif kw.get("qty") is None and kw.get("qty_percent") is None and from_entry:
+    elif payload.qty is None and payload.qty_percent is None and from_entry:
         qty = sum(trade.qty for trade in engine._matching_open_trades(from_entry))
         if qty <= 0:
             engine._diag(
@@ -116,10 +133,14 @@ def _apply_close_command(
             )
             return
     else:
-        qty = engine._qty_from_args(kw, engine.position.size, bar.close)
+        qty = engine._qty_from_args(
+            _qty_args(payload.qty, payload.qty_percent),
+            engine.position.size,
+            bar.close,
+        )
     engine._add_order(
         Order(
-            id=kw.get("id", "close_all"),
+            id=payload.id or "close_all",
             kind="close",
             direction=engine.position.direction,
             side="sell" if engine.position.direction == "long" else "buy",
@@ -129,13 +150,13 @@ def _apply_close_command(
             created_bar_index=bar_index,
             created_time=bar.time,
             active_from_bar_index=bar_index
-            if (kw.get("immediately") or engine.config.process_orders_on_close or recalc_after_fill)
+            if (payload.immediately or engine.config.process_orders_on_close or recalc_after_fill)
             else bar_index + 1,
             position_direction=engine.position.direction,
             reduce_only=True,
             from_entry=from_entry,
-            comment=kw.get("comment"),
-            immediately=kw.get("immediately", False),
+            comment=payload.comment,
+            immediately=payload.immediately,
         ),
         bar,
         bar_index,
@@ -144,7 +165,7 @@ def _apply_close_command(
 
 def _apply_exit_command(
     engine: Any,
-    kw: dict[str, Any],
+    payload: ExitPayload,
     bar: Bar,
     bar_index: int,
     recalc_after_fill: bool,
@@ -158,13 +179,17 @@ def _apply_exit_command(
             "warning",
             bar_index,
             bar.time,
-            kw["id"],
+            payload.id,
         )
         return
     direction = engine.position.direction
     side = "sell" if direction == "long" else "buy"
-    qty = engine._qty_from_args(kw, engine.position.size, bar.close)
-    from_entry = kw.get("from_entry")
+    qty = engine._qty_from_args(
+        _qty_args(payload.qty, payload.qty_percent),
+        engine.position.size,
+        bar.close,
+    )
+    from_entry = payload.from_entry
     available = engine._available_exit_qty(from_entry)
     if available <= 0:
         engine._diag(
@@ -173,19 +198,21 @@ def _apply_exit_command(
             "warning",
             bar_index,
             bar.time,
-            kw["id"],
+            payload.id,
         )
         return
     qty = min(qty, available)
     base = engine._exit_base_price(from_entry)
-    if kw.get("profit") is not None and limit is None:
-        limit = base + float(kw["profit"]) if direction == "long" else base - float(kw["profit"])
-    if kw.get("loss") is not None and stop is None:
-        stop = base - float(kw["loss"]) if direction == "long" else base + float(kw["loss"])
+    if payload.profit is not None and limit is None:
+        limit = (
+            base + float(payload.profit) if direction == "long" else base - float(payload.profit)
+        )
+    if payload.loss is not None and stop is None:
+        stop = base - float(payload.loss) if direction == "long" else base + float(payload.loss)
     has_trail = (
-        kw.get("trail_price") is not None
-        or kw.get("trail_points") is not None
-        or kw.get("trail_offset") is not None
+        payload.trail_price is not None
+        or payload.trail_points is not None
+        or payload.trail_offset is not None
     )
     if limit is None and stop is None and not has_trail:
         engine._diag(
@@ -194,14 +221,14 @@ def _apply_exit_command(
             "warning",
             bar_index,
             bar.time,
-            kw["id"],
+            payload.id,
         )
         return
-    oca = kw.get("oca_name") or kw["id"]
+    oca = payload.oca_name or payload.id
     if limit is not None:
         engine._add_order(
             Order(
-                id=kw["id"] + ":L",
+                id=payload.id + ":L",
                 kind="exit",
                 direction=direction,
                 side=side,
@@ -218,8 +245,8 @@ def _apply_exit_command(
                 oca_name=oca,
                 oca_type="reduce",
                 reserved_qty=qty,
-                parent_exit_id=kw["id"],
-                comment=kw.get("comment"),
+                parent_exit_id=payload.id,
+                comment=payload.comment,
             ),
             bar,
             bar_index,
@@ -227,7 +254,7 @@ def _apply_exit_command(
     if stop is not None:
         engine._add_order(
             Order(
-                id=kw["id"] + ":S",
+                id=payload.id + ":S",
                 kind="exit",
                 direction=direction,
                 side=side,
@@ -244,30 +271,30 @@ def _apply_exit_command(
                 oca_name=oca,
                 oca_type="reduce",
                 reserved_qty=qty,
-                parent_exit_id=kw["id"],
-                comment=kw.get("comment"),
+                parent_exit_id=payload.id,
+                comment=payload.comment,
             ),
             bar,
             bar_index,
         )
     if has_trail:
-        points = kw.get("trail_points")
-        activation = kw.get("trail_price")
+        points = payload.trail_points
+        activation = payload.trail_price
         tick = engine._effective_mintick or 1.0
         points_price = float(points) * tick if points is not None else None
         if activation is None and points_price is not None:
             activation = base + points_price if direction == "long" else base - points_price
         offset = (
             float(
-                kw.get("trail_offset")
-                if kw.get("trail_offset") is not None
+                payload.trail_offset
+                if payload.trail_offset is not None
                 else (points if points is not None else 0.0)
             )
             * tick
         )
         engine._add_order(
             Order(
-                id=kw["id"] + ":T",
+                id=payload.id + ":T",
                 kind="exit",
                 direction=direction,
                 side=side,
@@ -284,8 +311,8 @@ def _apply_exit_command(
                 oca_name=oca,
                 oca_type="reduce",
                 reserved_qty=qty,
-                parent_exit_id=kw["id"],
-                comment=kw.get("comment"),
+                parent_exit_id=payload.id,
+                comment=payload.comment,
                 trail_price=activation,
                 trail_points=points_price,
                 trail_offset=offset,
@@ -298,7 +325,7 @@ def _apply_exit_command(
 def _apply_entry_or_order_command(
     engine: Any,
     kind: str,
-    kw: dict[str, Any],
+    payload: EntryOrderPayload,
     bar: Bar,
     bar_index: int,
     recalc_after_fill: bool,
@@ -306,17 +333,17 @@ def _apply_entry_or_order_command(
     stop: float | None,
     order_type: str,
 ) -> None:
-    direction = kw["direction"]
+    direction = payload.direction
     side = "buy" if direction == "long" else "sell"
-    uses_default_qty = kw.get("qty") is None and kw.get("qty_percent") is None
-    qty = engine._qty_from_args(kw, None, bar.close)
+    uses_default_qty = payload.qty is None
+    qty = engine._qty_from_args(_qty_args(payload.qty), None, bar.close)
     if kind == "entry" and not engine._entry_direction_allowed(direction):
         if engine.position.direction != "flat" and engine.position.direction != direction:
             close_direction = engine.position.direction
             close_side = "sell" if close_direction == "long" else "buy"
             engine._add_order(
                 Order(
-                    id=kw["id"],
+                    id=payload.id,
                     kind="close",
                     direction=close_direction,
                     side=close_side,
@@ -332,7 +359,7 @@ def _apply_entry_or_order_command(
                     reduce_only=True,
                     limit_price=limit,
                     stop_price=stop,
-                    comment=kw.get("comment"),
+                    comment=payload.comment,
                 ),
                 bar,
                 bar_index,
@@ -344,7 +371,7 @@ def _apply_entry_or_order_command(
             "warning",
             bar_index,
             bar.time,
-            kw["id"],
+            payload.id,
         )
         return
     effect = "open"
@@ -363,19 +390,21 @@ def _apply_entry_or_order_command(
             "warning",
             bar_index,
             bar.time,
-            kw["id"],
+            payload.id,
         )
         return
     existing = next(
         (
             order
             for order in engine.orders
-            if order.id == kw["id"] and order.kind == kind and order.status in ("pending", "active")
+            if order.id == payload.id
+            and order.kind == kind
+            and order.status in ("pending", "active")
         ),
         None,
     )
     new = Order(
-        kw["id"],
+        payload.id,
         kind,
         direction,
         side,
@@ -392,9 +421,9 @@ def _apply_entry_or_order_command(
         limit,
         stop,
         None,
-        kw.get("oca_name"),
-        kw.get("oca_type") or "none",
-        comment=kw.get("comment"),
+        payload.oca_name,
+        payload.oca_type or "none",
+        comment=payload.comment,
     )
     new.qty_is_default = uses_default_qty
     if existing:
