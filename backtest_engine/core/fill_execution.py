@@ -42,7 +42,14 @@ def execute_fill(engine, order: Order, bar: Bar, bar_index: int, price: float, p
     before = engine.position.direction
     engine.cash -= pricing.commission
     engine.position.realized_profit -= pricing.commission
-    after = engine._apply_position(order, pricing.price, bar, bar_index, pricing.commission)
+    after = engine._apply_position(
+        order,
+        pricing.price,
+        bar,
+        bar_index,
+        pricing.commission,
+        fill_point=point,
+    )
     fill = Fill(
         order.id,
         bar_index,

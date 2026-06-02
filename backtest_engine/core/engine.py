@@ -466,8 +466,16 @@ class BacktestEngine:
     def _fill(self, o: Order, bar: Bar, i: int, price: float, point: str) -> None:
         execute_fill(self, o, bar, i, price, point)
 
-    def _apply_position(self, o: Order, price: float, bar: Bar, i: int, commission: float) -> str:
-        return apply_position(self, o, price, bar, i, commission)
+    def _apply_position(
+        self,
+        o: Order,
+        price: float,
+        bar: Bar,
+        i: int,
+        commission: float,
+        fill_point: str = "",
+    ) -> str:
+        return apply_position(self, o, price, bar, i, commission, fill_point=fill_point)
 
     def _update_trade_excursions(self, bar: Bar) -> None:
         if not self.config.collect_mfe_mae:

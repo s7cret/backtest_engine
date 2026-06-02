@@ -96,6 +96,115 @@ def test_trade_max_runup_drawdown_are_stored_for_long_and_short():
     assert result.max_runup == pytest.approx(15.0)
 
 
+def test_trade_max_runup_drawdown_include_entry_commission_like_tradingview():
+    bars = [
+        Bar(1, 100, 100, 100, 100),
+        Bar(2, 100, 110, 95, 105),
+        Bar(3, 105, 105, 105, 105),
+    ]
+    cfg = BacktestConfig(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=3,
+        initial_capital=10000,
+        commission_type="fixed_per_order",
+        commission_value=2.0,
+        process_orders_on_close=True,
+        collect_trade_details=True,
+    )
+
+    result = BacktestEngine(cfg).run(LongShortExcursions, bars=bars)
+
+    assert result.closed_trades is not None
+    trade = result.closed_trades[0]
+    assert trade.mfe == pytest.approx(10.0)
+    assert trade.mae == pytest.approx(-5.0)
+    assert trade.commission_entry == pytest.approx(2.0)
+    assert trade.max_runup == pytest.approx(8.0)
+    assert trade.max_drawdown == pytest.approx(7.0)
+
+
+class ShortExitNextOpenExcursion:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("S", "short", qty=1)
+        if bar_index == 1:
+            self.ctx.close("S")
+
+
+def test_short_exit_on_next_open_excludes_exit_bar_high_from_trade_drawdown():
+    bars = [
+        Bar(1, 100, 100, 100, 100),
+        Bar(2, 100, 100, 90, 95),
+        Bar(3, 95, 200, 95, 100),
+    ]
+    cfg = BacktestConfig(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=3,
+        initial_capital=10000,
+        commission_type="none",
+        commission_value=0.0,
+        process_orders_on_close=False,
+        collect_trade_details=True,
+    )
+
+    result = BacktestEngine(cfg).run(ShortExitNextOpenExcursion, bars=bars)
+
+    assert result.closed_trades is not None
+    trade = result.closed_trades[0]
+    assert trade.entry_price == pytest.approx(100.0)
+    assert trade.exit_price == pytest.approx(95.0)
+    assert trade.profit == pytest.approx(5.0)
+    assert trade.max_runup == pytest.approx(10.0)
+    assert trade.max_drawdown == pytest.approx(0.0)
+
+
+class LongExitNextOpenExcursion:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long", qty=1)
+        if bar_index == 1:
+            self.ctx.close("L")
+
+
+def test_long_exit_on_next_open_excludes_exit_bar_low_from_trade_drawdown():
+    bars = [
+        Bar(1, 100, 100, 100, 100),
+        Bar(2, 100, 110, 100, 105),
+        Bar(3, 105, 105, 50, 100),
+    ]
+    cfg = BacktestConfig(
+        symbol="S",
+        timeframe="1D",
+        start_time=1,
+        end_time=3,
+        initial_capital=10000,
+        commission_type="none",
+        commission_value=0.0,
+        process_orders_on_close=False,
+        collect_trade_details=True,
+    )
+
+    result = BacktestEngine(cfg).run(LongExitNextOpenExcursion, bars=bars)
+
+    assert result.closed_trades is not None
+    trade = result.closed_trades[0]
+    assert trade.entry_price == pytest.approx(100.0)
+    assert trade.exit_price == pytest.approx(105.0)
+    assert trade.profit == pytest.approx(5.0)
+    assert trade.max_runup == pytest.approx(10.0)
+    assert trade.max_drawdown == pytest.approx(0.0)
+
+
 class RiskMaxPositionStrategy:
     def __init__(self, params, runtime, ctx):
         self.ctx = ctx

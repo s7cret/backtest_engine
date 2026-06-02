@@ -15,6 +15,8 @@ def apply_position(
     bar: Bar,
     bar_index: int,
     commission: float,
+    *,
+    fill_point: str = "",
 ) -> str:
     signed = order.qty if order.side == "buy" else -order.qty
     if engine.position.direction == "flat" or (engine.position.size == 0):
@@ -31,6 +33,7 @@ def apply_position(
         bar,
         bar_index,
         commission,
+        fill_point=fill_point,
     )
 
 
@@ -115,6 +118,8 @@ def _reduce_or_reverse_position(
     bar: Bar,
     bar_index: int,
     commission: float,
+    *,
+    fill_point: str = "",
 ) -> str:
     qty_close = min(abs(signed), abs(engine.position.size))
     targets = [
@@ -167,6 +172,7 @@ def _reduce_or_reverse_position(
         price,
         bar,
         bar_index,
+        fill_point=fill_point,
     )
     engine.position.size += signed
     if abs(engine.position.size) < 1e-12:
@@ -215,6 +221,8 @@ def _close_target_trades(
     price: float,
     bar: Bar,
     bar_index: int,
+    *,
+    fill_point: str = "",
 ) -> None:
     remaining = qty_close
     for trade in list(targets):
@@ -228,7 +236,11 @@ def _close_target_trades(
             - exit_commission
             - entry_commission
         )
-        mfe, mae, max_runup, max_drawdown = engine._trade_excursion_values(trade, bar)
+        excursion_bar = _excursion_bar_for_close_fill(bar, price, fill_point)
+        mfe, mae, max_runup, max_drawdown = engine._trade_excursion_values(
+            trade,
+            excursion_bar,
+        )
         closed = replace(
             trade,
             exit_id=order.id,
@@ -257,6 +269,22 @@ def _close_target_trades(
         remaining -= qty
         if trade.qty <= 1e-12:
             engine.open_trades.remove(trade)
+
+
+def _excursion_bar_for_close_fill(bar: Bar, price: float, fill_point: str) -> Bar:
+    """Bound final trade excursion to the portion of the bar where the trade lived."""
+
+    if fill_point != "open":
+        return bar
+    return Bar(
+        time=bar.time,
+        open=price,
+        high=price,
+        low=price,
+        close=price,
+        volume=bar.volume,
+        time_close=bar.time_close,
+    )
 
 
 def _record_reversal_entry(

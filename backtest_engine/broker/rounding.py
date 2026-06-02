@@ -9,7 +9,7 @@ def round_to_step(value: float, step: float | None, mode: str = "nearest") -> fl
     # so that values like 26.694999999999997 (true 26.695) round half-up.
     eps = Decimal(str(step)) / Decimal("1E12")
     d = Decimal(str(value)) + eps
-    s = Decimal(str(step))
+    s = Decimal(str(step)).normalize()
     if mode == "floor":
         return float(d.quantize(s, rounding=ROUND_FLOOR))
     if mode == "ceil":

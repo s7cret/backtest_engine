@@ -19,4 +19,6 @@ def trade_excursion_values(
 
     mfe = favorable if trade.mfe is None else max(trade.mfe, favorable)
     mae = adverse if trade.mae is None else min(trade.mae, adverse)
-    return mfe, mae, max(0.0, mfe), max(0.0, -mae)
+    max_runup = max(0.0, mfe - trade.commission_entry)
+    max_drawdown = max(0.0, -mae + trade.commission_entry)
+    return mfe, mae, max_runup, max_drawdown
