@@ -1,5 +1,6 @@
 import pytest
 from backtest_engine import BacktestConfig, BacktestEngine, Bar, BarSeries
+from backtest_engine.models import Trade
 from backtest_engine.broker.fill_simulator import build_price_path
 from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.errors import BarValidationError
@@ -88,6 +89,26 @@ def test_market_next_open_and_close_immediate():
     assert r.open_trades[0].entry_price == 12
     r2 = BacktestEngine(cfg(process_orders_on_close=True)).run(BuyClose, bars=BARS)
     assert r2.closed_trades and r2.closed_trades[0].exit_price == 14
+
+
+def test_update_state_tracks_closed_trade_stats_incrementally():
+    engine = BacktestEngine(cfg())
+    engine.closed_trades.extend(
+        [
+            Trade("t1", "L1", "X1", "long", 1, 0, 10, 2, 1, 15, 1, 0, 0, 5, 0),
+            Trade("t2", "L2", "X2", "long", 2, 1, 15, 3, 2, 12, 1, 0, 0, -3, 0),
+            Trade("t3", "L3", "X3", "long", 3, 2, 12, 4, 3, 12, 1, 0, 0, 0, 0),
+        ]
+    )
+
+    engine._update_state()
+    engine._update_state()
+
+    assert engine.state.gross_profit == 5
+    assert engine.state.gross_loss == 3
+    assert engine.state.win_trades == 1
+    assert engine.state.loss_trades == 1
+    assert engine.state.even_trades == 1
 
 
 def test_limit_stop_stoplimit():

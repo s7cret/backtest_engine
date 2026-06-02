@@ -21,6 +21,9 @@ class StrategyStateView:
     max_runup_percent: float = 0.0
     closed_trades: int = 0
     open_trades: int = 0
+    win_trades: int = 0
+    loss_trades: int = 0
+    even_trades: int = 0
     _open_trades_ref: list[Any] = field(default_factory=list, repr=False)
     _closed_trades_ref: list[Any] = field(default_factory=list, repr=False)
 

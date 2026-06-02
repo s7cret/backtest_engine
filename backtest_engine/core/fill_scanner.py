@@ -40,6 +40,8 @@ def process_bar_fills(
     open_only: bool = False,
     skip_open: bool = False,
 ) -> None:
+    if not engine.config.collect_order_lifecycle and len(engine.orders) > 32:
+        engine.orders = [order for order in engine.orders if order.status in ("pending", "active")]
     recalc = 0
     path = engine._price_path(bar)
     path_cursor = 0

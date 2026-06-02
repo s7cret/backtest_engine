@@ -106,6 +106,12 @@ class BacktestEngine:
         self.fills: list[Fill] = []
         self.closed_trades: list[Trade] = []
         self.open_trades: list[Trade] = []
+        self._closed_trade_stats_count = 0
+        self._gross_profit_total = 0.0
+        self._gross_loss_total = 0.0
+        self._win_trades_total = 0
+        self._loss_trades_total = 0
+        self._even_trades_total = 0
         self.events: list[Diagnostic] = []
         self.warnings: list[Diagnostic] = []
         self.errors: list[Diagnostic] = []
@@ -579,6 +585,25 @@ class BacktestEngine:
         return extremes
 
     def _update_state(self) -> None:
+        if len(self.closed_trades) < self._closed_trade_stats_count:
+            self._closed_trade_stats_count = 0
+            self._gross_profit_total = 0.0
+            self._gross_loss_total = 0.0
+            self._win_trades_total = 0
+            self._loss_trades_total = 0
+            self._even_trades_total = 0
+        while self._closed_trade_stats_count < len(self.closed_trades):
+            trade = self.closed_trades[self._closed_trade_stats_count]
+            profit = trade.profit
+            if profit > 0:
+                self._gross_profit_total += profit
+                self._win_trades_total += 1
+            elif profit < 0:
+                self._gross_loss_total += abs(profit)
+                self._loss_trades_total += 1
+            else:
+                self._even_trades_total += 1
+            self._closed_trade_stats_count += 1
         self.state.position_size = self.position.size
         self.state.position_avg_price = (
             None if self.position.direction == "flat" else self.position.avg_price
@@ -588,14 +613,17 @@ class BacktestEngine:
         self.state.equity = self.equity
         self.state.open_profit = self.position.open_profit
         self.state.net_profit = self.position.realized_profit
-        self.state.gross_profit = sum(t.profit for t in self.closed_trades if t.profit > 0)
-        self.state.gross_loss = abs(sum(t.profit for t in self.closed_trades if t.profit < 0))
+        self.state.gross_profit = self._gross_profit_total
+        self.state.gross_loss = self._gross_loss_total
         self.state.max_drawdown = self.max_drawdown
         self.state.max_drawdown_percent = self.max_drawdown_percent
         self.state.max_runup = self.max_runup
         self.state.max_runup_percent = self.max_runup_percent
         self.state.closed_trades = len(self.closed_trades)
         self.state.open_trades = len(self.open_trades)
+        self.state.win_trades = self._win_trades_total
+        self.state.loss_trades = self._loss_trades_total
+        self.state.even_trades = self._even_trades_total
 
     def _want(self, name: str) -> bool:
         return name in self.config.required_outputs

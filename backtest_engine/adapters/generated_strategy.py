@@ -207,10 +207,9 @@ class _BridgeStrategyContext:
         self.closedtrades.set_current(int(state.closed_trades))
         self.max_drawdown.set_current(float(state.max_drawdown))
         self.max_runup.set_current(float(state.max_runup))
-        closed = getattr(state, "_closed_trades_ref", [])
-        self.wintrades.set_current(sum(1 for trade in closed if trade.profit > 0))
-        self.losstrades.set_current(sum(1 for trade in closed if trade.profit < 0))
-        self.eventrades.set_current(sum(1 for trade in closed if trade.profit == 0))
+        self.wintrades.set_current(int(state.win_trades))
+        self.losstrades.set_current(int(state.loss_trades))
+        self.eventrades.set_current(int(state.even_trades))
 
     def _commit_scalar_history(self) -> None:
         for value in (
@@ -488,6 +487,16 @@ def make_generated_strategy_adapter(
                 self._pine_runtime.data_provider = data_provider
             if intrabar_provider is not None:
                 self._pine_runtime.intrabar_provider = intrabar_provider
+            plot_recorder = getattr(self._pine_runtime, "plot_recorder", None)
+            set_time_window = getattr(plot_recorder, "set_time_window", None)
+            if callable(set_time_window):
+                if not bool(getattr(self.__class__, "runtime_capture_plots", True)):
+                    set_time_window(1, 0)
+                else:
+                    set_time_window(
+                        getattr(self.__class__, "runtime_plot_from_ms", None),
+                        getattr(self.__class__, "runtime_plot_to_ms", None),
+                    )
             self.generated = generated_strategy_class(params=params, runtime=self._pine_runtime)
             self._validate_generated_declaration(
                 getattr(self.generated, "ctx", None), adapter_options, ctx.config
