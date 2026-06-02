@@ -123,6 +123,7 @@ class PineRuntimeBackend:
             extra={
                 "exchange": getattr(config, "exchange", None),
                 "market_type": getattr(config, "market_type", None),
+                "record_lower_tf_metadata": False,
             },
         )
         symbol_info = imports["SymbolInfo"](

@@ -613,7 +613,7 @@ def _make_pine_runtime(options: GeneratedStrategyAdapterOptions) -> Any:
     return PineRuntime(
         symbol_info=SymbolInfo(tickerid=options.symbol, timezone=options.timezone),
         timeframe=TimeframeInfo.from_string(options.timeframe),
-        config=RuntimeConfig(),
+        config=RuntimeConfig(extra={"record_lower_tf_metadata": False}),
     )
 
 
