@@ -12,7 +12,7 @@ broker-owned semantics fail closed instead of being approximated silently.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol, TypeVar
 
 from backtest_engine.context import StrategyContext as EngineStrategyContext
@@ -507,11 +507,31 @@ def make_generated_strategy_adapter(
             self._active_engine_bar_index: int | None = None
 
         def _process_bar(self, bar: EngineBar, bar_index: int) -> None:
-            pine_bar = _to_pine_bar(bar)
+            fixed_timeframe_ms = getattr(getattr(self._pine_runtime, "timeframe", None), "interval_ms", None)
+            pine_bar = _to_pine_bar(bar, fixed_timeframe_ms=fixed_timeframe_ms)
             if self._active_engine_bar_index != bar_index:
                 if self._active_engine_bar_index is not None:
                     self._pine_runtime.end_bar()
                 self._pine_runtime.begin_bar(pine_bar)
+                plot_from_ms = getattr(self.__class__, "runtime_plot_from_ms", None)
+                plot_to_ms = getattr(self.__class__, "runtime_plot_to_ms", None)
+                is_visible = (
+                    (plot_from_ms is None or pine_bar.time >= plot_from_ms)
+                    and (plot_to_ms is None or pine_bar.time < plot_to_ms)
+                )
+                is_last_visible = bool(
+                    is_visible
+                    and plot_to_ms is not None
+                    and (pine_bar.time_close or pine_bar.time) >= plot_to_ms
+                )
+                self._pine_runtime.barstate = replace(
+                    self._pine_runtime.barstate,
+                    islast=is_last_visible,
+                    ishistory=not is_last_visible,
+                    isrealtime=is_last_visible,
+                    isnew=not is_last_visible,
+                    isconfirmed=not is_last_visible,
+                )
                 self._active_engine_bar_index = bar_index
             self._bridge_ctx._sync_from_engine()
             process = getattr(self.generated, "_process_bar", None)
@@ -643,7 +663,20 @@ def _pine_timestamp(value: int | None) -> int | None:
     return int(value) * 1000 if abs(int(value)) < 10_000_000_000 else int(value)
 
 
-def _to_pine_bar(bar: EngineBar) -> Any:
+def _normalize_pine_time_close(
+    time_close: int | None,
+    *,
+    open_time: int,
+    fixed_timeframe_ms: int | None,
+) -> int | None:
+    if time_close is None:
+        return None
+    if fixed_timeframe_ms is not None and int(time_close) == int(open_time) + fixed_timeframe_ms - 1:
+        return int(open_time) + fixed_timeframe_ms
+    return int(time_close)
+
+
+def _to_pine_bar(bar: EngineBar, *, fixed_timeframe_ms: int | None = None) -> Any:
     try:
         from pinelib.core import Bar as PineBar
     except ImportError as exc:  # pragma: no cover - depends on optional install state
@@ -657,7 +690,13 @@ def _to_pine_bar(bar: EngineBar) -> Any:
         low=bar.low,
         close=bar.close,
         volume=0.0 if bar.volume is None else bar.volume,
-        time_close=_pine_timestamp(getattr(bar, "time_close", None)),
+        time_close=_pine_timestamp(
+            _normalize_pine_time_close(
+                getattr(bar, "time_close", None),
+                open_time=bar.time,
+                fixed_timeframe_ms=fixed_timeframe_ms,
+            )
+        ),
     )
 
 
