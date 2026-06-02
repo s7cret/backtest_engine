@@ -73,13 +73,13 @@ class StrategyStateView:
     def opentrades_max_runup(self, index: int) -> float:
         value = self._open(index).max_runup
         if value is None:
-            raise AttributeError("open trade max_runup is unavailable")
+            return 0.0
         return value
 
     def opentrades_max_drawdown(self, index: int) -> float:
         value = self._open(index).max_drawdown
         if value is None:
-            raise AttributeError("open trade max_drawdown is unavailable")
+            return 0.0
         return value
 
     def closedtrades_entry_id(self, index: int) -> str:

@@ -67,27 +67,43 @@ class _BridgeScalarSeries:
         return bool(self._current)
 
     def __add__(self, other: Any) -> Any:
+        if _is_pine_na(self._current):
+            return self._current
         return self._current + _unwrap_scalar(other)
 
     def __radd__(self, other: Any) -> Any:
+        if _is_pine_na(self._current):
+            return self._current
         return _unwrap_scalar(other) + self._current
 
     def __sub__(self, other: Any) -> Any:
+        if _is_pine_na(self._current):
+            return self._current
         return self._current - _unwrap_scalar(other)
 
     def __rsub__(self, other: Any) -> Any:
+        if _is_pine_na(self._current):
+            return self._current
         return _unwrap_scalar(other) - self._current
 
     def __mul__(self, other: Any) -> Any:
+        if _is_pine_na(self._current):
+            return self._current
         return self._current * _unwrap_scalar(other)
 
     def __rmul__(self, other: Any) -> Any:
+        if _is_pine_na(self._current):
+            return self._current
         return _unwrap_scalar(other) * self._current
 
     def __truediv__(self, other: Any) -> Any:
+        if _is_pine_na(self._current):
+            return self._current
         return self._current / _unwrap_scalar(other)
 
     def __rtruediv__(self, other: Any) -> Any:
+        if _is_pine_na(self._current):
+            return self._current
         return _unwrap_scalar(other) / self._current
 
     def __eq__(self, other: object) -> bool:
@@ -110,6 +126,18 @@ def _unwrap_scalar(value: Any) -> Any:
     return getattr(value, "_current", value)
 
 
+def _is_pine_na(value: Any) -> bool:
+    try:
+        from pinelib.core.na import is_na
+    except Exception:
+        return False
+    return bool(is_na(value))
+
+
+def _none_if_pine_na(value: Any) -> Any:
+    return None if _is_pine_na(value) else value
+
+
 class GeneratedStrategyClass(Protocol):
     def __call__(self, params: dict[str, Any] | None = None, runtime: Any | None = None) -> Any: ...
 
@@ -130,6 +158,8 @@ class GeneratedStrategyAdapterOptions:
     symbol: str = "TEST"
     timeframe: str = "1"
     timezone: str = "UTC"
+    data_provider: Any | None = None
+    intrabar_provider: Any | None = None
     fail_on_calc_on_order_fills: bool = True
     fail_on_calc_on_every_tick: bool = True
     fail_on_bar_magnifier: bool = True
@@ -313,7 +343,12 @@ class _BridgeStrategyContext:
     ) -> None:
         del source_map
         self._engine_ctx.entry(
-            id=id, direction=_direction(direction), qty=qty, limit=limit, stop=stop, comment=comment
+            id=id,
+            direction=_direction(direction),
+            qty=_none_if_pine_na(qty),
+            limit=_none_if_pine_na(limit),
+            stop=_none_if_pine_na(stop),
+            comment=comment,
         )
 
     def order(
@@ -332,9 +367,9 @@ class _BridgeStrategyContext:
         self._engine_ctx.order(
             id=id,
             direction=_direction(direction),
-            qty=qty,
-            limit=limit,
-            stop=stop,
+            qty=_none_if_pine_na(qty),
+            limit=_none_if_pine_na(limit),
+            stop=_none_if_pine_na(stop),
             oca_name=oca_name,
             oca_type=oca_type,
         )
@@ -361,15 +396,15 @@ class _BridgeStrategyContext:
         self._engine_ctx.exit(
             id=id,
             from_entry=from_entry,
-            qty=qty,
-            qty_percent=qty_percent,
-            limit=limit,
-            stop=stop,
-            profit=profit,
-            loss=loss,
-            trail_price=trail_price,
-            trail_points=trail_points,
-            trail_offset=trail_offset,
+            qty=_none_if_pine_na(qty),
+            qty_percent=_none_if_pine_na(qty_percent),
+            limit=_none_if_pine_na(limit),
+            stop=_none_if_pine_na(stop),
+            profit=_none_if_pine_na(profit),
+            loss=_none_if_pine_na(loss),
+            trail_price=_none_if_pine_na(trail_price),
+            trail_points=_none_if_pine_na(trail_points),
+            trail_offset=_none_if_pine_na(trail_offset),
             oca_name=oca_name,
             oca_type=oca_type,
         )
@@ -385,11 +420,23 @@ class _BridgeStrategyContext:
         source_map: object | None = None,
     ) -> None:
         del source_map
-        self._engine_ctx.close(id=id, qty=qty, qty_percent=qty_percent, immediately=immediately, comment=comment)
+        self._engine_ctx.close(
+            id=id,
+            qty=_none_if_pine_na(qty),
+            qty_percent=_none_if_pine_na(qty_percent),
+            immediately=immediately,
+            comment=comment,
+        )
 
-    def close_all(self, immediately: bool = False, *, source_map: object | None = None) -> None:
+    def close_all(
+        self,
+        immediately: bool = False,
+        *,
+        comment: str | None = None,
+        source_map: object | None = None,
+    ) -> None:
         del source_map
-        self._engine_ctx.close_all(immediately=immediately)
+        self._engine_ctx.close_all(immediately=immediately, comment=comment)
 
     def cancel(self, id: str, *, source_map: object | None = None) -> None:
         del source_map
@@ -432,6 +479,15 @@ def make_generated_strategy_adapter(
                 raise GeneratedStrategyBridgeError("BacktestEngine StrategyContext is required")
             self.ctx = ctx
             self._pine_runtime = _make_pine_runtime(adapter_options)
+            data_provider = getattr(self.__class__, "runtime_data_provider", None) or adapter_options.data_provider
+            intrabar_provider = (
+                getattr(self.__class__, "runtime_intrabar_provider", None)
+                or adapter_options.intrabar_provider
+            )
+            if data_provider is not None:
+                self._pine_runtime.data_provider = data_provider
+            if intrabar_provider is not None:
+                self._pine_runtime.intrabar_provider = intrabar_provider
             self.generated = generated_strategy_class(params=params, runtime=self._pine_runtime)
             self._validate_generated_declaration(
                 getattr(self.generated, "ctx", None), adapter_options, ctx.config
@@ -536,6 +592,11 @@ def _declaration_config_diff(declaration: Any, engine_config: Any) -> dict[str, 
             continue
         expected = getattr(declaration, decl_field)
         actual = getattr(engine_config, cfg_field, None)
+        if decl_field == "commission_type":
+            expected = {
+                "cash_per_order": "fixed_per_order",
+                "cash_per_contract": "fixed_per_contract",
+            }.get(expected, expected)
         if expected != actual:
             diff[decl_field] = {"declaration": expected, "config": actual}
     return diff
