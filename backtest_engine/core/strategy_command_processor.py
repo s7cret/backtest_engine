@@ -190,7 +190,17 @@ def _apply_exit_command(
         bar.close,
     )
     from_entry = payload.from_entry
-    available = engine._available_exit_qty(from_entry)
+    existing_exit = next(
+        (
+            order
+            for order in engine.orders
+            if order.kind == "exit"
+            and order.status in ("pending", "active")
+            and (order.parent_exit_id or order.id) == payload.id
+        ),
+        None,
+    )
+    available = engine._available_exit_qty(from_entry, exclude_order=existing_exit)
     if available <= 0:
         engine._diag(
             "ORDER_REJECTED_NO_AVAILABLE_POSITION_QTY",
@@ -226,7 +236,8 @@ def _apply_exit_command(
         return
     oca = payload.oca_name or payload.id
     if limit is not None:
-        engine._add_order(
+        _add_or_modify_exit_order(
+            engine,
             Order(
                 id=payload.id + ":L",
                 kind="exit",
@@ -252,7 +263,8 @@ def _apply_exit_command(
             bar_index,
         )
     if stop is not None:
-        engine._add_order(
+        _add_or_modify_exit_order(
+            engine,
             Order(
                 id=payload.id + ":S",
                 kind="exit",
@@ -320,6 +332,59 @@ def _apply_exit_command(
             bar,
             bar_index,
         )
+
+
+def _add_or_modify_exit_order(engine: Any, new: Order, bar: Bar, bar_index: int) -> None:
+    existing = next(
+        (
+            order
+            for order in engine.orders
+            if order.id == new.id and order.kind == "exit" and order.status in ("pending", "active")
+        ),
+        None,
+    )
+    if existing is None:
+        engine._add_order(new, bar, bar_index)
+        return
+    if new.qty <= 0:
+        engine._diag(
+            "ORDER_REJECTED_ZERO_QTY",
+            "order qty is zero",
+            "warning",
+            bar_index,
+            bar.time,
+            new.id,
+        )
+        return
+    if not engine._risk_allows_order(new, bar, bar_index, existing):
+        return
+    existing.qty = new.qty
+    existing.reserved_qty = new.reserved_qty
+    existing.limit_price = new.limit_price
+    existing.stop_price = new.stop_price
+    existing.trail_price = new.trail_price
+    existing.trail_points = new.trail_points
+    existing.trail_offset = new.trail_offset
+    existing.order_type = new.order_type
+    existing.direction = new.direction
+    existing.side = new.side
+    existing.position_direction = new.position_direction
+    existing.from_entry = new.from_entry
+    existing.oca_name = new.oca_name
+    existing.oca_type = new.oca_type
+    existing.parent_exit_id = new.parent_exit_id
+    existing.comment = new.comment
+    existing.created_bar_index = new.created_bar_index
+    existing.created_time = new.created_time
+    existing.active_from_bar_index = new.active_from_bar_index
+    existing.status = "active" if new.active_from_bar_index <= bar_index else "pending"
+    engine._event(
+        "ORDER_MODIFIED",
+        f"exit order {existing.id} modified",
+        bar_index,
+        bar.time,
+        existing.id,
+    )
 
 
 def _apply_entry_or_order_command(

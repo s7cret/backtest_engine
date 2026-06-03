@@ -137,7 +137,13 @@ def _reduce_or_reverse_position(
             order.id,
         )
         return engine.position.direction
-    reserved = engine._reserved_qty_by_entry(exclude_order=order)
+    # A market close/reversal command must be able to flatten the current
+    # position even when reduce-only strategy.exit orders are reserving it.
+    reserved = (
+        {}
+        if order.position_effect in {"close", "reverse"}
+        else engine._reserved_qty_by_entry(exclude_order=order)
+    )
     target_caps = {
         id(trade): max(
             0.0,

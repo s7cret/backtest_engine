@@ -60,6 +60,66 @@ def test_profit_loss_convert_to_limit_stop_exits():
     assert r.closed_trades[0].exit_price == 13
 
 
+class BuyWithPendingExitThenReverse:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long", qty=1)
+        if self.ctx.state.position_size > 0:
+            self.ctx.exit("XL", from_entry="L", qty=1, stop=5)
+        if bar_index == 3:
+            self.ctx.entry("S", "short", qty=1)
+
+
+def test_opposite_entry_reverses_despite_pending_exit_reservation():
+    bars = [
+        Bar(1, 10, 10, 10, 10),
+        Bar(2, 10, 10, 10, 10),
+        Bar(3, 10, 10, 10, 10),
+        Bar(4, 10, 10, 10, 10),
+        Bar(5, 10, 10, 10, 10),
+    ]
+    r = BacktestEngine(cfg()).run(BuyWithPendingExitThenReverse, bars=bars)
+    assert r.closed_trades
+    assert r.closed_trades[0].entry_id == "L"
+    assert r.closed_trades[0].exit_id == "S"
+    assert r.open_trades
+    assert r.open_trades[0].entry_id == "S"
+    assert r.open_trades[0].direction == "short"
+
+
+class RepricedExit:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long", qty=1)
+        if self.ctx.state.position_size > 0:
+            self.ctx.exit("XL", from_entry="L", qty=1, stop=bar.close - 1)
+
+
+def test_repeated_exit_id_reprices_existing_order():
+    bars = [
+        Bar(1, 10, 10, 10, 10),
+        Bar(2, 10, 10, 10, 10),
+        Bar(3, 12, 12, 11, 12),
+        Bar(4, 12, 12, 10.5, 11),
+        Bar(5, 11, 11, 9.5, 10),
+    ]
+    r = BacktestEngine(cfg(collect_events=True)).run(RepricedExit, bars=bars)
+    created = [
+        event for event in r.events or [] if event.code == "ORDER_CREATED" and event.order_id == "XL:S"
+    ]
+    modified = [
+        event for event in r.events or [] if event.code == "ORDER_MODIFIED" and event.order_id == "XL:S"
+    ]
+    assert len(created) == 1
+    assert modified
+
+
 class TwoEntriesExitSecond:
     def __init__(self, params, runtime, ctx):
         self.ctx = ctx

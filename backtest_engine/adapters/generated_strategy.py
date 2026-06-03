@@ -359,6 +359,7 @@ class _BridgeStrategyContext:
         stop: float | None = None,
         oca_name: str | None = None,
         oca_type: str | None = None,
+        comment: str | None = None,
         *,
         source_map: object | None = None,
     ) -> None:
@@ -371,6 +372,7 @@ class _BridgeStrategyContext:
             stop=_none_if_pine_na(stop),
             oca_name=oca_name,
             oca_type=oca_type,
+            comment=comment,
         )
 
     def exit(
@@ -388,6 +390,7 @@ class _BridgeStrategyContext:
         trail_offset: float | None = None,
         oca_name: str | None = None,
         oca_type: str | None = None,
+        comment: str | None = None,
         *,
         source_map: object | None = None,
     ) -> None:
@@ -406,6 +409,7 @@ class _BridgeStrategyContext:
             trail_offset=_none_if_pine_na(trail_offset),
             oca_name=oca_name,
             oca_type=oca_type,
+            comment=comment,
         )
 
     def close(
