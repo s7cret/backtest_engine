@@ -491,6 +491,9 @@ def make_generated_strategy_adapter(
                 self._pine_runtime.data_provider = data_provider
             if intrabar_provider is not None:
                 self._pine_runtime.intrabar_provider = intrabar_provider
+            request_data_end_ms = getattr(self.__class__, "runtime_request_data_end_ms", None)
+            if request_data_end_ms is not None:
+                self._pine_runtime.request_data_end_ms = int(request_data_end_ms)
             plot_recorder = getattr(self._pine_runtime, "plot_recorder", None)
             set_time_window = getattr(plot_recorder, "set_time_window", None)
             if callable(set_time_window):
