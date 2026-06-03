@@ -78,6 +78,29 @@ def test_generated_strategy_adapter_sets_request_data_end_ms() -> None:
     assert GeneratedReadsRequestEnd.seen == [12345, 12345]
 
 
+def test_generated_strategy_adapter_exposes_max_bars_back_to_pinelib_runtime() -> None:
+    class GeneratedReadsRuntimeConfig:
+        seen: list[int | None] = []
+
+        def __init__(self, params=None, runtime=None):
+            self.params = params or {}
+            self.rt = runtime
+            self.ctx = None
+
+        def _process_bar(self, bar):
+            del bar
+            self.seen.append(self.rt.config.extra.get("max_bars_back"))
+
+    strategy_class = make_generated_strategy_adapter(GeneratedReadsRuntimeConfig)
+    bars = [Bar(i, 100 + i, 101 + i, 99 + i, 100 + i, 1.0) for i in range(2)]
+    config = BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=1, max_bars_back=5000)
+
+    result = BacktestEngine(config).run(strategy_class, bars=bars)
+
+    assert result.status == "completed"
+    assert GeneratedReadsRuntimeConfig.seen == [5000, 5000]
+
+
 def test_strategy_context_buffers_typed_command_payloads() -> None:
     ctx = StrategyContext(BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=1))
 

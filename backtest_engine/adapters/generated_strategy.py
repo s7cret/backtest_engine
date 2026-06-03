@@ -491,6 +491,9 @@ def make_generated_strategy_adapter(
                 self._pine_runtime.data_provider = data_provider
             if intrabar_provider is not None:
                 self._pine_runtime.intrabar_provider = intrabar_provider
+            self._pine_runtime.config.extra["max_bars_back"] = int(
+                getattr(ctx.config, "max_bars_back", 0) or 0
+            )
             request_data_end_ms = getattr(self.__class__, "runtime_request_data_end_ms", None)
             if request_data_end_ms is not None:
                 self._pine_runtime.request_data_end_ms = int(request_data_end_ms)
