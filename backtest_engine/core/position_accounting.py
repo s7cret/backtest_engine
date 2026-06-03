@@ -180,6 +180,7 @@ def _reduce_or_reverse_position(
         bar_index,
         fill_point=fill_point,
     )
+    _cancel_orphaned_exit_orders(engine, order, bar, bar_index)
     engine.position.size += signed
     if abs(engine.position.size) < 1e-12:
         engine.position = Position(realized_profit=engine.position.realized_profit)
@@ -197,6 +198,25 @@ def _reduce_or_reverse_position(
         engine.position.avg_price = price
         _record_reversal_entry(engine, order, price, bar, bar_index, opening_commission)
     return engine.position.direction
+
+
+def _cancel_orphaned_exit_orders(engine: Any, filled_order: Order, bar: Bar, bar_index: int) -> None:
+    for order in engine.orders:
+        if order is filled_order:
+            continue
+        if order.kind != "exit" or order.status not in {"pending", "active"}:
+            continue
+        if order.from_entry is None or engine._matching_open_trades(order.from_entry):
+            continue
+        order.status = "cancelled"
+        engine._cb("on_order_cancelled", order)
+        engine._event(
+            "ORDER_CANCELLED",
+            f"orphaned exit order {order.id} cancelled",
+            bar_index,
+            bar.time,
+            order.id,
+        )
 
 
 def _gross_close_profit(

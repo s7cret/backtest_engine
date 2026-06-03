@@ -447,8 +447,22 @@ class BacktestEngine:
         i: int,
         open_only: bool = False,
         skip_open: bool = False,
+        close_activation_only: bool = False,
+        skip_trailing: bool = False,
+        trailing_only: bool = False,
     ) -> None:
-        process_bar_fills(self, strategy, ctx, bar, i, open_only=open_only, skip_open=skip_open)
+        process_bar_fills(
+            self,
+            strategy,
+            ctx,
+            bar,
+            i,
+            open_only=open_only,
+            skip_open=skip_open,
+            close_activation_only=close_activation_only,
+            skip_trailing=skip_trailing,
+            trailing_only=trailing_only,
+        )
 
     def _maybe_margin_call(self, price: float, bar: Bar, i: int, point: str) -> bool:
         return maybe_margin_call(self, price, bar, i, point)

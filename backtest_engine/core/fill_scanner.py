@@ -39,6 +39,9 @@ def process_bar_fills(
     bar_index: int,
     open_only: bool = False,
     skip_open: bool = False,
+    close_activation_only: bool = False,
+    skip_trailing: bool = False,
+    trailing_only: bool = False,
 ) -> None:
     if not engine.config.collect_order_lifecycle and len(engine.orders) > 32:
         engine.orders = [order for order in engine.orders if order.status in ("pending", "active")]
@@ -66,6 +69,9 @@ def process_bar_fills(
                 path_index,
                 recalc,
                 filled,
+                close_activation_only,
+                skip_trailing,
+                trailing_only,
             )
             if restart_after_recalc:
                 path_cursor = path_index
@@ -89,12 +95,34 @@ def _scan_orders_at_path_point(
     path_index: int,
     recalc: int,
     filled: bool,
+    close_activation_only: bool,
+    skip_trailing: bool,
+    trailing_only: bool,
 ) -> tuple[bool, int, bool]:
     for order in list(engine.orders):
+        is_trailing = (
+            order.trail_price is not None
+            or order.trail_offset is not None
+            or order.trail_points is not None
+        )
+        if skip_trailing and is_trailing:
+            continue
+        if trailing_only and not is_trailing:
+            continue
         current_bar_close_activation = (
             engine.config.process_orders_on_close and order.created_bar_index == bar_index
         )
+        same_bar_close_order = (
+            order.created_bar_index == bar_index
+            and (engine.config.process_orders_on_close or order.immediately)
+        )
+        if close_activation_only and not same_bar_close_order:
+            continue
         if current_bar_close_activation and not (point == "close" or point.endswith(".close")):
+            continue
+        if close_activation_only and same_bar_close_order and not (
+            point == "close" or point.endswith(".close")
+        ):
             continue
         if order.status != "active":
             if not (

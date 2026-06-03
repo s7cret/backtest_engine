@@ -51,6 +51,9 @@ class NativeRunEngine(Protocol):
         *,
         open_only: bool = False,
         skip_open: bool = False,
+        close_activation_only: bool = False,
+        skip_trailing: bool = False,
+        trailing_only: bool = False,
     ) -> None: ...
     def _update_open_profit(self, price: float) -> None: ...
     def _update_state(self) -> None: ...
@@ -124,11 +127,30 @@ def run_native_strategy(
                 engine._cb("on_order_activated", order)
         runtime.begin_bar(bar, i)
         engine._process_bar_fills(strategy, ctx, bar, i, open_only=True)
+        engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True, skip_trailing=True)
         engine._update_open_profit(bar.close)
         engine._update_state()
         engine._call_strategy(strategy, bar, i)
         engine._flush(ctx, bar, i)
-        engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
+        if engine.config.process_orders_on_close or engine.config.calc_on_order_fills:
+            engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
+        else:
+            engine._process_bar_fills(
+                strategy,
+                ctx,
+                bar,
+                i,
+                skip_open=True,
+                close_activation_only=True,
+            )
+            engine._process_bar_fills(
+                strategy,
+                ctx,
+                bar,
+                i,
+                skip_open=True,
+                trailing_only=True,
+            )
         engine._update_intrabar_drawdown(bar)
         engine._update_open_profit(bar.close)
         engine._update_trade_excursions(bar)

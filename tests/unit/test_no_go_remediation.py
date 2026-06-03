@@ -120,6 +120,62 @@ def test_repeated_exit_id_reprices_existing_order():
     assert modified
 
 
+class ReuseEntryIdAfterReverse:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long", qty=1)
+        if bar_index == 1 and self.ctx.state.position_size > 0:
+            self.ctx.exit("XL", from_entry="L", qty=1, stop=9)
+        if bar_index == 2:
+            self.ctx.entry("S", "short", qty=1)
+        if bar_index == 4:
+            self.ctx.entry("L", "long", qty=1)
+
+
+def test_reverse_cancels_orphaned_exit_before_entry_id_is_reused():
+    bars = [
+        Bar(1, 10, 10, 10, 10),
+        Bar(2, 10, 10, 10, 10),
+        Bar(3, 10, 10, 10, 10),
+        Bar(4, 10, 10, 10, 10),
+        Bar(5, 10, 10, 10, 10),
+        Bar(6, 10, 10, 8, 10),
+    ]
+    r = BacktestEngine(cfg(collect_events=True)).run(ReuseEntryIdAfterReverse, bars=bars)
+    assert [trade.exit_id for trade in r.closed_trades] == ["S", "L"]
+    assert r.open_trades
+    assert r.open_trades[0].entry_id == "L"
+    assert any(
+        event.code == "ORDER_CANCELLED" and event.order_id == "XL:S" for event in r.events or []
+    )
+
+
+class StopRepricedAfterIntrabarHit:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long", qty=1)
+        if self.ctx.state.position_size > 0:
+            self.ctx.exit("XL", from_entry="L", qty=1, stop=bar.close - 1)
+
+
+def test_active_stop_fills_before_strategy_reprices_it_on_same_bar():
+    bars = [
+        Bar(1, 10, 10, 10, 10),
+        Bar(2, 10, 10, 10, 10),
+        Bar(3, 12, 12, 8, 12),
+    ]
+    r = BacktestEngine(cfg()).run(StopRepricedAfterIntrabarHit, bars=bars)
+    assert r.closed_trades
+    assert r.closed_trades[0].exit_id == "XL:S"
+    assert r.closed_trades[0].exit_price == 9
+
+
 class TwoEntriesExitSecond:
     def __init__(self, params, runtime, ctx):
         self.ctx = ctx
