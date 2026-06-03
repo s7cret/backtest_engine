@@ -184,11 +184,6 @@ def _apply_exit_command(
         return
     direction = engine.position.direction
     side = "sell" if direction == "long" else "buy"
-    qty = engine._qty_from_args(
-        _qty_args(payload.qty, payload.qty_percent),
-        engine.position.size,
-        bar.close,
-    )
     from_entry = payload.from_entry
     if _exit_id_already_filled_for_open_entry(engine, payload.id, from_entry):
         return
@@ -213,6 +208,14 @@ def _apply_exit_command(
             payload.id,
         )
         return
+    if payload.qty is None and payload.qty_percent is None:
+        qty = available
+    else:
+        qty = engine._qty_from_args(
+            _qty_args(payload.qty, payload.qty_percent),
+            engine.position.size,
+            bar.close,
+        )
     qty = min(qty, available)
     base = engine._exit_base_price(from_entry)
     if payload.profit is not None and limit is None:

@@ -171,6 +171,30 @@ def test_reissued_exit_preserves_existing_reservation_after_sibling_fill():
     assert r.open_trades == []
 
 
+class ExitWithoutQtyClosesFullEntry:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long", qty=2)
+        if self.ctx.state.position_size > 0:
+            self.ctx.exit("XL", from_entry="L", stop=9)
+
+
+def test_exit_without_qty_reserves_full_matching_entry():
+    bars = [
+        Bar(1, 10, 10, 10, 10),
+        Bar(2, 10, 10, 10, 10),
+        Bar(3, 10, 10, 8, 10),
+    ]
+    r = BacktestEngine(cfg(default_qty_type="fixed", default_qty_value=1)).run(
+        ExitWithoutQtyClosesFullEntry, bars=bars
+    )
+    assert [(t.exit_id, t.qty) for t in r.closed_trades] == [("XL:S", 2.0)]
+    assert r.open_trades == []
+
+
 class ReuseEntryIdAfterReverse:
     def __init__(self, params, runtime, ctx):
         self.ctx = ctx
