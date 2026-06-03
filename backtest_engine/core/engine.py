@@ -106,6 +106,7 @@ class BacktestEngine:
         self.fills: list[Fill] = []
         self.closed_trades: list[Trade] = []
         self.open_trades: list[Trade] = []
+        self._filled_exit_entry_keys: set[tuple[str, str, int, int]] = set()
         self._closed_trade_stats_count = 0
         self._gross_profit_total = 0.0
         self._gross_loss_total = 0.0
@@ -713,6 +714,11 @@ class BacktestEngine:
         self.fills = clone_state(snapshot.fills)
         self.closed_trades = clone_state(snapshot.closed_trades)
         self.open_trades = clone_state(snapshot.open_trades)
+        self._filled_exit_entry_keys = {
+            (trade.exit_id.split(":", 1)[0], trade.entry_id, trade.entry_time, trade.entry_bar_index)
+            for trade in self.closed_trades
+            if trade.exit_id is not None
+        }
         self.last_trade_bar = snapshot.last_trade_bar
         self.events = clone_state(snapshot.events)
         self.warnings = clone_state(snapshot.warnings)

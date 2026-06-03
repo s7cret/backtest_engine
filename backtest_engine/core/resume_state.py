@@ -45,6 +45,11 @@ def restore_resume_state(
     engine.fills = broker.fills
     engine.closed_trades = broker.closed_trades
     engine.open_trades = broker.open_trades
+    engine._filled_exit_entry_keys = {
+        (trade.exit_id.split(":", 1)[0], trade.entry_id, trade.entry_time, trade.entry_bar_index)
+        for trade in engine.closed_trades
+        if trade.exit_id is not None
+    }
     engine.last_trade_bar = broker.last_trade_bar
     engine.state = StrategyStateView(
         initial_capital=engine.config.initial_capital,

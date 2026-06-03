@@ -190,6 +190,8 @@ def _apply_exit_command(
         bar.close,
     )
     from_entry = payload.from_entry
+    if _exit_id_already_filled_for_open_entry(engine, payload.id, from_entry):
+        return
     existing_exit = next(
         (
             order
@@ -334,6 +336,28 @@ def _apply_exit_command(
         )
 
 
+def _exit_id_already_filled_for_open_entry(
+    engine: Any, exit_id: str, from_entry: str | None
+) -> bool:
+    cache = getattr(engine, "_filled_exit_entry_keys", None)
+    if cache is None:
+        cache = {
+            (
+                trade.exit_id.split(":", 1)[0],
+                trade.entry_id,
+                trade.entry_time,
+                trade.entry_bar_index,
+            )
+            for trade in engine.closed_trades
+            if trade.exit_id is not None
+        }
+        engine._filled_exit_entry_keys = cache
+    for trade in engine._matching_open_trades(from_entry):
+        if (exit_id, trade.entry_id, trade.entry_time, trade.entry_bar_index) in cache:
+            return True
+    return False
+
+
 def _add_or_modify_exit_order(engine: Any, new: Order, bar: Bar, bar_index: int) -> None:
     existing = next(
         (
@@ -358,8 +382,8 @@ def _add_or_modify_exit_order(engine: Any, new: Order, bar: Bar, bar_index: int)
         return
     if not engine._risk_allows_order(new, bar, bar_index, existing):
         return
-    existing.qty = new.qty
-    existing.reserved_qty = new.reserved_qty
+    existing.qty = max(existing.qty, new.qty)
+    existing.reserved_qty = max(existing.reserved_qty, new.reserved_qty)
     existing.limit_price = new.limit_price
     existing.stop_price = new.stop_price
     existing.trail_price = new.trail_price

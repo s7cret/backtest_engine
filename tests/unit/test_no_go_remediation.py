@@ -120,6 +120,57 @@ def test_repeated_exit_id_reprices_existing_order():
     assert modified
 
 
+class ReissueFilledExitId:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long", qty=2)
+        if self.ctx.state.position_size > 0:
+            self.ctx.exit("XL", from_entry="L", qty_percent=50, stop=9)
+
+
+def test_filled_exit_id_is_not_reissued_for_same_open_entry():
+    bars = [
+        Bar(1, 10, 10, 10, 10),
+        Bar(2, 10, 10, 10, 10),
+        Bar(3, 10, 10, 8, 10),
+        Bar(4, 10, 10, 8, 10),
+    ]
+    r = BacktestEngine(cfg(collect_events=True)).run(ReissueFilledExitId, bars=bars)
+    assert [(t.exit_id, t.qty) for t in r.closed_trades] == [("XL:S", 1.0)]
+    assert [(t.entry_id, t.qty) for t in r.open_trades] == [("L", 1.0)]
+    created = [
+        event for event in r.events or [] if event.code == "ORDER_CREATED" and event.order_id == "XL:S"
+    ]
+    assert len(created) == 1
+
+
+class PreserveSiblingExitReservation:
+    def __init__(self, params, runtime, ctx):
+        self.ctx = ctx
+
+    def _process_bar(self, bar, bar_index):
+        if bar_index == 0:
+            self.ctx.entry("L", "long", qty=2)
+        if self.ctx.state.position_size > 0:
+            self.ctx.exit("XL1", from_entry="L", qty_percent=50, limit=15)
+            self.ctx.exit("XL2", from_entry="L", qty_percent=50, stop=9)
+
+
+def test_reissued_exit_preserves_existing_reservation_after_sibling_fill():
+    bars = [
+        Bar(1, 10, 10, 10, 10),
+        Bar(2, 10, 10, 10, 10),
+        Bar(3, 10, 10, 8, 10),
+        Bar(4, 10, 15, 10, 15),
+    ]
+    r = BacktestEngine(cfg()).run(PreserveSiblingExitReservation, bars=bars)
+    assert [(t.exit_id, t.qty) for t in r.closed_trades] == [("XL2:S", 1.0), ("XL1:L", 1.0)]
+    assert r.open_trades == []
+
+
 class ReuseEntryIdAfterReverse:
     def __init__(self, params, runtime, ctx):
         self.ctx = ctx

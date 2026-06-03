@@ -289,6 +289,10 @@ def _close_target_trades(
             is_open=False,
         )
         engine.closed_trades.append(closed)
+        if order.kind == "exit" and order.parent_exit_id is not None:
+            engine._filled_exit_entry_keys.add(
+                (order.parent_exit_id, closed.entry_id, closed.entry_time, closed.entry_bar_index)
+            )
         engine._cb("on_trade_close", closed)
         trade.qty -= qty
         trade.commission_entry -= entry_commission
