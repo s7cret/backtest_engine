@@ -1,0 +1,5 @@
+services:
+  backtest-engine:
+    build:
+      context: .
+    command: python -m pytest

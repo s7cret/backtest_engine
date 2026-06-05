@@ -34,3 +34,19 @@ See `docs/BROKER_BOUNDARY.md`, `docs/STAGE13_SUPPORTED_SUBSET.md`, `docs/release
 ## License
 
 MIT.
+
+## Installation, Docker, and Publication
+
+Use the verbose installer when preparing a clean host:
+
+```bash
+./scripts/install.sh --dev
+```
+
+Run the package in Docker:
+
+```bash
+docker compose run --rm backtest-engine
+```
+
+For a public GitHub release checklist, see `docs/GITHUB_PUBLICATION.md`.
