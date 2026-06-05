@@ -29,7 +29,7 @@ Useful public helpers live under `backtest_engine.core` (clock/lifecycle/executi
 
 Resume/checkpointing is exposed through `BacktestResumeState` and `core.BrokerSnapshot`: set `export_resume_state=True` and implement `export_state()`/`restore_state(state)` on strategy/runtime objects for continuation. Durable cross-process resume still requires caller-provided stable serializers.
 
-See `docs/BROKER_BOUNDARY.md`, `docs/STAGE13_SUPPORTED_SUBSET.md`, `docs/releases/`, and `ROADMAP.md` for current limits. TradingView parity claims require real exported fixtures; unavailable fixtures are documented as external blockers rather than assumed parity.
+See `docs/BROKER_BOUNDARY.md`, `docs/STAGE13_SUPPORTED_SUBSET.md`, and `docs/releases/` for current limits. External parity claims require real exported fixtures; unavailable fixtures are documented as blockers rather than assumed coverage.
 
 ## License
 
@@ -50,3 +50,13 @@ docker compose run --rm backtest-engine
 ```
 
 For a public GitHub release checklist, see `docs/GITHUB_PUBLICATION.md`.
+
+## Support / Donations
+
+OpenPine development is independent and MIT-licensed. Donations are optional and help keep the public tooling maintained.
+
+- Telegram: https://t.me/OpenPine
+- TON: `UQAyIr2sQ4-_Q5L-4VINcU18khDas5GPbAlYEkQN6S_qzui2`
+- SOL: `EbxMUK2W4RGeQZCTRFrdgpEJvnqtyczPZvBrQa1cYJnQ`
+
+Support does not affect license terms, feature access, or project guarantees.
