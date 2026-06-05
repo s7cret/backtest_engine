@@ -12,6 +12,11 @@ license = {text = "MIT"}
 authors = [{name = "MoltBot"}]
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/s7cret/backtest_engine"
+Repository = "https://github.com/s7cret/backtest_engine"
+Issues = "https://github.com/s7cret/backtest_engine/issues"
+
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10", "build>=1.2"]
 
