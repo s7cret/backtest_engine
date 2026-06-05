@@ -4,7 +4,7 @@ Independent Python package for deterministic bar-by-bar historical strategy exec
 
 The package exposes only its own dataclasses and `typing.Protocol` boundaries. It intentionally does not import PineLib, AST2Python, Pine2AST, or MarketDataProvider from core modules. Integrations belong in adapters.
 
-In the amended 6-package Pain Stack architecture, Backtest Engine is the broker/fill/equity authority. PineLib remains the Pine runtime/builtin façade and order-intent compatibility layer. See `docs/BROKER_BOUNDARY.md` for the explicit split.
+Backtest Engine is the broker/fill/equity authority for OpenPine backtests. PineLib remains the Pine runtime/builtin facade and order-intent compatibility layer.
 
 ## Quick start
 
@@ -29,7 +29,7 @@ Useful public helpers live under `backtest_engine.core` (clock/lifecycle/executi
 
 Resume/checkpointing is exposed through `BacktestResumeState` and `core.BrokerSnapshot`: set `export_resume_state=True` and implement `export_state()`/`restore_state(state)` on strategy/runtime objects for continuation. Durable cross-process resume still requires caller-provided stable serializers.
 
-See `docs/BROKER_BOUNDARY.md`, `docs/STAGE13_SUPPORTED_SUBSET.md`, and `docs/releases/` for current limits. External parity claims require real exported fixtures; unavailable fixtures are documented as blockers rather than assumed coverage.
+External parity claims require real exported fixtures; unavailable fixtures are treated as blockers rather than assumed coverage.
 
 ## License
 
@@ -49,7 +49,6 @@ Run the package in Docker:
 docker compose run --rm backtest-engine
 ```
 
-For a public GitHub release checklist, see `docs/GITHUB_PUBLICATION.md`.
 
 ## Support / Donations
 
