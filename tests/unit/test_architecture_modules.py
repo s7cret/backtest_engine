@@ -9,6 +9,7 @@ from backtest_engine.core import (
     EarlyStopChecker,
     ExecutionMode,
     JsonStateSerializer,
+    PickleStateSerializer,
     activate_orders_for_bar,
     is_fast_mode,
 )
@@ -225,3 +226,12 @@ def test_json_state_serializer_round_trip_primitives():
     serializer = JsonStateSerializer()
     payload = serializer.dumps({"a": [1, 2]})
     assert serializer.loads(payload) == {"a": [1, 2]}
+
+
+def test_pickle_state_serializer_requires_trusted_opt_in():
+    payload = PickleStateSerializer(allow_loads=True).dumps({"a": 1})
+
+    with pytest.raises(ValueError, match="trusted local snapshots"):
+        PickleStateSerializer(allow_loads=False).loads(payload)
+
+    assert PickleStateSerializer(allow_loads=True).loads(payload) == {"a": 1}

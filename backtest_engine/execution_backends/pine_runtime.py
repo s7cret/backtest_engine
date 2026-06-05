@@ -44,11 +44,11 @@ def _bar_to_pinelib(
         bar_time_close = int(bar_time) + fixed_timeframe_ms
     return pine_bar_type(
         time=int(bar_time),
-        open=float(getattr(bar, "open")),
-        high=float(getattr(bar, "high")),
-        low=float(getattr(bar, "low")),
-        close=float(getattr(bar, "close")),
-        volume=0.0 if getattr(bar, "volume", None) is None else float(getattr(bar, "volume")),
+        open=float(bar.open),
+        high=float(bar.high),
+        low=float(bar.low),
+        close=float(bar.close),
+        volume=0.0 if getattr(bar, "volume", None) is None else float(bar.volume),
         time_close=bar_time_close,
     )
 

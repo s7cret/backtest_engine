@@ -30,13 +30,13 @@ def trade_from_backend_trade(trade: Any, idx: int) -> Trade:
         entry_id=entry_id,
         exit_id=str(getattr(trade, "exit_reason", "") or "") or None,
         direction=getattr(trade, "direction", "long"),
-        entry_time=int(getattr(trade, "entry_time")),
-        entry_bar_index=int(getattr(trade, "entry_bar_index")),
-        entry_price=float(getattr(trade, "entry_price")),
+        entry_time=int(trade.entry_time),
+        entry_bar_index=int(trade.entry_bar_index),
+        entry_price=float(trade.entry_price),
         exit_time=getattr(trade, "exit_time", None),
         exit_bar_index=getattr(trade, "exit_bar_index", None),
         exit_price=getattr(trade, "exit_price", None),
-        qty=float(getattr(trade, "qty")),
+        qty=float(trade.qty),
         commission_entry=commission_entry,
         commission_exit=commission_exit,
         profit=required_backend_trade_float(trade, "profit", idx),
@@ -49,6 +49,6 @@ def trade_from_backend_trade(trade: Any, idx: int) -> Trade:
         bars_held=(
             None
             if getattr(trade, "exit_bar_index", None) is None
-            else int(getattr(trade, "exit_bar_index")) - int(getattr(trade, "entry_bar_index"))
+            else int(trade.exit_bar_index) - int(trade.entry_bar_index)
         ),
     )

@@ -143,7 +143,7 @@ def equity_values(curve: Iterable[EquityPoint]) -> list[float]:
 
 def returns(curve: Iterable[EquityPoint]) -> list[float]:
     values = equity_values(curve)
-    return [(b - a) / a if a else 0.0 for a, b in zip(values, values[1:])]
+    return [(b - a) / a if a else 0.0 for a, b in zip(values, values[1:], strict=False)]
 
 
 def final_equity(curve: Iterable[EquityPoint], default: float = 0.0) -> float:

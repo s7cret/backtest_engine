@@ -129,7 +129,7 @@ def _unwrap_scalar(value: Any) -> Any:
 def _is_pine_na(value: Any) -> bool:
     try:
         from pinelib.core.na import is_na
-    except Exception:
+    except ImportError:
         return False
     return bool(is_na(value))
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import pickle
 from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Protocol
@@ -19,14 +20,26 @@ class StateSerializer(Protocol):
 
 
 class PickleStateSerializer:
-    """Default same-Python-runtime serializer for arbitrary strategy/runtime state."""
+    """Same-Python-runtime serializer for trusted local strategy/runtime state."""
 
     serializer_id = "pickle-v1"
+
+    def __init__(self, *, allow_loads: bool | None = None) -> None:
+        self.allow_loads = (
+            os.environ.get("BACKTEST_ENGINE_ALLOW_PICKLE_STATE") == "1"
+            if allow_loads is None
+            else allow_loads
+        )
 
     def dumps(self, state: object) -> bytes:
         return pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL)
 
     def loads(self, payload: bytes) -> object:
+        if not self.allow_loads:
+            raise ValueError(
+                "pickle resume state loading is disabled; set "
+                "BACKTEST_ENGINE_ALLOW_PICKLE_STATE=1 only for trusted local snapshots"
+            )
         return pickle.loads(payload)
 
 

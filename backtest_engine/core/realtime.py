@@ -117,7 +117,7 @@ class RuntimeTickUpdate:
 
 def _as_ticks(ticks: Iterable[Tick]) -> list[Tick]:
     out = list(ticks)
-    for prev, cur in zip(out, out[1:]):
+    for prev, cur in zip(out, out[1:], strict=False):
         if cur.time < prev.time:
             raise ConfigError("realtime_ticks must be sorted by non-decreasing time")
     return out
