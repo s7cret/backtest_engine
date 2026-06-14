@@ -26,4 +26,7 @@ def is_debug_mode(value: str | ExecutionMode) -> bool:
 
 
 def is_fast_mode(value: str | ExecutionMode) -> bool:
-    return normalize_execution_mode(value) in {ExecutionMode.FAST, ExecutionMode.ULTRA_FAST}
+    return normalize_execution_mode(value) in {
+        ExecutionMode.FAST,
+        ExecutionMode.ULTRA_FAST,
+    }

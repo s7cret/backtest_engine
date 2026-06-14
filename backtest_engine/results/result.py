@@ -86,7 +86,9 @@ class BacktestResult:
     runtime_fingerprint: str | None = None
     resume_state: BacktestResumeState | None = None
 
-    def content_hash(self, include_equity_curve: bool = True, include_events: bool = False) -> str:
+    def content_hash(
+        self, include_equity_curve: bool = True, include_events: bool = False
+    ) -> str:
         payload = asdict(self)
         for key in ("content_hash_value", "execution_time_ms", "performance"):
             payload.pop(key, None)

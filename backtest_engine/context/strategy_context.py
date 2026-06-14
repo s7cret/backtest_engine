@@ -143,7 +143,9 @@ class StrategyContext:
     def risk_max_drawdown(self, value: float, type: str) -> None:
         value_type = str(type).lower()
         if value_type in {"percent", "percent_of_equity", "strategy.percent_of_equity"}:
-            self.risk_rules.append(RiskRule("max_drawdown", float(value), "percent_of_equity"))
+            self.risk_rules.append(
+                RiskRule("max_drawdown", float(value), "percent_of_equity")
+            )
             return
         if value_type in {"cash", "currency", "strategy.cash"}:
             self.risk_rules.append(RiskRule("max_drawdown", float(value), "cash"))
@@ -161,7 +163,9 @@ class StrategyContext:
             "strategy.risk.max_intraday_loss is not supported by BacktestEngine"
         )
 
-    def risk_max_intraday_filled_orders(self, value: float, type: str = "fixed") -> None:
+    def risk_max_intraday_filled_orders(
+        self, value: float, type: str = "fixed"
+    ) -> None:
         raise UnsupportedRiskRuleError(
             "strategy.risk.max_intraday_filled_orders is not supported by BacktestEngine"
         )

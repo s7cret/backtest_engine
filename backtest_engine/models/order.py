@@ -23,7 +23,9 @@ class Order:
     oca_type: Literal["cancel", "reduce", "none"] = "none"
     reserved_qty: float = 0.0
     parent_exit_id: str | None = None
-    status: Literal["pending", "active", "filled", "cancelled", "expired", "rejected"] = "pending"
+    status: Literal[
+        "pending", "active", "filled", "cancelled", "expired", "rejected"
+    ] = "pending"
     comment: str | None = None
     immediately: bool = False
     stop_limit_activated: bool = False

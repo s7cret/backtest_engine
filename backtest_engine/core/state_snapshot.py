@@ -7,7 +7,14 @@ import pickle
 from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Protocol
 
-from backtest_engine.models import BacktestResumeState, Diagnostic, Fill, Order, Position, Trade
+from backtest_engine.models import (
+    BacktestResumeState,
+    Diagnostic,
+    Fill,
+    Order,
+    Position,
+    Trade,
+)
 
 
 class StateSerializer(Protocol):
@@ -49,7 +56,9 @@ class JsonStateSerializer:
     serializer_id = "json-v1"
 
     def dumps(self, state: object) -> bytes:
-        return json.dumps(_plain(state), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return json.dumps(_plain(state), sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
 
     def loads(self, payload: bytes) -> object:
         return json.loads(payload.decode("utf-8"))

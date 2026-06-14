@@ -87,7 +87,9 @@ def test_pine_runtime_backend_runs_indicator_plot_handoff_only() -> None:
 
 def test_pine_runtime_backend_strategy_mode_fails_closed() -> None:
     bars = _bars()
-    with pytest.raises(UnsupportedPineRuntimeBackendMode, match="make_generated_strategy_adapter"):
+    with pytest.raises(
+        UnsupportedPineRuntimeBackendMode, match="make_generated_strategy_adapter"
+    ):
         BacktestEngine(_config(bars)).run(
             GeneratedLikeStrategy,
             bars=bars,
@@ -98,7 +100,9 @@ def test_pine_runtime_backend_strategy_mode_fails_closed() -> None:
 
 def test_pine_runtime_backend_string_strategy_mode_fails_closed() -> None:
     bars = _bars()
-    with pytest.raises(UnsupportedPineRuntimeBackendMode, match="make_generated_strategy_adapter"):
+    with pytest.raises(
+        UnsupportedPineRuntimeBackendMode, match="make_generated_strategy_adapter"
+    ):
         BacktestEngine(_config(bars)).run(
             GeneratedLikeStrategy,
             bars=bars,

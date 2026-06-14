@@ -8,9 +8,14 @@ from backtest_engine.models import Bar, BarSeries, Order
 from backtest_engine.models.timeframe import infer_close_from_timeframe
 
 
-def limit_fill_price(engine, order: Order, path_price: float, is_open_point: bool) -> float:
+def limit_fill_price(
+    engine, order: Order, path_price: float, is_open_point: bool
+) -> float:
     limit = order.limit_price if order.limit_price is not None else path_price
-    if is_open_point and engine.config.limit_gap_fill_policy in ("tradingview", "open_price"):
+    if is_open_point and engine.config.limit_gap_fill_policy in (
+        "tradingview",
+        "open_price",
+    ):
         if order.side == "sell" and path_price >= limit:
             return path_price
         if order.side == "buy" and path_price <= limit:
@@ -23,11 +28,16 @@ def price_path(engine, bar: Bar) -> list[tuple[float, str]]:
         return [(bar.close, "close")]
     if not engine.config.use_bar_magnifier:
         return build_price_path(bar)
-    if not engine.config.bar_magnifier_lower_tf or engine.config.bar_magnifier_bars is None:
+    if (
+        not engine.config.bar_magnifier_lower_tf
+        or engine.config.bar_magnifier_bars is None
+    ):
         return build_price_path(bar)
     try:
         lower = engine.config.bar_magnifier_bars.get(bar.time, ())
-        lower_series = lower if isinstance(lower, BarSeries) else BarSeries.from_bars(lower)
+        lower_series = (
+            lower if isinstance(lower, BarSeries) else BarSeries.from_bars(lower)
+        )
         validate_lower_timeframe_bars(engine, lower_series, bar)
     except Exception as exc:
         raise BarMagnifierUnavailableError(str(exc)) from exc
@@ -52,7 +62,9 @@ def validate_lower_timeframe_bars(engine, lower_series: BarSeries, parent: Bar) 
         if last_time is not None and lower_bar.time < last_time:
             raise BarValidationError("lower timeframe bars are not sorted")
         if lower_bar.time in seen:
-            raise BarValidationError(f"duplicate lower timeframe bar time {lower_bar.time}")
+            raise BarValidationError(
+                f"duplicate lower timeframe bar time {lower_bar.time}"
+            )
         seen.add(lower_bar.time)
         last_time = lower_bar.time
         if lower_bar.time < parent.time or lower_bar.time >= parent_close:
@@ -75,7 +87,9 @@ def validate_supplied_bar_magnifier_bars(engine, series: BarSeries) -> None:
         lower = engine.config.bar_magnifier_bars.get(parent.time, ())
         if not lower:
             continue
-        lower_series = lower if isinstance(lower, BarSeries) else BarSeries.from_bars(lower)
+        lower_series = (
+            lower if isinstance(lower, BarSeries) else BarSeries.from_bars(lower)
+        )
         try:
             validate_lower_timeframe_bars(engine, lower_series, parent)
         except Exception as exc:

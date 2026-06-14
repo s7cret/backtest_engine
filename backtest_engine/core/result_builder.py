@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from backtest_engine.core.score_window import build_phase_trades, classify_warmup_quality
+from backtest_engine.core.score_window import (
+    build_phase_trades,
+    classify_warmup_quality,
+)
 from backtest_engine.core.validation import data_fingerprint
 from backtest_engine.models import BarSeries, EquityPoint
 from backtest_engine.results import (
@@ -56,9 +59,11 @@ def build_backtest_result(
         config_snapshot=engine.config.snapshot(),
         warnings=engine.warnings,
         errors=engine.errors,
-        events=engine.events
-        if engine.config.collect_events or engine._want("order_events")
-        else None,
+        events=(
+            engine.events
+            if engine.config.collect_events or engine._want("order_events")
+            else None
+        ),
         data_fingerprint=engine.config.data_fingerprint or data_fingerprint(series),
         strategy_fingerprint=engine.config.strategy_fingerprint,
         runtime_fingerprint=engine.config.runtime_fingerprint,
@@ -106,7 +111,9 @@ def build_backtest_result(
         result.available_outputs.add("plots")
     mark_available_outputs(result)
     if engine.config.export_resume_state:
-        result.resume_state = engine._export_resume_state(len(series) - 1, strategy, runtime)
+        result.resume_state = engine._export_resume_state(
+            len(series) - 1, strategy, runtime
+        )
     if engine.config.content_hash_enabled:
         result.content_hash_value = result.content_hash(
             engine.config.content_hash_include_equity_curve,

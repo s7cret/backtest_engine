@@ -12,7 +12,11 @@ class InstrumentModel:
     settlement_currency: str = "USDT"
 
     def pnl(
-        self, entry_price: float, exit_price: float, qty: float, direction: Literal["long", "short"]
+        self,
+        entry_price: float,
+        exit_price: float,
+        qty: float,
+        direction: Literal["long", "short"],
     ) -> float:
         side = 1 if direction == "long" else -1
         if self.mode in ("spot", "linear_futures"):

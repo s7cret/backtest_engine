@@ -46,7 +46,12 @@ def restore_resume_state(
     engine.closed_trades = broker.closed_trades
     engine.open_trades = broker.open_trades
     engine._filled_exit_entry_keys = {
-        (trade.exit_id.split(":", 1)[0], trade.entry_id, trade.entry_time, trade.entry_bar_index)
+        (
+            trade.exit_id.split(":", 1)[0],
+            trade.entry_id,
+            trade.entry_time,
+            trade.entry_bar_index,
+        )
         for trade in engine.closed_trades
         if trade.exit_id is not None
     }
@@ -83,8 +88,12 @@ def export_resume_state(
     strategy: Any | None = None,
     runtime: Any | None = None,
 ) -> BacktestResumeState:
-    strategy_export = getattr(strategy, "export_state", None) if strategy is not None else None
-    runtime_export = getattr(runtime, "export_state", None) if runtime is not None else None
+    strategy_export = (
+        getattr(strategy, "export_state", None) if strategy is not None else None
+    )
+    runtime_export = (
+        getattr(runtime, "export_state", None) if runtime is not None else None
+    )
     strategy_state = strategy_export() if callable(strategy_export) else None
     runtime_state = runtime_export() if callable(runtime_export) else None
     if strategy is not None and strategy_state is None:

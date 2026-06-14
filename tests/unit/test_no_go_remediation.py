@@ -7,7 +7,9 @@ from backtest_engine.cli.main import main as cli_main
 
 
 def cfg(**kw):
-    d = dict(symbol="S", timeframe="1D", start_time=1, end_time=10, commission_type="none")
+    d = dict(
+        symbol="S", timeframe="1D", start_time=1, end_time=10, commission_type="none"
+    )
     d.update(kw)
     return BacktestConfig(**d)
 
@@ -111,10 +113,14 @@ def test_repeated_exit_id_reprices_existing_order():
     ]
     r = BacktestEngine(cfg(collect_events=True)).run(RepricedExit, bars=bars)
     created = [
-        event for event in r.events or [] if event.code == "ORDER_CREATED" and event.order_id == "XL:S"
+        event
+        for event in r.events or []
+        if event.code == "ORDER_CREATED" and event.order_id == "XL:S"
     ]
     modified = [
-        event for event in r.events or [] if event.code == "ORDER_MODIFIED" and event.order_id == "XL:S"
+        event
+        for event in r.events or []
+        if event.code == "ORDER_MODIFIED" and event.order_id == "XL:S"
     ]
     assert len(created) == 1
     assert modified
@@ -142,7 +148,9 @@ def test_filled_exit_id_is_not_reissued_for_same_open_entry():
     assert [(t.exit_id, t.qty) for t in r.closed_trades] == [("XL:S", 1.0)]
     assert [(t.entry_id, t.qty) for t in r.open_trades] == [("L", 1.0)]
     created = [
-        event for event in r.events or [] if event.code == "ORDER_CREATED" and event.order_id == "XL:S"
+        event
+        for event in r.events or []
+        if event.code == "ORDER_CREATED" and event.order_id == "XL:S"
     ]
     assert len(created) == 1
 
@@ -167,7 +175,10 @@ def test_reissued_exit_preserves_existing_reservation_after_sibling_fill():
         Bar(4, 10, 15, 10, 15),
     ]
     r = BacktestEngine(cfg()).run(PreserveSiblingExitReservation, bars=bars)
-    assert [(t.exit_id, t.qty) for t in r.closed_trades] == [("XL2:S", 1.0), ("XL1:L", 1.0)]
+    assert [(t.exit_id, t.qty) for t in r.closed_trades] == [
+        ("XL2:S", 1.0),
+        ("XL1:L", 1.0),
+    ]
     assert r.open_trades == []
 
 
@@ -219,12 +230,15 @@ def test_reverse_cancels_orphaned_exit_before_entry_id_is_reused():
         Bar(5, 10, 10, 10, 10),
         Bar(6, 10, 10, 8, 10),
     ]
-    r = BacktestEngine(cfg(collect_events=True)).run(ReuseEntryIdAfterReverse, bars=bars)
+    r = BacktestEngine(cfg(collect_events=True)).run(
+        ReuseEntryIdAfterReverse, bars=bars
+    )
     assert [trade.exit_id for trade in r.closed_trades] == ["S", "L"]
     assert r.open_trades
     assert r.open_trades[0].entry_id == "L"
     assert any(
-        event.code == "ORDER_CANCELLED" and event.order_id == "XL:S" for event in r.events or []
+        event.code == "ORDER_CANCELLED" and event.order_id == "XL:S"
+        for event in r.events or []
     )
 
 
@@ -339,13 +353,17 @@ def test_global_exit_does_not_consume_entry_reserved_by_specific_exit():
         Bar(4, 10, 10, 9, 9),
     ]
     r = BacktestEngine(cfg(pyramiding=2)).run(ReserveFirstThenGlobalExit, bars=bars)
-    assert [(t.entry_id, t.exit_id, t.qty) for t in r.closed_trades] == [("L2", "XALL:S", 1.0)]
+    assert [(t.entry_id, t.exit_id, t.qty) for t in r.closed_trades] == [
+        ("L2", "XALL:S", 1.0)
+    ]
     assert [(t.entry_id, t.qty) for t in r.open_trades] == [("L1", 1.0)]
 
 
 def test_unavailable_required_metrics_are_not_marked_available_on_flat_equity():
     bars = [Bar(1, 10, 10, 10, 10), Bar(2, 10, 10, 10, 10), Bar(3, 10, 10, 10, 10)]
-    r = BacktestEngine(cfg(required_metrics={"sharpe", "sortino"})).run(DoNothing, bars=bars)
+    r = BacktestEngine(cfg(required_metrics={"sharpe", "sortino"})).run(
+        DoNothing, bars=bars
+    )
     assert r.sharpe_ratio is None and r.sortino_ratio is None
     assert "sharpe_ratio" not in r.available_outputs
     assert "sortino_ratio" not in r.available_outputs
@@ -356,10 +374,12 @@ def test_early_stop_still_calls_end_bar_and_callback():
     runtime = RuntimeProbe()
     ended = []
     bars = [Bar(1, 10, 10, 10, 10), Bar(2, 10, 10, 1, 1)]
-    cb = __import__("backtest_engine").BacktestCallbacks(on_bar_end=lambda *a: ended.append(a[1]))
-    r = BacktestEngine(cfg(runtime=runtime, early_stop_enabled=True, min_equity_stop=9995)).run(
-        BuyAndDrop, bars=bars, callbacks=cb
+    cb = __import__("backtest_engine").BacktestCallbacks(
+        on_bar_end=lambda *a: ended.append(a[1])
     )
+    r = BacktestEngine(
+        cfg(runtime=runtime, early_stop_enabled=True, min_equity_stop=9995)
+    ).run(BuyAndDrop, bars=bars, callbacks=cb)
     assert r.status == "early_stopped"
     assert runtime.begin == runtime.end == len(ended) == 2
 
@@ -373,7 +393,10 @@ def test_batch_thread_backend_and_required_metrics():
     ]
     c = cfg(required_metrics={"sharpe", "sortino"})
     out = BatchBacktestRunner(c, backend="thread", max_workers=2).run(
-        [BacktestJob("a", BuyAndDrop, bars=bars), BacktestJob("b", BuyAndDrop, bars=bars)]
+        [
+            BacktestJob("a", BuyAndDrop, bars=bars),
+            BacktestJob("b", BuyAndDrop, bars=bars),
+        ]
     )
     assert set(out) == {"a", "b"}
     assert out["a"].sharpe_ratio is not None
@@ -395,7 +418,9 @@ def test_cli_benchmark_and_batch(tmp_path: Path):
             ]
         )
     )
-    jobs.write_text(json.dumps([{"job_id": "j1", "params": {}}, {"job_id": "j2", "params": {}}]))
+    jobs.write_text(
+        json.dumps([{"job_id": "j1", "params": {}}, {"job_id": "j2", "params": {}}])
+    )
     bench_out = tmp_path / "bench.json"
     batch_out = tmp_path / "batch.json"
     assert (
@@ -469,7 +494,9 @@ def test_cli_batch_process_backend_loads_strategy_module(tmp_path: Path):
             ]
         )
     )
-    jobs.write_text(json.dumps([{"job_id": "p1", "params": {}}, {"job_id": "p2", "params": {}}]))
+    jobs.write_text(
+        json.dumps([{"job_id": "p1", "params": {}}, {"job_id": "p2", "params": {}}])
+    )
     assert (
         cli_main(
             [

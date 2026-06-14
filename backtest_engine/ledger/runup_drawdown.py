@@ -11,11 +11,17 @@ def trade_excursion_values(
     """Return updated MFE/MAE and TradingView-style runup/drawdown for a trade."""
 
     if trade.direction == "long":
-        favorable = instrument.pnl(trade.entry_price, bar.high, trade.qty, trade.direction)
+        favorable = instrument.pnl(
+            trade.entry_price, bar.high, trade.qty, trade.direction
+        )
         adverse = instrument.pnl(trade.entry_price, bar.low, trade.qty, trade.direction)
     else:
-        favorable = instrument.pnl(trade.entry_price, bar.low, trade.qty, trade.direction)
-        adverse = instrument.pnl(trade.entry_price, bar.high, trade.qty, trade.direction)
+        favorable = instrument.pnl(
+            trade.entry_price, bar.low, trade.qty, trade.direction
+        )
+        adverse = instrument.pnl(
+            trade.entry_price, bar.high, trade.qty, trade.direction
+        )
 
     mfe = favorable if trade.mfe is None else max(trade.mfe, favorable)
     mae = adverse if trade.mae is None else min(trade.mae, adverse)

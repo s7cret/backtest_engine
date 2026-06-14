@@ -26,6 +26,7 @@ def make_bars(n: int, start_ms: int = 1700000000000) -> BarSeries:
 
 class NoopStrategy:
     """Strategy that does nothing — for testing config/provider flow."""
+
     def __init__(self, params: dict, runtime, ctx):
         self.ctx = ctx
 
@@ -35,6 +36,7 @@ class NoopStrategy:
 
 class ScorePhaseTradeStrategy:
     """Strategy that enters at bar 10 (score phase) and closes at bar 12."""
+
     def __init__(self, params: dict, runtime, ctx):
         self.ctx = ctx
         self._called = False
@@ -92,7 +94,12 @@ class TestWarmupQuality:
         assert result.warmup.effective_pre_bars == 5
         # Phase boundary: _prehistory_end_index = 5-1 = 4; bars 0-4 are prehistory
         assert result.warmup.actual_pre_bars == 5
-        assert result.warmup.warmup_confidence in ("complete", "capped", "partial", "unknown")
+        assert result.warmup.warmup_confidence in (
+            "complete",
+            "capped",
+            "partial",
+            "unknown",
+        )
 
     def test_warmup_quality_confidence_complete(self):
         """When effective >= recommended and not capped: complete."""
@@ -201,7 +208,12 @@ class TestProviderWithScoreWindow:
 
         assert result.status == "completed"
         assert result.warmup is not None
-        assert result.warmup.warmup_confidence in ("complete", "capped", "partial", "unknown")
+        assert result.warmup.warmup_confidence in (
+            "complete",
+            "capped",
+            "partial",
+            "unknown",
+        )
 
     def test_warmup_quality_unknown_when_no_prehistory_info(self):
         """Without warmup_metadata input, confidence is unknown."""

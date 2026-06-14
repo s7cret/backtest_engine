@@ -13,7 +13,9 @@ class NoopStrategy:
 
 
 def cfg(**kw):
-    d = dict(symbol="S", timeframe="1D", start_time=1, end_time=1, commission_type="none")
+    d = dict(
+        symbol="S", timeframe="1D", start_time=1, end_time=1, commission_type="none"
+    )
     d.update(kw)
     return BacktestConfig(**d)
 

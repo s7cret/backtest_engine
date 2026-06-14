@@ -53,7 +53,9 @@ class RealtimeTickCommitPolicy:
     allow_intrabar_order_fills: bool = False
     intrabar_order_fill_oracle_proof: Mapping[str, object] | None = None
 
-    def action_for(self, tick_index: int, total_ticks: int) -> Literal["discard", "commit_final"]:
+    def action_for(
+        self, tick_index: int, total_ticks: int
+    ) -> Literal["discard", "commit_final"]:
         if self.commit_final_tick and total_ticks > 0 and tick_index == total_ticks - 1:
             return "commit_final"
         return "discard"
@@ -84,7 +86,9 @@ class RealtimeOrderFillOracleStatus:
         }
 
 
-def validate_realtime_order_fill_oracle_proof(proof: Mapping[str, object] | None) -> None:
+def validate_realtime_order_fill_oracle_proof(
+    proof: Mapping[str, object] | None,
+) -> None:
     """Fail closed unless a future proof explicitly satisfies every gate."""
 
     if proof is None:
@@ -101,7 +105,8 @@ def validate_realtime_order_fill_oracle_proof(proof: Mapping[str, object] | None
     missing = [key for key in required_true if proof.get(key) is not True]
     if missing:
         raise ConfigError(
-            "TradingView intrabar order/fill oracle proof is incomplete: " + ", ".join(missing)
+            "TradingView intrabar order/fill oracle proof is incomplete: "
+            + ", ".join(missing)
         )
 
 
@@ -123,7 +128,9 @@ def _as_ticks(ticks: Iterable[Tick]) -> list[Tick]:
     return out
 
 
-def build_bar_tick_schedule(bars: BarSeries | Sequence[Bar], ticks: Iterable[Tick]) -> tuple[BarTickSlice, ...]:
+def build_bar_tick_schedule(
+    bars: BarSeries | Sequence[Bar], ticks: Iterable[Tick]
+) -> tuple[BarTickSlice, ...]:
     """Map realtime ticks onto parent bars using `[bar.time, bar.time_close)` windows.
 
     If a bar lacks `time_close`, the next bar's open time is used. For the final
@@ -149,13 +156,17 @@ def build_bar_tick_schedule(bars: BarSeries | Sequence[Bar], ticks: Iterable[Tic
             end = None
 
         if end is not None and end < bar.time:
-            raise ConfigError("bar time_close must be greater than or equal to bar time")
+            raise ConfigError(
+                "bar time_close must be greater than or equal to bar time"
+            )
 
         assigned: list[Tick] = []
         while tick_i < n_ticks:
             tick = tick_list[tick_i]
             if tick.time < bar.time:
-                raise ConfigError("realtime_ticks contain a tick before the current bar window")
+                raise ConfigError(
+                    "realtime_ticks contain a tick before the current bar window"
+                )
             if end is not None and tick.time >= end:
                 break
             assigned.append(tick)

@@ -26,4 +26,6 @@ def test_infer_price_tick_preserves_engine_sample_limit() -> None:
     bars.append(Bar(101, 100.001, 100.001, 100.001, 100.001))
 
     assert infer_price_tick(BarSeries.from_bars(bars)) == pytest.approx(1.0)
-    assert infer_price_tick(BarSeries.from_bars(bars), sample_size=101) == pytest.approx(0.001)
+    assert infer_price_tick(
+        BarSeries.from_bars(bars), sample_size=101
+    ) == pytest.approx(0.001)

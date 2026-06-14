@@ -20,7 +20,13 @@ class RuntimeWithVaripAwareExport:
 
 def test_realtime_execution_checkpoint_excludes_varip_from_runtime_snapshot() -> None:
     engine = BacktestEngine(
-        BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=1, commission_type="none")
+        BacktestConfig(
+            symbol="TEST",
+            timeframe="1",
+            start_time=0,
+            end_time=1,
+            commission_type="none",
+        )
     )
     runtime = RuntimeWithVaripAwareExport()
 

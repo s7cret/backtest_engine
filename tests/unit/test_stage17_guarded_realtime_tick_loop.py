@@ -32,7 +32,13 @@ class StrategyWithState:
 
 def _engine() -> BacktestEngine:
     return BacktestEngine(
-        BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=10, commission_type="none")
+        BacktestConfig(
+            symbol="TEST",
+            timeframe="1",
+            start_time=0,
+            end_time=10,
+            commission_type="none",
+        )
     )
 
 

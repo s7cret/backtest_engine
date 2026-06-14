@@ -11,7 +11,13 @@ from backtest_engine.models import Diagnostic, Fill, Order, Position
 
 def _engine() -> BacktestEngine:
     return BacktestEngine(
-        BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=10, commission_type="none")
+        BacktestConfig(
+            symbol="TEST",
+            timeframe="1",
+            start_time=0,
+            end_time=10,
+            commission_type="none",
+        )
     )
 
 
@@ -48,7 +54,9 @@ def _fill(order_id: str = "L") -> Fill:
     )
 
 
-def test_realtime_broker_snapshot_restores_cash_position_orders_and_diagnostics() -> None:
+def test_realtime_broker_snapshot_restores_cash_position_orders_and_diagnostics() -> (
+    None
+):
     engine = _engine()
     ctx = StrategyContext(engine.config, engine.state)
     engine.cash = 9000.0
@@ -56,7 +64,9 @@ def test_realtime_broker_snapshot_restores_cash_position_orders_and_diagnostics(
     engine.peak_equity = 9200.0
     engine.max_drawdown = 100.0
     engine.max_drawdown_percent = 1.1
-    engine.position = Position(size=1.0, avg_price=100.0, direction="long", open_profit=100.0)
+    engine.position = Position(
+        size=1.0, avg_price=100.0, direction="long", open_profit=100.0
+    )
     engine.orders = [_order()]
     engine.fills = [_fill()]
     engine.events = [Diagnostic("BEFORE", "before", "info")]

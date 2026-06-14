@@ -85,14 +85,18 @@ def main(argv=None) -> int:
     bat.add_argument("--class", dest="cls", required=True)
     bat.add_argument("--bars", required=True)
     bat.add_argument(
-        "--jobs", required=True, help="JSON list of {job_id, params?, config_overrides?}"
+        "--jobs",
+        required=True,
+        help="JSON list of {job_id, params?, config_overrides?}",
     )
     bat.add_argument("--symbol", required=True)
     bat.add_argument("--timeframe", required=True)
     bat.add_argument("--start", type=int, default=0)
     bat.add_argument("--end", type=int, default=2**63 - 1)
     bat.add_argument("--capital", type=float, default=10000)
-    bat.add_argument("--backend", choices=["sequential", "thread", "process"], default="sequential")
+    bat.add_argument(
+        "--backend", choices=["sequential", "thread", "process"], default="sequential"
+    )
     bat.add_argument("--max-workers", type=int)
     bat.add_argument("--output", required=True)
     a = p.parse_args(argv)
@@ -131,7 +135,11 @@ def main(argv=None) -> int:
             initial_capital=a.capital,
         )
         report = run_benchmark(
-            cfg, _load_class(a.strategy, a.cls), bars=_load_bars(a.bars), params=params, runs=a.runs
+            cfg,
+            _load_class(a.strategy, a.cls),
+            bars=_load_bars(a.bars),
+            params=params,
+            runs=a.runs,
         )
         Path(a.output).write_text(render_benchmark(report, format=a.format))
         return 0
@@ -156,10 +164,15 @@ def main(argv=None) -> int:
             )
             for j in specs
         ]
-        results = BatchBacktestRunner(cfg, backend=a.backend, max_workers=a.max_workers).run(jobs)
+        results = BatchBacktestRunner(
+            cfg, backend=a.backend, max_workers=a.max_workers
+        ).run(jobs)
         Path(a.output).write_text(
             json.dumps(
-                {k: v.to_dict() if hasattr(v, "to_dict") else v for k, v in results.items()},
+                {
+                    k: v.to_dict() if hasattr(v, "to_dict") else v
+                    for k, v in results.items()
+                },
                 indent=2,
                 sort_keys=True,
                 default=list,

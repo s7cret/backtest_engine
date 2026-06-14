@@ -50,7 +50,9 @@ class LimitStop:
 
 
 def cfg(**kw):
-    d = dict(symbol="S", timeframe="1D", start_time=1, end_time=4, commission_type="none")
+    d = dict(
+        symbol="S", timeframe="1D", start_time=1, end_time=4, commission_type="none"
+    )
     d.update(kw)
     return BacktestConfig(**d)
 
@@ -113,11 +115,17 @@ def test_update_state_tracks_closed_trade_stats_incrementally():
 
 def test_limit_stop_stoplimit():
     assert (
-        BacktestEngine(cfg()).run(LimitStop, {"kind": "limit"}, BARS).open_trades[0].entry_price
+        BacktestEngine(cfg())
+        .run(LimitStop, {"kind": "limit"}, BARS)
+        .open_trades[0]
+        .entry_price
         == 11
     )
     assert (
-        BacktestEngine(cfg()).run(LimitStop, {"kind": "stop"}, BARS).open_trades[0].entry_price
+        BacktestEngine(cfg())
+        .run(LimitStop, {"kind": "stop"}, BARS)
+        .open_trades[0]
+        .entry_price
         == 13
     )
     # stop-limit activates at 13 then waits for 12 in later path/bar

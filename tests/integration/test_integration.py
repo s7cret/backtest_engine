@@ -1,7 +1,12 @@
 from backtest_engine import BacktestConfig, BacktestEngine, Bar
 from backtest_engine.batch import BatchBacktestRunner, BacktestJob
 
-B = [Bar(1, 10, 11, 9, 10), Bar(2, 10, 12, 9, 11), Bar(3, 11, 12, 8, 9), Bar(4, 9, 10, 7, 8)]
+B = [
+    Bar(1, 10, 11, 9, 10),
+    Bar(2, 10, 12, 9, 11),
+    Bar(3, 11, 12, 8, 9),
+    Bar(4, 9, 10, 7, 8),
+]
 
 
 class Bracket:

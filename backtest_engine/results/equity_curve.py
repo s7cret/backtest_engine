@@ -39,7 +39,9 @@ class EquityMove:
     runup_percent: float
 
 
-def equity_move_from_baseline(*, baseline: float, adverse_equity: float, favorable_equity: float) -> EquityMove:
+def equity_move_from_baseline(
+    *, baseline: float, adverse_equity: float, favorable_equity: float
+) -> EquityMove:
     drawdown = max(0.0, baseline - adverse_equity)
     drawdown_percent = drawdown / baseline * 100 if baseline else 0.0
     runup = max(0.0, favorable_equity - baseline)
@@ -124,7 +126,9 @@ def summarize_equity_curve(
     points = list(curve)
     if not points:
         cash = default_equity if default_cash is None else default_cash
-        return EquityCurveSummary(default_equity, cash, default_equity, 0.0, 0.0, 0.0, 0.0)
+        return EquityCurveSummary(
+            default_equity, cash, default_equity, 0.0, 0.0, 0.0, 0.0
+        )
     last = points[-1]
     return EquityCurveSummary(
         final_equity=last.equity,

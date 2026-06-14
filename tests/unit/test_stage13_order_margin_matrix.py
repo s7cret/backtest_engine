@@ -56,7 +56,9 @@ class LimitStopAndTrailingExits:
             elif self.kind == "stop":
                 self.ctx.exit("LX", from_entry="L", qty=1, stop=9)
             elif self.kind == "trailing":
-                self.ctx.exit("LX", from_entry="L", qty=1, trail_price=12, trail_offset=1)
+                self.ctx.exit(
+                    "LX", from_entry="L", qty=1, trail_price=12, trail_offset=1
+                )
 
 
 class StopLimitEntry:
@@ -84,13 +86,17 @@ def test_margin_non_100_runs_without_unsupported_warning_when_no_call():
         BuyOnce, bars=bars
     )
     assert result.status == "completed"
-    assert not any(d.code == "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL" for d in result.warnings)
+    assert not any(
+        d.code == "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL" for d in result.warnings
+    )
 
     result = BacktestEngine(cfg(margin_short=25, unsupported_margin_policy="warn")).run(
         BuyOnce, bars=bars
     )
     assert result.status == "completed"
-    assert not any(d.code == "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL" for d in result.warnings)
+    assert not any(
+        d.code == "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL" for d in result.warnings
+    )
 
 
 def test_exit_reservations_clip_quantities_and_prevent_over_close():
@@ -125,7 +131,9 @@ def test_cancel_releases_reserved_qty_for_later_exit():
     assert [(t.entry_id, t.exit_id, t.qty) for t in result.closed_trades] == [
         ("L", "AFTER_CANCEL:S", 1.0)
     ]
-    assert any(e.code == "ORDER_CANCELLED" and e.order_id == "RESERVE:S" for e in result.events)
+    assert any(
+        e.code == "ORDER_CANCELLED" and e.order_id == "RESERVE:S" for e in result.events
+    )
 
 
 @pytest.mark.parametrize(
@@ -154,8 +162,12 @@ def test_stop_limit_entry_activates_then_fills_limit_without_gap_overclaim():
     ]
     result = BacktestEngine(cfg()).run(StopLimitEntry, bars=bars)
 
-    assert [(t.entry_id, t.entry_price, t.qty) for t in result.open_trades] == [("SL", 10.5, 1.0)]
-    assert any(e.code == "STOP_LIMIT_ACTIVATED" and e.order_id == "SL" for e in result.events)
+    assert [(t.entry_id, t.entry_price, t.qty) for t in result.open_trades] == [
+        ("SL", 10.5, 1.0)
+    ]
+    assert any(
+        e.code == "STOP_LIMIT_ACTIVATED" and e.order_id == "SL" for e in result.events
+    )
 
 
 def test_short_margin_call_liquidates_four_times_cover_amount():

@@ -1,6 +1,11 @@
 from .comparison import ComparisonReport, compare_trades, load_trades_csv
 from .content_hash import result_content_hash
-from .drawdown import DrawdownPoint, calculate_drawdowns, max_drawdown, max_drawdown_from_curve
+from .drawdown import (
+    DrawdownPoint,
+    calculate_drawdowns,
+    max_drawdown,
+    max_drawdown_from_curve,
+)
 from .equity_curve import (
     EquityExtremes,
     EquityMove,

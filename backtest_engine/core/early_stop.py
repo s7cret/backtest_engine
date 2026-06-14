@@ -27,7 +27,10 @@ class EarlyStopChecker:
     ) -> EarlyStopDecision:
         if not self.config.early_stop_enabled:
             return EarlyStopDecision(False)
-        if self.config.min_equity_stop is not None and equity <= self.config.min_equity_stop:
+        if (
+            self.config.min_equity_stop is not None
+            and equity <= self.config.min_equity_stop
+        ):
             return EarlyStopDecision(True, "min_equity_stop")
         if (
             self.config.max_drawdown_stop_percent is not None

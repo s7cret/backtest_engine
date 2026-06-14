@@ -38,7 +38,8 @@ def calculate_score_window_metrics(
     score_trades = [
         trade
         for trade in closed_trades
-        if trade.exit_bar_index is not None and trade.exit_bar_index >= score_start_index
+        if trade.exit_bar_index is not None
+        and trade.exit_bar_index >= score_start_index
     ]
     score_initial_capital = score_equity_points[0].equity
     score_final_equity = score_equity_points[-1].equity
@@ -72,7 +73,9 @@ def calculate_score_window_metrics(
         sharpe_ratio=score_sharpe_ratio,
         sortino_ratio=score_sortino_ratio,
         max_drawdown=max(point.drawdown for point in score_equity_points),
-        max_drawdown_percent=max(point.drawdown_percent for point in score_equity_points),
+        max_drawdown_percent=max(
+            point.drawdown_percent for point in score_equity_points
+        ),
         max_runup=max(point.runup for point in score_equity_points),
         max_runup_percent=max(point.runup_percent for point in score_equity_points),
         bars_processed=len(score_equity_points),

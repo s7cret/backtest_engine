@@ -44,7 +44,8 @@ def apply_full_window_equity_extremes(
     equity_curve: list[EquityPoint] | None,
 ) -> None:
     result.max_drawdown = max(
-        [max_drawdown] + ([point.drawdown for point in equity_curve] if equity_curve else [])
+        [max_drawdown]
+        + ([point.drawdown for point in equity_curve] if equity_curve else [])
     )
     result.max_drawdown_percent = max(
         [max_drawdown_percent]

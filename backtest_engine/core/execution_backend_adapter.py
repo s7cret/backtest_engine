@@ -6,13 +6,18 @@ from typing import Any, cast
 from backtest_engine.config import BacktestConfig
 from backtest_engine.core.backend_result import trade_from_backend_trade
 from backtest_engine.errors import ConfigError
-from backtest_engine.execution_backends.base import BackendExecutionResult, ExecutionBackend
+from backtest_engine.execution_backends.base import (
+    BackendExecutionResult,
+    ExecutionBackend,
+)
 from backtest_engine.models import BarSeries, Diagnostic, EquityPoint, Trade
 from backtest_engine.results import equity_point, summarize_equity_curve
 from backtest_engine.results.result import BacktestResult
 
 
-def resolve_execution_backend(execution_backend: ExecutionBackend | str) -> ExecutionBackend:
+def resolve_execution_backend(
+    execution_backend: ExecutionBackend | str,
+) -> ExecutionBackend:
     if isinstance(execution_backend, str):
         if execution_backend != "pine_runtime":
             raise ConfigError(f"unknown execution backend: {execution_backend}")
@@ -22,7 +27,9 @@ def resolve_execution_backend(execution_backend: ExecutionBackend | str) -> Exec
     return execution_backend
 
 
-def ensure_executable_backend(execution_backend: ExecutionBackend | str) -> ExecutionBackend:
+def ensure_executable_backend(
+    execution_backend: ExecutionBackend | str,
+) -> ExecutionBackend:
     backend = resolve_execution_backend(execution_backend)
     execute = getattr(backend, "execute", None)
     if not callable(execute):
@@ -67,10 +74,15 @@ def backend_equity_curve(
 
 
 def backend_trades(backend_result: BackendExecutionResult) -> list[Trade]:
-    return [trade_from_backend_trade(trade, idx) for idx, trade in enumerate(backend_result.trades)]
+    return [
+        trade_from_backend_trade(trade, idx)
+        for idx, trade in enumerate(backend_result.trades)
+    ]
 
 
-def backend_runtime_warnings(backend_result: BackendExecutionResult) -> list[Diagnostic]:
+def backend_runtime_warnings(
+    backend_result: BackendExecutionResult,
+) -> list[Diagnostic]:
     warnings: list[Diagnostic] = []
     diagnostics = backend_result.diagnostics
     for raw in diagnostics.get("runtime_diagnostics", []) or []:

@@ -58,6 +58,8 @@ def test_intrabar_drawdown_uses_initial_capital_baseline_not_prior_open_profit_p
         Bar(4, 105, 105, 105, 105),
         Bar(5, 105, 105, 105, 105),
     ]
-    r = BacktestEngine(cfg(end_time=5, pyramiding=2)).run(PyramidingHoldThenClose, bars=bars)
+    r = BacktestEngine(cfg(end_time=5, pyramiding=2)).run(
+        PyramidingHoldThenClose, bars=bars
+    )
     assert r.max_drawdown == 40
     assert r.max_drawdown_percent == 4.0

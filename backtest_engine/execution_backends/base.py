@@ -40,5 +40,4 @@ class ExecutionBackend(Protocol):
         effective_pre_bars: int = 0,
         runtime_kwargs: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
-    ) -> BackendExecutionResult:
-        ...
+    ) -> BackendExecutionResult: ...

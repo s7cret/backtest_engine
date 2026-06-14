@@ -23,7 +23,9 @@ def apply_position(
         return _open_position(engine, order, signed, price, bar, bar_index, commission)
     current_sign = 1 if engine.position.direction == "long" else -1
     if signed * current_sign > 0:
-        return _add_to_position(engine, order, signed, price, bar, bar_index, commission)
+        return _add_to_position(
+            engine, order, signed, price, bar, bar_index, commission
+        )
     return _reduce_or_reverse_position(
         engine,
         order,
@@ -147,7 +149,8 @@ def _reduce_or_reverse_position(
     target_caps = {
         id(trade): max(
             0.0,
-            trade.qty - (reserved.get(trade.entry_id, 0.0) if order.from_entry is None else 0.0),
+            trade.qty
+            - (reserved.get(trade.entry_id, 0.0) if order.from_entry is None else 0.0),
         )
         for trade in targets
     }
@@ -164,7 +167,9 @@ def _reduce_or_reverse_position(
         return engine.position.direction
     qty_close = min(qty_close, sum(target_caps[id(trade)] for trade in targets))
     gross = _gross_close_profit(engine, targets, target_caps, qty_close, price)
-    exit_commission_total = commission * (qty_close / order.qty) if order.qty else commission
+    exit_commission_total = (
+        commission * (qty_close / order.qty) if order.qty else commission
+    )
     opening_commission = max(0.0, commission - exit_commission_total)
     engine.cash += gross
     engine.position.realized_profit += gross
@@ -186,7 +191,9 @@ def _reduce_or_reverse_position(
         engine.position = Position(realized_profit=engine.position.realized_profit)
         return "flat"
     same_direction = [
-        trade for trade in engine.open_trades if trade.direction == engine.position.direction
+        trade
+        for trade in engine.open_trades
+        if trade.direction == engine.position.direction
     ]
     if same_direction:
         qty = sum(trade.qty for trade in same_direction)
@@ -200,7 +207,9 @@ def _reduce_or_reverse_position(
     return engine.position.direction
 
 
-def _cancel_orphaned_exit_orders(engine: Any, filled_order: Order, bar: Bar, bar_index: int) -> None:
+def _cancel_orphaned_exit_orders(
+    engine: Any, filled_order: Order, bar: Bar, bar_index: int
+) -> None:
     for order in engine.orders:
         if order is filled_order:
             continue
@@ -255,8 +264,12 @@ def _close_target_trades(
         if remaining <= 0:
             break
         qty = min(target_caps[id(trade)], remaining)
-        exit_commission = exit_commission_total * (qty / qty_close) if qty_close else 0.0
-        entry_commission = trade.commission_entry * (qty / trade.qty) if trade.qty else 0.0
+        exit_commission = (
+            exit_commission_total * (qty / qty_close) if qty_close else 0.0
+        )
+        entry_commission = (
+            trade.commission_entry * (qty / trade.qty) if trade.qty else 0.0
+        )
         profit = (
             engine.instrument.pnl(trade.entry_price, price, qty, trade.direction)
             - exit_commission
@@ -278,7 +291,9 @@ def _close_target_trades(
             commission_exit=exit_commission,
             profit=profit,
             profit_percent=(
-                profit / (trade.entry_price * qty) * 100 if trade.entry_price * qty else 0.0
+                profit / (trade.entry_price * qty) * 100
+                if trade.entry_price * qty
+                else 0.0
             ),
             mfe=mfe,
             mae=mae,
@@ -291,7 +306,12 @@ def _close_target_trades(
         engine.closed_trades.append(closed)
         if order.kind == "exit" and order.parent_exit_id is not None:
             engine._filled_exit_entry_keys.add(
-                (order.parent_exit_id, closed.entry_id, closed.entry_time, closed.entry_bar_index)
+                (
+                    order.parent_exit_id,
+                    closed.entry_id,
+                    closed.entry_time,
+                    closed.entry_bar_index,
+                )
             )
         engine._cb("on_trade_close", closed)
         trade.qty -= qty

@@ -27,7 +27,9 @@ def cfg(lower):
 
 
 def run(lower):
-    return BacktestEngine(cfg(lower)).run(Noop, bars=[Bar(0, 10, 12, 8, 11, time_close=3600)])
+    return BacktestEngine(cfg(lower)).run(
+        Noop, bars=[Bar(0, 10, 12, 8, 11, time_close=3600)]
+    )
 
 
 def valid_lower():

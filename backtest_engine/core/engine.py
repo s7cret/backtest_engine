@@ -1,6 +1,5 @@
 from __future__ import annotations
 import time
-from inspect import signature
 from typing import Any
 from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext, StrategyStateView
@@ -8,7 +7,6 @@ from backtest_engine.errors import (
     BacktestEngineError,
     BarMagnifierUnavailableError,
     ProviderError,
-    ResumeUnsupportedError,
     StrategyRuntimeError,
 )
 from backtest_engine.models import (
@@ -26,7 +24,6 @@ from backtest_engine.models import (
 )
 from backtest_engine.broker.rounding import round_to_step
 from backtest_engine.broker.commission import calculate_commission
-from backtest_engine.core.deterministic_hash import sha256_obj
 from backtest_engine.core.execution_backend_adapter import run_execution_backend
 from backtest_engine.core.fill_execution import execute_fill
 from backtest_engine.core.fill_scanner import process_bar_fills, update_trailing_order
@@ -35,28 +32,14 @@ from backtest_engine.core.risk_rules import (
     max_position_size_allows,
     pending_entry_position_delta,
 )
-from backtest_engine.core.realtime_tick_loop import (
-    guarded_realtime_strategy_tick_loop_skeleton,
-    guarded_realtime_tick_loop_skeleton,
-)
-from backtest_engine.core.resume_state import export_resume_state, restore_resume_state
 from backtest_engine.core.strategy_command_processor import flush_strategy_commands
-from backtest_engine.core.realtime import (
-    BarTickSlice,
-    RealtimeTickAttempt,
-    RealtimeTickCommitPolicy,
-)
 from backtest_engine.core.score_window import (
     build_score_window_plan,
 )
-from backtest_engine.core.state_snapshot import (
-    RealtimeBrokerSnapshot,
-    RealtimeExecutionCheckpoint,
-    clone_state,
-)
 from backtest_engine.core.validation import infer_price_tick, validate_bars
 from backtest_engine.core.engine_validation import validate_backtest_config
-from backtest_engine.core.result_builder import build_backtest_result
+from backtest_engine.core.engine_realtime import EngineRealtimeMixin
+from backtest_engine.core.engine_support import EngineSupportMixin
 from backtest_engine.core.oca import apply_oca
 from backtest_engine.core.margin_call import maybe_margin_call
 from backtest_engine.core.native_run_loop import run_native_strategy
@@ -76,7 +59,7 @@ from backtest_engine.results import (
 )
 
 
-class BacktestEngine:
+class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
     def __init__(self, config: BacktestConfig):
         self.config = config
         self.instrument = config.instrument_model or InstrumentModel()
@@ -169,9 +152,12 @@ class BacktestEngine:
         if self.config.validate_bars:
             series, _ = validate_bars(series, self.config.duplicate_bar_policy)
         if self.config.use_bar_magnifier and (
-            not self.config.bar_magnifier_lower_tf or self.config.bar_magnifier_bars is None
+            not self.config.bar_magnifier_lower_tf
+            or self.config.bar_magnifier_bars is None
         ):
-            raise BarMagnifierUnavailableError("bar magnifier lower timeframe bars unavailable")
+            raise BarMagnifierUnavailableError(
+                "bar magnifier lower timeframe bars unavailable"
+            )
         if self.config.use_bar_magnifier and self.config.bar_magnifier_bars is not None:
             self._validate_supplied_bar_magnifier_bars(series)
         if execution_backend is not None:
@@ -222,7 +208,9 @@ class BacktestEngine:
     def _slice_range(self, series: BarSeries) -> BarSeries:
         start = self.config.start_time
         end = self.config.end_time
-        idx = [i for i, t in enumerate(series.time) if int(t) >= start and int(t) <= end]
+        idx = [
+            i for i, t in enumerate(series.time) if int(t) >= start and int(t) <= end
+        ]
         if not idx:
             return BarSeries([], [], [], [], [], [])
         first = max(0, idx[0] - max(0, self.config.max_bars_back))
@@ -239,7 +227,9 @@ class BacktestEngine:
 
     def _resolve_bars(self, bars: BarSeries | list[Bar] | None) -> BarSeries:
         if bars is None:
-            raise ProviderError("No bars supplied; load market data outside BacktestEngine")
+            raise ProviderError(
+                "No bars supplied; load market data outside BacktestEngine"
+            )
         if isinstance(bars, BarSeries):
             return bars
         return BarSeries.from_bars(bars)
@@ -293,7 +283,9 @@ class BacktestEngine:
             return False
         return True
 
-    def _qty_from_args(self, kw: dict, current_size: float | None, price: float) -> float:
+    def _qty_from_args(
+        self, kw: dict, current_size: float | None, price: float
+    ) -> float:
         if kw.get("qty") is not None:
             q = float(kw["qty"])
         elif kw.get("qty_percent") is not None and current_size is not None:
@@ -323,14 +315,18 @@ class BacktestEngine:
         existing_orders = sum(
             1
             for o in self.orders
-            if o.kind == "entry" and o.direction == direction and o.status in ("pending", "active")
+            if o.kind == "entry"
+            and o.direction == direction
+            and o.status in ("pending", "active")
         )
         if existing_orders and self.config.pyramiding <= 0:
             return False
         active = sum(1 for t in self.open_trades if t.direction == direction)
         return active + existing_orders <= self.config.pyramiding
 
-    def _pending_entry_position_delta(self, exclude_order: Order | None = None) -> float:
+    def _pending_entry_position_delta(
+        self, exclude_order: Order | None = None
+    ) -> float:
         return pending_entry_position_delta(self.orders, exclude_order=exclude_order)
 
     def _risk_allows_order(
@@ -356,7 +352,14 @@ class BacktestEngine:
 
     def _add_order(self, o: Order, bar: Bar, i: int) -> None:
         if o.qty <= 0:
-            self._diag("ORDER_REJECTED_ZERO_QTY", "order qty is zero", "warning", i, bar.time, o.id)
+            self._diag(
+                "ORDER_REJECTED_ZERO_QTY",
+                "order qty is zero",
+                "warning",
+                i,
+                bar.time,
+                o.id,
+            )
             return
         if not self._risk_allows_order(o, bar, i):
             return
@@ -367,9 +370,15 @@ class BacktestEngine:
         self._cb("on_order_created", o)
 
     def _matching_open_trades(self, from_entry: str | None) -> list[Trade]:
-        return [t for t in self.open_trades if from_entry is None or t.entry_id == from_entry]
+        return [
+            t
+            for t in self.open_trades
+            if from_entry is None or t.entry_id == from_entry
+        ]
 
-    def _reserved_qty_by_entry(self, exclude_order: Order | None = None) -> dict[str, float]:
+    def _reserved_qty_by_entry(
+        self, exclude_order: Order | None = None
+    ) -> dict[str, float]:
         groups: dict[str, tuple[str | None, float]] = {}
         exclude_key = (
             (exclude_order.parent_exit_id or exclude_order.id)
@@ -434,7 +443,9 @@ class BacktestEngine:
         trades = self._matching_open_trades(from_entry)
         qty = sum(t.qty for t in trades)
         return (
-            (sum(t.entry_price * t.qty for t in trades) / qty) if qty else self.position.avg_price
+            (sum(t.entry_price * t.qty for t in trades) / qty)
+            if qty
+            else self.position.avg_price
         )
 
     def _update_trailing_order(self, o: Order, price: float) -> None:
@@ -468,13 +479,17 @@ class BacktestEngine:
     def _maybe_margin_call(self, price: float, bar: Bar, i: int, point: str) -> bool:
         return maybe_margin_call(self, price, bar, i, point)
 
-    def _limit_fill_price(self, o: Order, path_price: float, is_open_point: bool) -> float:
+    def _limit_fill_price(
+        self, o: Order, path_price: float, is_open_point: bool
+    ) -> float:
         return limit_fill_price(self, o, path_price, is_open_point)
 
     def _price_path(self, bar: Bar) -> list[tuple[float, str]]:
         return price_path(self, bar)
 
-    def _validate_lower_timeframe_bars(self, lower_series: BarSeries, parent: Bar) -> None:
+    def _validate_lower_timeframe_bars(
+        self, lower_series: BarSeries, parent: Bar
+    ) -> None:
         """Fail closed on malformed bar-magnifier data before using intrabars."""
         validate_lower_timeframe_bars(self, lower_series, parent)
 
@@ -502,14 +517,18 @@ class BacktestEngine:
         if not self.config.collect_mfe_mae:
             return
         for tr in self.open_trades:
-            tr.mfe, tr.mae, tr.max_runup, tr.max_drawdown = self._trade_excursion_values(tr, bar)
+            tr.mfe, tr.mae, tr.max_runup, tr.max_drawdown = (
+                self._trade_excursion_values(tr, bar)
+            )
             tr.profit = (
                 self.instrument.pnl(tr.entry_price, bar.close, tr.qty, tr.direction)
                 - tr.commission_entry
             )
             self._cb("on_trade_update", tr)
 
-    def _trade_excursion_values(self, tr: Trade, bar: Bar) -> tuple[float, float, float, float]:
+    def _trade_excursion_values(
+        self, tr: Trade, bar: Bar
+    ) -> tuple[float, float, float, float]:
         return trade_excursion_values(tr, bar, self.instrument)
 
     def _apply_oca(self, o: Order, bar: Bar, i: int) -> None:
@@ -538,7 +557,10 @@ class BacktestEngine:
             0.0
             if self.position.direction == "flat"
             else self.instrument.pnl(
-                self.position.avg_price, price, abs(self.position.size), self.position.direction
+                self.position.avg_price,
+                price,
+                abs(self.position.size),
+                self.position.direction,
             )
         )
         for trade in self.open_trades:
@@ -549,7 +571,9 @@ class BacktestEngine:
                 self.config.commission_value,
             )
             trade.profit = (
-                self.instrument.pnl(trade.entry_price, price, trade.qty, trade.direction)
+                self.instrument.pnl(
+                    trade.entry_price, price, trade.qty, trade.direction
+                )
                 - trade.commission_entry
                 - exit_commission
             )
@@ -561,7 +585,10 @@ class BacktestEngine:
         adverse_price = bar.low if self.position.direction == "long" else bar.high
         favorable_price = bar.high if self.position.direction == "long" else bar.low
         adverse_profit = self.instrument.pnl(
-            self.position.avg_price, adverse_price, abs(self.position.size), self.position.direction
+            self.position.avg_price,
+            adverse_price,
+            abs(self.position.size),
+            self.position.direction,
         )
         favorable_profit = self.instrument.pnl(
             self.position.avg_price,
@@ -577,7 +604,9 @@ class BacktestEngine:
             favorable_equity=favorable_equity,
         )
         self.max_drawdown = max(self.max_drawdown, move.drawdown)
-        self.max_drawdown_percent = max(self.max_drawdown_percent, move.drawdown_percent)
+        self.max_drawdown_percent = max(
+            self.max_drawdown_percent, move.drawdown_percent
+        )
         self.max_runup = max(self.max_runup, move.runup)
         self.max_runup_percent = max(self.max_runup_percent, move.runup_percent)
 
@@ -598,273 +627,3 @@ class BacktestEngine:
         self.max_runup = extremes.max_runup
         self.max_runup_percent = extremes.max_runup_percent
         return extremes
-
-    def _update_state(self) -> None:
-        if len(self.closed_trades) < self._closed_trade_stats_count:
-            self._closed_trade_stats_count = 0
-            self._gross_profit_total = 0.0
-            self._gross_loss_total = 0.0
-            self._win_trades_total = 0
-            self._loss_trades_total = 0
-            self._even_trades_total = 0
-        while self._closed_trade_stats_count < len(self.closed_trades):
-            trade = self.closed_trades[self._closed_trade_stats_count]
-            profit = trade.profit
-            if profit > 0:
-                self._gross_profit_total += profit
-                self._win_trades_total += 1
-            elif profit < 0:
-                self._gross_loss_total += abs(profit)
-                self._loss_trades_total += 1
-            else:
-                self._even_trades_total += 1
-            self._closed_trade_stats_count += 1
-        self.state.position_size = self.position.size
-        self.state.position_avg_price = (
-            None if self.position.direction == "flat" else self.position.avg_price
-        )
-        self.state.position_direction = self.position.direction
-        self.state.cash = self.cash
-        self.state.equity = self.equity
-        self.state.open_profit = self.position.open_profit
-        self.state.net_profit = self.position.realized_profit
-        self.state.gross_profit = self._gross_profit_total
-        self.state.gross_loss = self._gross_loss_total
-        self.state.max_drawdown = self.max_drawdown
-        self.state.max_drawdown_percent = self.max_drawdown_percent
-        self.state.max_runup = self.max_runup
-        self.state.max_runup_percent = self.max_runup_percent
-        self.state.closed_trades = len(self.closed_trades)
-        self.state.open_trades = len(self.open_trades)
-        self.state.win_trades = self._win_trades_total
-        self.state.loss_trades = self._loss_trades_total
-        self.state.even_trades = self._even_trades_total
-
-    def _want(self, name: str) -> bool:
-        return name in self.config.required_outputs
-
-    def _event(self, code, msg, i=None, t=None, oid=None) -> None:
-        if self.config.collect_events:
-            self.events.append(Diagnostic(code, msg, "info", i, t, oid))
-
-    def _diag(self, code, msg, severity, i=None, t=None, oid=None) -> None:
-        d = Diagnostic(code, msg, severity, i, t, oid)
-        (self.errors if severity == "error" else self.warnings).append(d)
-        self._cb("on_diagnostic", d)
-
-    def _cb(self, name: str, *args: Any) -> None:
-        fn = getattr(self.callbacks, name, None)
-        if fn and not self._callbacks_disabled:
-            try:
-                fn(*args)
-            except Exception as e:
-                if self.config.callback_error_policy == "raise":
-                    raise
-                self.warnings.append(Diagnostic("CALLBACK_ERROR", str(e), "warning"))
-                if self.config.callback_error_policy == "disable_callbacks":
-                    self._callbacks_disabled = True
-
-    def _config_hash(self) -> str:
-        snapshot = self.config.snapshot()
-        snapshot.pop("export_resume_state", None)
-        return sha256_obj(snapshot)
-
-    def _export_realtime_broker_state(self) -> RealtimeBrokerSnapshot:
-        """Export a detached broker checkpoint for future realtime tick rollback."""
-
-        return RealtimeBrokerSnapshot(
-            cash=self.cash,
-            equity=self.equity,
-            peak_equity=self.peak_equity,
-            max_drawdown=self.max_drawdown,
-            max_drawdown_percent=self.max_drawdown_percent,
-            trough_equity=self.trough_equity,
-            max_runup=self.max_runup,
-            max_runup_percent=self.max_runup_percent,
-            position=clone_state(self.position),
-            orders=clone_state(self.orders),
-            fills=clone_state(self.fills),
-            closed_trades=clone_state(self.closed_trades),
-            open_trades=clone_state(self.open_trades),
-            last_trade_bar=self.last_trade_bar,
-            events=clone_state(self.events),
-            warnings=clone_state(self.warnings),
-            errors=clone_state(self.errors),
-        )
-
-    def _restore_realtime_broker_state(
-        self, snapshot: RealtimeBrokerSnapshot, ctx: StrategyContext | None = None
-    ) -> None:
-        """Restore a detached broker checkpoint and refresh StrategyStateView refs."""
-
-        if not isinstance(snapshot, RealtimeBrokerSnapshot):
-            raise ResumeUnsupportedError(
-                "realtime broker rollback requires a RealtimeBrokerSnapshot"
-            )
-        self.cash = snapshot.cash
-        self.equity = snapshot.equity
-        self.peak_equity = snapshot.peak_equity
-        self.max_drawdown = snapshot.max_drawdown
-        self.max_drawdown_percent = snapshot.max_drawdown_percent
-        self.trough_equity = snapshot.trough_equity
-        self.max_runup = snapshot.max_runup
-        self.max_runup_percent = snapshot.max_runup_percent
-        self.position = clone_state(snapshot.position)
-        self.orders = clone_state(snapshot.orders)
-        self.fills = clone_state(snapshot.fills)
-        self.closed_trades = clone_state(snapshot.closed_trades)
-        self.open_trades = clone_state(snapshot.open_trades)
-        self._filled_exit_entry_keys = {
-            (trade.exit_id.split(":", 1)[0], trade.entry_id, trade.entry_time, trade.entry_bar_index)
-            for trade in self.closed_trades
-            if trade.exit_id is not None
-        }
-        self.last_trade_bar = snapshot.last_trade_bar
-        self.events = clone_state(snapshot.events)
-        self.warnings = clone_state(snapshot.warnings)
-        self.errors = clone_state(snapshot.errors)
-        self.state = StrategyStateView(
-            initial_capital=self.config.initial_capital,
-            cash=self.cash,
-            equity=self.equity,
-            _open_trades_ref=self.open_trades,
-            _closed_trades_ref=self.closed_trades,
-        )
-        if ctx is not None:
-            ctx.state = self.state
-        self._update_state()
-
-    def _export_realtime_execution_checkpoint(
-        self, *, strategy: Any | None = None, runtime: Any | None = None
-    ) -> RealtimeExecutionCheckpoint:
-        """Export combined broker/runtime/strategy checkpoint for tick rollback."""
-
-        runtime_export = getattr(runtime, "export_state", None) if runtime is not None else None
-        strategy_export = getattr(strategy, "export_state", None) if strategy is not None else None
-        runtime_state = None
-        if callable(runtime_export):
-            try:
-                params = signature(runtime_export).parameters
-                runtime_state = (
-                    runtime_export(include_varip=False)
-                    if "include_varip" in params
-                    else runtime_export()
-                )
-            except (TypeError, ValueError):
-                runtime_state = runtime_export()
-        return RealtimeExecutionCheckpoint(
-            broker_state=self._export_realtime_broker_state(),
-            runtime_state=clone_state(runtime_state),
-            strategy_state=clone_state(strategy_export()) if callable(strategy_export) else None,
-        )
-
-    def _restore_realtime_execution_checkpoint(
-        self,
-        checkpoint: RealtimeExecutionCheckpoint,
-        *,
-        ctx: StrategyContext | None = None,
-        strategy: Any | None = None,
-        runtime: Any | None = None,
-    ) -> None:
-        """Restore combined broker/runtime/strategy checkpoint for tick rollback."""
-
-        if not isinstance(checkpoint, RealtimeExecutionCheckpoint):
-            raise ResumeUnsupportedError(
-                "realtime execution rollback requires a RealtimeExecutionCheckpoint"
-            )
-        self._restore_realtime_broker_state(checkpoint.broker_state, ctx)
-        if checkpoint.runtime_state is not None:
-            restore = getattr(runtime, "restore_state", None) if runtime is not None else None
-            if not callable(restore):
-                raise ResumeUnsupportedError(
-                    "runtime_state is present but runtime does not implement restore_state(state)"
-                )
-            restore(clone_state(checkpoint.runtime_state))
-        if checkpoint.strategy_state is not None:
-            restore = getattr(strategy, "restore_state", None) if strategy is not None else None
-            if not callable(restore):
-                raise ResumeUnsupportedError(
-                    "strategy_state is present but strategy does not implement restore_state(state)"
-                )
-            restore(clone_state(checkpoint.strategy_state))
-
-    def _guarded_realtime_tick_loop_skeleton(
-        self,
-        tick_slice: BarTickSlice,
-        *,
-        ctx: StrategyContext,
-        strategy: Any | None = None,
-        runtime: Any | None = None,
-        on_attempt: Any | None = None,
-    ) -> tuple[RealtimeTickAttempt, ...]:
-        """Create rollback-guarded tick attempts without enabling tick execution.
-
-        Each tick gets a combined execution checkpoint, optional local mutation
-        hook, and immediate restore. The method is intentionally not called from
-        ``run()`` while ``calc_on_every_tick`` remains fail-closed.
-        """
-
-        return guarded_realtime_tick_loop_skeleton(
-            self,
-            tick_slice,
-            ctx=ctx,
-            strategy=strategy,
-            runtime=runtime,
-            on_attempt=on_attempt,
-        )
-
-    def _guarded_realtime_strategy_tick_loop_skeleton(
-        self,
-        tick_slice: BarTickSlice,
-        *,
-        ctx: StrategyContext,
-        strategy: Any,
-        runtime: Any | None = None,
-        commit_policy: RealtimeTickCommitPolicy | None = None,
-    ) -> tuple[RealtimeTickAttempt, ...]:
-        """Invoke strategy once per tick under rollback, without committing effects.
-
-        This is a guarded scaffold for future ``calc_on_every_tick`` work. It is
-        intentionally not wired into ``run()`` and restores broker, runtime,
-        strategy, and command-buffer state after every attempted tick.
-        """
-
-        return guarded_realtime_strategy_tick_loop_skeleton(
-            self,
-            tick_slice,
-            ctx=ctx,
-            strategy=strategy,
-            runtime=runtime,
-            commit_policy=commit_policy,
-        )
-
-    def _restore_resume_state(
-        self, resume_state: BacktestResumeState, strategy: Any, runtime: Any, ctx: StrategyContext
-    ) -> int:
-        return restore_resume_state(self, resume_state, strategy, runtime, ctx)
-
-    def _export_resume_state(
-        self, bar_index: int, strategy: Any | None = None, runtime: Any | None = None
-    ) -> BacktestResumeState:
-        return export_resume_state(self, bar_index, strategy, runtime)
-
-    def _result(
-        self,
-        series: BarSeries,
-        equity_curve: list[EquityPoint] | None,
-        status: str,
-        reason: str | None,
-        ms: float,
-        strategy: Any | None = None,
-        runtime: Any | None = None,
-    ) -> BacktestResult:
-        return build_backtest_result(
-            self,
-            series,
-            equity_curve,
-            status,
-            reason,
-            ms,
-            strategy,
-            runtime,
-        )

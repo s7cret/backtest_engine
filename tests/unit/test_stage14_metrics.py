@@ -237,8 +237,7 @@ def test_risk_max_position_size_is_enforced_by_engine():
     assert result.open_trades is not None
     assert [trade.entry_id for trade in result.open_trades] == ["allowed"]
     assert any(
-        d.code == "ORDER_REJECTED_RISK_MAX_POSITION_SIZE"
-        for d in result.warnings
+        d.code == "ORDER_REJECTED_RISK_MAX_POSITION_SIZE" for d in result.warnings
     )
 
 
@@ -273,8 +272,7 @@ def test_risk_max_position_size_counts_pending_same_bar_entries():
     assert result.open_trades is not None
     assert [trade.entry_id for trade in result.open_trades] == ["first"]
     assert any(
-        d.code == "ORDER_REJECTED_RISK_MAX_POSITION_SIZE"
-        for d in result.warnings
+        d.code == "ORDER_REJECTED_RISK_MAX_POSITION_SIZE" for d in result.warnings
     )
 
 
@@ -360,13 +358,13 @@ def test_risk_allow_entry_in_opposite_direction_reduces_existing_position():
     result = BacktestEngine(cfg).run(RiskAllowEntryCloseOnlyStrategy, bars=bars)
 
     assert result.closed_trades is not None
-    assert [(trade.entry_id, trade.exit_id, trade.qty) for trade in result.closed_trades] == [
-        ("long", "short_reduces", 1.0)
-    ]
+    assert [
+        (trade.entry_id, trade.exit_id, trade.qty) for trade in result.closed_trades
+    ] == [("long", "short_reduces", 1.0)]
     assert result.open_trades is not None
-    assert [(trade.entry_id, trade.direction, trade.qty) for trade in result.open_trades] == [
-        ("long", "long", 1.0)
-    ]
+    assert [
+        (trade.entry_id, trade.direction, trade.qty) for trade in result.open_trades
+    ] == [("long", "long", 1.0)]
 
 
 class RiskStateMutationStrategy:
@@ -412,7 +410,9 @@ def test_engine_risk_rules_do_not_mutate_shared_config_between_runs():
     assert cfg.max_drawdown_stop_percent is None
     assert cfg.max_position_size is None
     assert result.open_trades is not None
-    assert [(trade.entry_id, trade.qty) for trade in result.open_trades] == [("long", 2.0)]
+    assert [(trade.entry_id, trade.qty) for trade in result.open_trades] == [
+        ("long", 2.0)
+    ]
 
 
 class RiskCashDrawdownStrategy:

@@ -8,7 +8,14 @@ from typing import Any, Protocol
 from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext
 from backtest_engine.context import StrategyStateView
-from backtest_engine.models import BacktestResumeState, Bar, BarSeries, EquityPoint, Order, Position
+from backtest_engine.models import (
+    BacktestResumeState,
+    Bar,
+    BarSeries,
+    EquityPoint,
+    Order,
+    Position,
+)
 from backtest_engine.results import BacktestResult, EquityExtremes
 
 
@@ -31,7 +38,11 @@ class NativeRunEngine(Protocol):
 
     def _want(self, name: str) -> bool: ...
     def _restore_resume_state(
-        self, resume_state: BacktestResumeState, strategy: Any, runtime: Any, ctx: StrategyContext
+        self,
+        resume_state: BacktestResumeState,
+        strategy: Any,
+        runtime: Any,
+        ctx: StrategyContext,
     ) -> int: ...
     def _cb(self, name: str, *args: Any) -> None: ...
     def _event(
@@ -111,7 +122,9 @@ def run_native_strategy(
         start_index = engine._restore_resume_state(resume_state, strategy, runtime, ctx)
 
     equity_curve = (
-        [] if engine._want("equity_curve") or engine.config.collect_equity_curve else None
+        []
+        if engine._want("equity_curve") or engine.config.collect_equity_curve
+        else None
     )
     status = "completed"
     early_reason = None
@@ -122,12 +135,18 @@ def run_native_strategy(
             if order.status == "pending" and order.active_from_bar_index <= i:
                 order.status = "active"
                 engine._event(
-                    "ORDER_ACTIVATED", f"order {order.id} activated", i, bar.time, order.id
+                    "ORDER_ACTIVATED",
+                    f"order {order.id} activated",
+                    i,
+                    bar.time,
+                    order.id,
                 )
                 engine._cb("on_order_activated", order)
         runtime.begin_bar(bar, i)
         engine._process_bar_fills(strategy, ctx, bar, i, open_only=True)
-        engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True, skip_trailing=True)
+        engine._process_bar_fills(
+            strategy, ctx, bar, i, skip_open=True, skip_trailing=True
+        )
         engine._update_open_profit(bar.close)
         engine._update_state()
         engine._call_strategy(strategy, bar, i)
@@ -164,7 +183,11 @@ def run_native_strategy(
                 engine.equity,
                 engine.cash,
                 engine.position.size,
-                engine.position.avg_price if engine.position.direction != "flat" else None,
+                (
+                    engine.position.avg_price
+                    if engine.position.direction != "flat"
+                    else None
+                ),
                 engine.position.open_profit,
                 engine.position.realized_profit,
                 extremes.drawdown,
@@ -185,7 +208,11 @@ def run_native_strategy(
     finalize = getattr(strategy, "_finalize", None)
     if callable(finalize):
         finalize()
-    if engine.config.force_close_on_end and engine.position.direction != "flat" and len(series):
+    if (
+        engine.config.force_close_on_end
+        and engine.position.direction != "flat"
+        and len(series)
+    ):
         engine._force_close(series.get_bar(len(series) - 1), len(series) - 1)
     return engine._result(
         series,

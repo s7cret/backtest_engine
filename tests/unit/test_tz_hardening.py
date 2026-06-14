@@ -3,11 +3,18 @@ from backtest_engine import BacktestConfig, BacktestEngine, Bar, BacktestCallbac
 from backtest_engine.errors import ConfigError
 from backtest_engine.results import compare_trades
 
-BARS = [Bar(1, 10, 11, 9, 10), Bar(2, 12, 13, 11, 12), Bar(3, 14, 16, 13, 15), Bar(4, 15, 16, 8, 9)]
+BARS = [
+    Bar(1, 10, 11, 9, 10),
+    Bar(2, 12, 13, 11, 12),
+    Bar(3, 14, 16, 13, 15),
+    Bar(4, 15, 16, 8, 9),
+]
 
 
 def cfg(**kw):
-    d = dict(symbol="S", timeframe="1D", start_time=1, end_time=4, commission_type="none")
+    d = dict(
+        symbol="S", timeframe="1D", start_time=1, end_time=4, commission_type="none"
+    )
     d.update(kw)
     return BacktestConfig(**d)
 
@@ -63,7 +70,9 @@ def test_engine_resets_state_when_reused():
 
 
 def test_state_view_trade_methods_are_backed_by_engine_trades():
-    r = BacktestEngine(cfg(process_orders_on_close=True)).run(BuyThenReadState, bars=BARS)
+    r = BacktestEngine(cfg(process_orders_on_close=True)).run(
+        BuyThenReadState, bars=BARS
+    )
     assert r.closed_trades[0].entry_id == "L"
 
 
@@ -106,9 +115,9 @@ def test_config_validation_margin_and_streaming_compare():
     assert result.status == "completed"
     # streaming mode still requires debug execution mode
     with pytest.raises(ConfigError):
-        BacktestEngine(cfg(tradingview_compare_mode="streaming", execution_mode="normal")).run(
-            BuyAtVisibleIndex, bars=BARS
-        )
+        BacktestEngine(
+            cfg(tradingview_compare_mode="streaming", execution_mode="normal")
+        ).run(BuyAtVisibleIndex, bars=BARS)
 
 
 def test_bar_magnifier_uses_provider_lower_timeframe():
@@ -129,7 +138,9 @@ def test_bar_magnifier_uses_provider_lower_timeframe():
 
 
 def test_compare_trades_reports_first_mismatch():
-    report = compare_trades([{"entry_price": 1, "qty": 1}], [{"entry_price": "2", "qty": "1"}])
+    report = compare_trades(
+        [{"entry_price": 1, "qty": 1}], [{"entry_price": "2", "qty": "1"}]
+    )
     assert not report.matched
     assert report.first_mismatch_index == 0
 

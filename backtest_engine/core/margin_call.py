@@ -8,7 +8,9 @@ from backtest_engine.broker.rounding import round_to_step
 from backtest_engine.models import Bar, Order
 
 
-def maybe_margin_call(engine: Any, price: float, bar: Bar, bar_index: int, point: str) -> bool:
+def maybe_margin_call(
+    engine: Any, price: float, bar: Bar, bar_index: int, point: str
+) -> bool:
     if engine.position.direction == "flat" or engine.position.avg_price is None:
         return False
     margin_percent = (
@@ -30,7 +32,9 @@ def maybe_margin_call(engine: Any, price: float, bar: Bar, bar_index: int, point
     cover_raw = (-available_funds / margin_ratio) / price
     liquidation_qty = 1.0 if cover_raw < 1.0 else float(int(cover_raw) * 4)
     if engine.config.qty_step:
-        liquidation_qty = round_to_step(liquidation_qty, engine.config.qty_step, "floor")
+        liquidation_qty = round_to_step(
+            liquidation_qty, engine.config.qty_step, "floor"
+        )
     liquidation_qty = min(qty_abs, liquidation_qty)
     if liquidation_qty <= 0.0:
         return False

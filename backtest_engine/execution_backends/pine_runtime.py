@@ -15,7 +15,9 @@ def _pinelib_imports() -> dict[str, Any]:
         from pinelib.core import PineRuntime
         from pinelib.core.bar import Bar as PineBar
         from pinelib.core.types import RuntimeConfig, SymbolInfo, TimeframeInfo
-    except ImportError as exc:  # pragma: no cover - exercised when optional dep is absent
+    except (
+        ImportError
+    ) as exc:  # pragma: no cover - exercised when optional dep is absent
         raise ImportError("PineRuntimeBackend requires pinelib installed") from exc
     return {
         "PineRuntime": PineRuntime,
@@ -71,7 +73,9 @@ def _sync_strategy_context_from_config(strategy_ctx: Any, config: Any) -> None:
         "margin_long": getattr(config, "margin_long", None),
         "margin_short": getattr(config, "margin_short", None),
         "qty_step": getattr(config, "qty_step", None),
-        "qty_rounding_mode": getattr(config, "qty_rounding_mode", getattr(config, "qty_rounding", None)),
+        "qty_rounding_mode": getattr(
+            config, "qty_rounding_mode", getattr(config, "qty_rounding", None)
+        ),
     }
     for name, value in mappings.items():
         if value is None:
@@ -175,9 +179,8 @@ class PineRuntimeBackend:
         for idx, bar in enumerate(pine_bars):
             runtime.begin_bar(bar)
             if tv_export_barstate:
-                is_visible = (
-                    (plot_from_ms is None or bar.time >= plot_from_ms)
-                    and (plot_to_ms is None or bar.time < plot_to_ms)
+                is_visible = (plot_from_ms is None or bar.time >= plot_from_ms) and (
+                    plot_to_ms is None or bar.time < plot_to_ms
                 )
                 is_last_visible = bool(
                     is_visible
@@ -210,7 +213,9 @@ class PineRuntimeBackend:
             trades=[],
             plots=plots,
             diagnostics={
-                "runtime_diagnostics": list(getattr(runtime.config, "diagnostics", []) or []),
+                "runtime_diagnostics": list(
+                    getattr(runtime.config, "diagnostics", []) or []
+                ),
                 "backend": self.name,
             },
             raw_context=None,

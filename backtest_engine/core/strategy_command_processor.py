@@ -55,7 +55,9 @@ def flush_strategy_commands(
             continue
         if kind in ("close", "close_all"):
             assert isinstance(payload, ClosePayload)
-            _apply_close_command(engine, kind, payload, bar, bar_index, recalc_after_fill)
+            _apply_close_command(
+                engine, kind, payload, bar, bar_index, recalc_after_fill
+            )
             continue
 
         assert isinstance(payload, EntryOrderPayload | ExitPayload)
@@ -64,11 +66,7 @@ def flush_strategy_commands(
         order_type = (
             "market"
             if limit is None and stop is None
-            else "limit"
-            if stop is None
-            else "stop"
-            if limit is None
-            else "stop_limit"
+            else "limit" if stop is None else "stop" if limit is None else "stop_limit"
         )
         if kind == "exit":
             assert isinstance(payload, ExitPayload)
@@ -103,7 +101,9 @@ def _clean_price(value: float | None) -> float | None:
     return value
 
 
-def _qty_args(qty: float | None, qty_percent: float | None = None) -> dict[str, float | None]:
+def _qty_args(
+    qty: float | None, qty_percent: float | None = None
+) -> dict[str, float | None]:
     return {"qty": qty, "qty_percent": qty_percent}
 
 
@@ -149,9 +149,15 @@ def _apply_close_command(
             qty=qty,
             created_bar_index=bar_index,
             created_time=bar.time,
-            active_from_bar_index=bar_index
-            if (payload.immediately or engine.config.process_orders_on_close or recalc_after_fill)
-            else bar_index + 1,
+            active_from_bar_index=(
+                bar_index
+                if (
+                    payload.immediately
+                    or engine.config.process_orders_on_close
+                    or recalc_after_fill
+                )
+                else bar_index + 1
+            ),
             position_direction=engine.position.direction,
             reduce_only=True,
             from_entry=from_entry,
@@ -220,10 +226,16 @@ def _apply_exit_command(
     base = engine._exit_base_price(from_entry)
     if payload.profit is not None and limit is None:
         limit = (
-            base + float(payload.profit) if direction == "long" else base - float(payload.profit)
+            base + float(payload.profit)
+            if direction == "long"
+            else base - float(payload.profit)
         )
     if payload.loss is not None and stop is None:
-        stop = base - float(payload.loss) if direction == "long" else base + float(payload.loss)
+        stop = (
+            base - float(payload.loss)
+            if direction == "long"
+            else base + float(payload.loss)
+        )
     has_trail = (
         payload.trail_price is not None
         or payload.trail_points is not None
@@ -300,7 +312,9 @@ def _apply_exit_command(
         tick = engine._effective_mintick or 1.0
         points_price = float(points) * tick if points is not None else None
         if activation is None and points_price is not None:
-            activation = base + points_price if direction == "long" else base - points_price
+            activation = (
+                base + points_price if direction == "long" else base - points_price
+            )
         offset = (
             float(
                 payload.trail_offset
@@ -361,12 +375,16 @@ def _exit_id_already_filled_for_open_entry(
     return False
 
 
-def _add_or_modify_exit_order(engine: Any, new: Order, bar: Bar, bar_index: int) -> None:
+def _add_or_modify_exit_order(
+    engine: Any, new: Order, bar: Bar, bar_index: int
+) -> None:
     existing = next(
         (
             order
             for order in engine.orders
-            if order.id == new.id and order.kind == "exit" and order.status in ("pending", "active")
+            if order.id == new.id
+            and order.kind == "exit"
+            and order.status in ("pending", "active")
         ),
         None,
     )
@@ -430,7 +448,10 @@ def _apply_entry_or_order_command(
     uses_default_qty = payload.qty is None
     qty = engine._qty_from_args(_qty_args(payload.qty), None, bar.close)
     if kind == "entry" and not engine._entry_direction_allowed(direction):
-        if engine.position.direction != "flat" and engine.position.direction != direction:
+        if (
+            engine.position.direction != "flat"
+            and engine.position.direction != direction
+        ):
             close_direction = engine.position.direction
             close_side = "sell" if close_direction == "long" else "buy"
             engine._add_order(
@@ -444,9 +465,11 @@ def _apply_entry_or_order_command(
                     qty=min(qty, abs(engine.position.size)),
                     created_bar_index=bar_index,
                     created_time=bar.time,
-                    active_from_bar_index=bar_index
-                    if (engine.config.process_orders_on_close or recalc_after_fill)
-                    else bar_index + 1,
+                    active_from_bar_index=(
+                        bar_index
+                        if (engine.config.process_orders_on_close or recalc_after_fill)
+                        else bar_index + 1
+                    ),
                     position_direction=close_direction,
                     reduce_only=True,
                     limit_price=limit,
@@ -508,9 +531,11 @@ def _apply_entry_or_order_command(
         qty,
         bar_index,
         bar.time,
-        bar_index
-        if (engine.config.process_orders_on_close or recalc_after_fill)
-        else bar_index + 1,
+        (
+            bar_index
+            if (engine.config.process_orders_on_close or recalc_after_fill)
+            else bar_index + 1
+        ),
         direction,
         False,
         limit,

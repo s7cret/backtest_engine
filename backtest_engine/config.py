@@ -27,7 +27,9 @@ class BacktestConfig:
     margin_short: float = 100.0
     unsupported_margin_policy: Literal["error", "warn", "ignore"] = "warn"
     instrument_model: InstrumentModel | None = None
-    commission_type: Literal["percent", "fixed_per_order", "fixed_per_contract", "none"] = "percent"
+    commission_type: Literal[
+        "percent", "fixed_per_order", "fixed_per_contract", "none"
+    ] = "percent"
     commission_value: float = 0.055
     slippage: float = 0.0
     slippage_type: Literal["tick", "price", "percent"] = "tick"
@@ -36,7 +38,9 @@ class BacktestConfig:
     min_qty: float | None = None
     price_rounding: Literal["nearest", "floor", "ceil"] = "nearest"
     qty_rounding: Literal["nearest", "floor", "ceil"] = "floor"
-    fill_model: Literal["tradingview_ohlc", "next_bar_open", "close_only"] = "tradingview_ohlc"
+    fill_model: Literal["tradingview_ohlc", "next_bar_open", "close_only"] = (
+        "tradingview_ohlc"
+    )
     parity_mode: Literal["tradingview", "strict", "custom"] = "tradingview"
     process_orders_on_close: bool = False
     calc_on_order_fills: bool = False
@@ -47,9 +51,13 @@ class BacktestConfig:
     realtime_tick_provider: object | None = None
     backtest_fill_limits_assumption_ticks: int = 0
     fill_worse_stop_at_path_price: bool = False
-    limit_gap_fill_policy: Literal["tradingview", "limit_price", "open_price"] = "tradingview"
+    limit_gap_fill_policy: Literal["tradingview", "limit_price", "open_price"] = (
+        "tradingview"
+    )
     stop_gap_fill_policy: Literal["open_price", "stop_price"] = "open_price"
-    pyramiding_price_order_overfill_policy: Literal["tradingview", "strict"] = "tradingview"
+    pyramiding_price_order_overfill_policy: Literal["tradingview", "strict"] = (
+        "tradingview"
+    )
     use_bar_magnifier: bool = False
     bar_magnifier_lower_tf: str | None = None
     bar_magnifier_missing_policy: Literal["error"] = "error"
@@ -79,7 +87,9 @@ class BacktestConfig:
     collect_trade_details: bool = True
     collect_mfe_mae: bool = True
     collect_order_lifecycle: bool = True
-    callback_error_policy: Literal["raise", "diagnostic_continue", "disable_callbacks"] = "raise"
+    callback_error_policy: Literal[
+        "raise", "diagnostic_continue", "disable_callbacks"
+    ] = "raise"
     content_hash_enabled: bool = True
     content_hash_include_equity_curve: bool = True
     content_hash_include_events: bool = False
@@ -107,20 +117,28 @@ class BacktestConfig:
 
     def __post_init__(self) -> None:
         if self.bar_magnifier_missing_policy != "error":
-            raise ConfigError("bar_magnifier_missing_policy only supports fail-closed 'error'")
+            raise ConfigError(
+                "bar_magnifier_missing_policy only supports fail-closed 'error'"
+            )
 
     def snapshot(self) -> dict:
         d = {field.name: getattr(self, field.name) for field in fields(self)}
         d["realtime_tick_provider"] = (
-            type(self.realtime_tick_provider).__name__ if self.realtime_tick_provider else None
+            type(self.realtime_tick_provider).__name__
+            if self.realtime_tick_provider
+            else None
         )
-        d["realtime_ticks"] = type(self.realtime_ticks).__name__ if self.realtime_ticks else None
+        d["realtime_ticks"] = (
+            type(self.realtime_ticks).__name__ if self.realtime_ticks else None
+        )
         d["runtime"] = type(self.runtime).__name__ if self.runtime else None
         d["bar_magnifier_bars"] = (
             type(self.bar_magnifier_bars).__name__ if self.bar_magnifier_bars else None
         )
         d["tradingview_reference_path"] = (
-            str(self.tradingview_reference_path) if self.tradingview_reference_path else None
+            str(self.tradingview_reference_path)
+            if self.tradingview_reference_path
+            else None
         )
         d["output_dir"] = str(self.output_dir) if self.output_dir else None
         d["required_outputs"] = sorted(self.required_outputs)

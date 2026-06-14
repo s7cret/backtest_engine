@@ -18,7 +18,9 @@ class FillPricing:
     slippage: float
 
 
-def execute_fill(engine, order: Order, bar: Bar, bar_index: int, price: float, point: str) -> None:
+def execute_fill(
+    engine, order: Order, bar: Bar, bar_index: int, price: float, point: str
+) -> None:
     if order.kind == "exit":
         available = engine._available_exit_qty(order.from_entry, exclude_order=order)
         if available <= 0:
@@ -70,7 +72,9 @@ def execute_fill(engine, order: Order, bar: Bar, bar_index: int, price: float, p
     order.status = "filled"
     engine.last_trade_bar = bar_index
     engine._cb("on_fill", fill)
-    engine._event("ORDER_FILLED", f"order {order.id} filled", bar_index, bar.time, order.id)
+    engine._event(
+        "ORDER_FILLED", f"order {order.id} filled", bar_index, bar.time, order.id
+    )
     engine._apply_oca(order, bar, bar_index)
 
 
@@ -81,7 +85,9 @@ def _fill_pricing(engine, order: Order, price: float) -> FillPricing:
             engine.config.mintick,
             _stop_rounding_mode(order.side),
         )
-    slip_raw = 0.0 if order.order_type in {"limit", "stop_limit"} else engine.config.slippage
+    slip_raw = (
+        0.0 if order.order_type in {"limit", "stop_limit"} else engine.config.slippage
+    )
     slip = slippage_value(
         price,
         order.side,

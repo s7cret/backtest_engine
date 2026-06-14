@@ -10,11 +10,17 @@ from backtest_engine.models import Bar, Order
 
 
 def update_trailing_order(order: Order, price: float) -> None:
-    if order.trail_price is None and order.trail_offset is None and order.trail_points is None:
+    if (
+        order.trail_price is None
+        and order.trail_offset is None
+        and order.trail_points is None
+    ):
         return
     offset = float(order.trail_offset or 0.0)
     if order.direction == "long":
-        if not order.trail_activated and (order.trail_price is None or price >= order.trail_price):
+        if not order.trail_activated and (
+            order.trail_price is None or price >= order.trail_price
+        ):
             order.trail_activated = True
         if order.trail_activated:
             order.stop_price = max(
@@ -22,7 +28,9 @@ def update_trailing_order(order: Order, price: float) -> None:
                 price - offset,
             )
     else:
-        if not order.trail_activated and (order.trail_price is None or price <= order.trail_price):
+        if not order.trail_activated and (
+            order.trail_price is None or price <= order.trail_price
+        ):
             order.trail_activated = True
         if order.trail_activated:
             order.stop_price = min(
@@ -44,14 +52,18 @@ def process_bar_fills(
     trailing_only: bool = False,
 ) -> None:
     if not engine.config.collect_order_lifecycle and len(engine.orders) > 32:
-        engine.orders = [order for order in engine.orders if order.status in ("pending", "active")]
+        engine.orders = [
+            order for order in engine.orders if order.status in ("pending", "active")
+        ]
     recalc = 0
     path = engine._price_path(bar)
     path_cursor = 0
     while True:
         filled = False
         restart_after_recalc = False
-        for path_index, (price, point) in enumerate(path[path_cursor:], start=path_cursor):
+        for path_index, (price, point) in enumerate(
+            path[path_cursor:], start=path_cursor
+        ):
             path_is_open = point == "open" or point.endswith(".open")
             if open_only and not path_is_open:
                 continue
@@ -110,19 +122,20 @@ def _scan_orders_at_path_point(
         if trailing_only and not is_trailing:
             continue
         current_bar_close_activation = (
-            engine.config.process_orders_on_close and order.created_bar_index == bar_index
+            engine.config.process_orders_on_close
+            and order.created_bar_index == bar_index
         )
-        same_bar_close_order = (
-            order.created_bar_index == bar_index
-            and (engine.config.process_orders_on_close or order.immediately)
+        same_bar_close_order = order.created_bar_index == bar_index and (
+            engine.config.process_orders_on_close or order.immediately
         )
         if close_activation_only and not same_bar_close_order:
             continue
-        if current_bar_close_activation and not (point == "close" or point.endswith(".close")):
-            continue
-        if close_activation_only and same_bar_close_order and not (
+        if current_bar_close_activation and not (
             point == "close" or point.endswith(".close")
         ):
+            continue
+        is_close_point = point == "close" or point.endswith(".close")
+        if close_activation_only and same_bar_close_order and not is_close_point:
             continue
         if order.status != "active":
             if not (
@@ -154,7 +167,9 @@ def _scan_orders_at_path_point(
     if engine._maybe_margin_call(price, bar, bar_index, point):
         filled = True
         if engine.config.calc_on_order_fills:
-            recalc = _recalculate_after_fill(engine, strategy, ctx, bar, bar_index, price, recalc)
+            recalc = _recalculate_after_fill(
+                engine, strategy, ctx, bar, bar_index, price, recalc
+            )
             return True, recalc, filled
     return False, recalc, filled
 
@@ -195,7 +210,10 @@ def _fill_price_for_order(
             and order.created_bar_index == bar_index
             and order.active_from_bar_index <= bar_index
         )
-        or (is_close_point and (engine.config.process_orders_on_close or order.immediately))
+        or (
+            is_close_point
+            and (engine.config.process_orders_on_close or order.immediately)
+        )
     ):
         return fill_price
     if order.order_type == "limit" and limit_reached(

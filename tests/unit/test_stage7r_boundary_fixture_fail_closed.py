@@ -14,9 +14,13 @@ from backtest_engine.errors import ConfigError
 WORKSPACE_ENV = os.environ.get("BACKTEST_ENGINE_TV_FIXTURE_WORKSPACE")
 WORKSPACE = Path(WORKSPACE_ENV).expanduser() if WORKSPACE_ENV else None
 TRACE = (
-    WORKSPACE
-    / "tv_strategy_oracle/realtime_probe/stage7j_to_9g_next50_2026-04-30/stage7n_guarded_tick_attempt_trace.json"
-) if WORKSPACE else None
+    (
+        WORKSPACE
+        / "tv_strategy_oracle/realtime_probe/stage7j_to_9g_next50_2026-04-30/stage7n_guarded_tick_attempt_trace.json"
+    )
+    if WORKSPACE
+    else None
+)
 
 
 class NoopStrategy:
@@ -28,19 +32,27 @@ class NoopStrategy:
 
 
 def _config(**kw) -> BacktestConfig:
-    data = dict(symbol='BINANCE:BTCUSDT', timeframe='5', start_time=1777504200000, end_time=1777504500000, commission_type='none')
+    data = dict(
+        symbol="BINANCE:BTCUSDT",
+        timeframe="5",
+        start_time=1777504200000,
+        end_time=1777504500000,
+        commission_type="none",
+    )
     data.update(kw)
     return BacktestConfig(**data)
 
 
-def test_stage7i_boundary_trace_can_drive_guarded_skeleton_but_run_remains_fail_closed() -> None:
+def test_stage7i_boundary_trace_can_drive_guarded_skeleton_but_run_remains_fail_closed() -> (
+    None
+):
     if TRACE is None or not TRACE.exists():
         pytest.skip(f"optional TradingView realtime trace not found: {TRACE}")
-    trace = json.loads(TRACE.read_text(encoding='utf-8'))
-    bar_payload = trace['bar']
-    attempts_payload = trace['attempts']
+    trace = json.loads(TRACE.read_text(encoding="utf-8"))
+    bar_payload = trace["bar"]
+    attempts_payload = trace["attempts"]
     bar = Bar(**bar_payload)
-    ticks = tuple(Tick(time=a['time'], price=a['price']) for a in attempts_payload)
+    ticks = tuple(Tick(time=a["time"], price=a["price"]) for a in attempts_payload)
     tick_slice = BarTickSlice(bar_index=0, bar=bar, ticks=ticks)
 
     engine = BacktestEngine(_config())
@@ -51,6 +63,12 @@ def test_stage7i_boundary_trace_can_drive_guarded_skeleton_but_run_remains_fail_
     assert all(a.rolled_back for a in attempts)
     assert all(not a.strategy_invoked for a in attempts)
 
-    run_engine = BacktestEngine(_config(calc_on_every_tick=True, experimental_intrabar_strategy_mode=True, realtime_ticks=list(ticks)))
-    with pytest.raises(ConfigError, match='tick replay is not implemented'):
+    run_engine = BacktestEngine(
+        _config(
+            calc_on_every_tick=True,
+            experimental_intrabar_strategy_mode=True,
+            realtime_ticks=list(ticks),
+        )
+    )
+    with pytest.raises(ConfigError, match="tick replay is not implemented"):
         run_engine.run(NoopStrategy, bars=[bar])

@@ -68,7 +68,11 @@ def compare_trades(
             if f not in ours[i] or f not in refs[i]:
                 continue
             a, b = ours[i][f], refs[i][f]
-            tol = qty_tolerance if f == "qty" else price_tolerance if "price" in f else 0.0
+            tol = (
+                qty_tolerance
+                if f == "qty"
+                else price_tolerance if "price" in f else 0.0
+            )
             try:
                 mismatch = abs(float(a) - float(b)) > tol
             except (TypeError, ValueError):
@@ -81,7 +85,10 @@ def compare_trades(
                 first = i
             diags.append(
                 Diagnostic(
-                    "TRADINGVIEW_COMPARE_MISMATCH", "trade field mismatch", "warning", context=ctx
+                    "TRADINGVIEW_COMPARE_MISMATCH",
+                    "trade field mismatch",
+                    "warning",
+                    context=ctx,
                 )
             )
             break

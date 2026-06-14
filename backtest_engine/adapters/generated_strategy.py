@@ -19,130 +19,28 @@ from backtest_engine.context import StrategyContext as EngineStrategyContext
 from backtest_engine.models import Bar as EngineBar
 
 
-class GeneratedStrategyBridgeError(RuntimeError):
-    """Raised when a generated strategy cannot be safely adapted."""
-
-
-class UnsupportedGeneratedStrategySemantics(GeneratedStrategyBridgeError):
-    """Raised for generated/PineLib semantics this bridge will not approximate."""
-
-
-class _BridgeScalarSeries:
-    """Mutable scalar with Pine history semantics for strategy-owned fields."""
-
-    def __init__(self, value: Any = 0.0) -> None:
-        self._current: Any = value
-        self._history: list[Any] = []
-
-    @property
-    def current(self) -> Any:
-        return self._current
-
-    @property
-    def committed_length(self) -> int:
-        return len(self._history)
-
-    def set_current(self, value: Any) -> None:
-        self._current = value
-
-    def commit_current(self) -> None:
-        self._history.append(self._current)
-
-    def __getitem__(self, offset: int) -> Any:
-        if offset < 0:
-            raise IndexError("negative history offsets are not supported")
-        if offset == 0:
-            return self._current
-        if offset <= len(self._history):
-            return self._history[-offset]
-        return 0
-
-    def __float__(self) -> float:
-        return float(self._current)
-
-    def __int__(self) -> int:
-        return int(self._current)
-
-    def __bool__(self) -> bool:
-        return bool(self._current)
-
-    def __add__(self, other: Any) -> Any:
-        if _is_pine_na(self._current):
-            return self._current
-        return self._current + _unwrap_scalar(other)
-
-    def __radd__(self, other: Any) -> Any:
-        if _is_pine_na(self._current):
-            return self._current
-        return _unwrap_scalar(other) + self._current
-
-    def __sub__(self, other: Any) -> Any:
-        if _is_pine_na(self._current):
-            return self._current
-        return self._current - _unwrap_scalar(other)
-
-    def __rsub__(self, other: Any) -> Any:
-        if _is_pine_na(self._current):
-            return self._current
-        return _unwrap_scalar(other) - self._current
-
-    def __mul__(self, other: Any) -> Any:
-        if _is_pine_na(self._current):
-            return self._current
-        return self._current * _unwrap_scalar(other)
-
-    def __rmul__(self, other: Any) -> Any:
-        if _is_pine_na(self._current):
-            return self._current
-        return _unwrap_scalar(other) * self._current
-
-    def __truediv__(self, other: Any) -> Any:
-        if _is_pine_na(self._current):
-            return self._current
-        return self._current / _unwrap_scalar(other)
-
-    def __rtruediv__(self, other: Any) -> Any:
-        if _is_pine_na(self._current):
-            return self._current
-        return _unwrap_scalar(other) / self._current
-
-    def __eq__(self, other: object) -> bool:
-        return self._current == _unwrap_scalar(other)
-
-    def __lt__(self, other: Any) -> bool:
-        return self._current < _unwrap_scalar(other)
-
-    def __le__(self, other: Any) -> bool:
-        return self._current <= _unwrap_scalar(other)
-
-    def __gt__(self, other: Any) -> bool:
-        return self._current > _unwrap_scalar(other)
-
-    def __ge__(self, other: Any) -> bool:
-        return self._current >= _unwrap_scalar(other)
-
-
-def _unwrap_scalar(value: Any) -> Any:
-    return getattr(value, "_current", value)
-
-
-def _is_pine_na(value: Any) -> bool:
-    try:
-        from pinelib.core.na import is_na
-    except ImportError:
-        return False
-    return bool(is_na(value))
-
-
-def _none_if_pine_na(value: Any) -> Any:
-    return None if _is_pine_na(value) else value
+from backtest_engine.adapters.generated_strategy_context import (
+    _BridgeScalarSeries,
+    _BridgeStrategyContext,
+    _direction,
+    _none_if_pine_na,
+    _pine_na,
+)
+from backtest_engine.adapters.generated_strategy_errors import (
+    GeneratedStrategyBridgeError,
+    UnsupportedGeneratedStrategySemantics,
+)
 
 
 class GeneratedStrategyClass(Protocol):
-    def __call__(self, params: dict[str, Any] | None = None, runtime: Any | None = None) -> Any: ...
+    def __call__(
+        self, params: dict[str, Any] | None = None, runtime: Any | None = None
+    ) -> Any: ...
 
 
-TGeneratedStrategyClass = TypeVar("TGeneratedStrategyClass", bound=GeneratedStrategyClass)
+TGeneratedStrategyClass = TypeVar(
+    "TGeneratedStrategyClass", bound=GeneratedStrategyClass
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,292 +63,6 @@ class GeneratedStrategyAdapterOptions:
     fail_on_bar_magnifier: bool = True
     fail_on_nonstandard_margin: bool = True
     fail_on_config_mismatch: bool = True
-
-
-class _BridgeStrategyContext:
-    def __init__(self, engine_ctx: EngineStrategyContext) -> None:
-        self._engine_ctx = engine_ctx
-        self._runtime: Any | None = None
-        self.initial_capital = float(getattr(engine_ctx.config, "initial_capital", 0.0))
-        self.equity = _BridgeScalarSeries()
-        self.netprofit = _BridgeScalarSeries()
-        self.openprofit = _BridgeScalarSeries()
-        self.grossprofit = _BridgeScalarSeries()
-        self.grossloss = _BridgeScalarSeries()
-        self.position_size = _BridgeScalarSeries()
-        self.position_avg_price = _BridgeScalarSeries()
-        self.opentrades = _BridgeScalarSeries(0)
-        self.closedtrades = _BridgeScalarSeries(0)
-        self.max_drawdown = _BridgeScalarSeries()
-        self.max_runup = _BridgeScalarSeries()
-        self.wintrades = _BridgeScalarSeries(0)
-        self.losstrades = _BridgeScalarSeries(0)
-        self.eventrades = _BridgeScalarSeries(0)
-        self._sync_from_engine()
-
-    def attach_runtime(self, runtime: Any) -> None:
-        self._runtime = runtime
-        runtime.strategy = self
-
-    def _sync_from_engine(self) -> None:
-        state = self._engine_ctx.state
-        self.equity.set_current(float(state.equity))
-        self.netprofit.set_current(float(state.net_profit))
-        self.openprofit.set_current(float(state.open_profit))
-        self.grossprofit.set_current(float(state.gross_profit))
-        self.grossloss.set_current(float(state.gross_loss))
-        self.position_size.set_current(float(state.position_size))
-        self.position_avg_price.set_current(
-            _pine_na() if state.position_avg_price is None else float(state.position_avg_price)
-        )
-        self.opentrades.set_current(int(state.open_trades))
-        self.closedtrades.set_current(int(state.closed_trades))
-        self.max_drawdown.set_current(float(state.max_drawdown))
-        self.max_runup.set_current(float(state.max_runup))
-        self.wintrades.set_current(int(state.win_trades))
-        self.losstrades.set_current(int(state.loss_trades))
-        self.eventrades.set_current(int(state.even_trades))
-
-    def _commit_scalar_history(self) -> None:
-        for value in (
-            self.equity,
-            self.netprofit,
-            self.openprofit,
-            self.grossprofit,
-            self.grossloss,
-            self.position_size,
-            self.position_avg_price,
-            self.opentrades,
-            self.closedtrades,
-            self.max_drawdown,
-            self.max_runup,
-            self.wintrades,
-            self.losstrades,
-            self.eventrades,
-        ):
-            value.commit_current()
-
-    def closedtrades_max_runup(self, index: int | float) -> float:
-        return self._engine_ctx.state.closedtrades_max_runup(int(index))
-
-    def closedtrades_max_drawdown(self, index: int | float) -> float:
-        return self._engine_ctx.state.closedtrades_max_drawdown(int(index))
-
-    def closedtrades_entry_id(self, index: int | float) -> str:
-        return self._engine_ctx.state.closedtrades_entry_id(int(index))
-
-    def closedtrades_exit_id(self, index: int | float) -> str | None:
-        return self._engine_ctx.state.closedtrades_exit_id(int(index))
-
-    def closedtrades_entry_price(self, index: int | float) -> float:
-        return self._engine_ctx.state.closedtrades_entry_price(int(index))
-
-    def closedtrades_exit_price(self, index: int | float) -> float | None:
-        return self._engine_ctx.state.closedtrades_exit_price(int(index))
-
-    def closedtrades_entry_time(self, index: int | float) -> int:
-        return self._engine_ctx.state.closedtrades_entry_time(int(index))
-
-    def closedtrades_exit_time(self, index: int | float) -> int | None:
-        return self._engine_ctx.state.closedtrades_exit_time(int(index))
-
-    def closedtrades_commission(self, index: int | float) -> float:
-        return self._engine_ctx.state.closedtrades_commission(int(index))
-
-    def closedtrades_size(self, index: int | float) -> float:
-        return self._engine_ctx.state.closedtrades_size(int(index))
-
-    def closedtrades_qty(self, index: int | float) -> float:
-        return self._engine_ctx.state.closedtrades_qty(int(index))
-
-    def closedtrades_side(self, index: int | float) -> str:
-        return self._engine_ctx.state.closedtrades_side(int(index))
-
-    def closedtrades_profit(self, index: int | float) -> float:
-        return self._engine_ctx.state.closedtrades_profit(int(index))
-
-    def closedtrades_profit_percent(self, index: int | float) -> float:
-        return self._engine_ctx.state.closedtrades_profit_percent(int(index))
-
-    def closedtrades_entry_bar_index(self, index: int | float) -> int:
-        return self._engine_ctx.state.closedtrades_entry_bar_index(int(index))
-
-    def closedtrades_exit_bar_index(self, index: int | float) -> int | None:
-        return self._engine_ctx.state.closedtrades_exit_bar_index(int(index))
-
-    def opentrades_max_runup(self, index: int | float) -> float:
-        return self._engine_ctx.state.opentrades_max_runup(int(index))
-
-    def opentrades_max_drawdown(self, index: int | float) -> float:
-        return self._engine_ctx.state.opentrades_max_drawdown(int(index))
-
-    def opentrades_entry_id(self, index: int | float) -> str:
-        return self._engine_ctx.state.opentrades_entry_id(int(index))
-
-    def opentrades_entry_price(self, index: int | float) -> float:
-        return self._engine_ctx.state.opentrades_entry_price(int(index))
-
-    def opentrades_entry_time(self, index: int | float) -> int:
-        return self._engine_ctx.state.opentrades_entry_time(int(index))
-
-    def opentrades_entry_bar_index(self, index: int | float) -> int:
-        return self._engine_ctx.state.opentrades_entry_bar_index(int(index))
-
-    def opentrades_commission(self, index: int | float) -> float:
-        return self._engine_ctx.state.opentrades_commission(int(index))
-
-    def opentrades_size(self, index: int | float) -> float:
-        return self._engine_ctx.state.opentrades_size(int(index))
-
-    def opentrades_qty(self, index: int | float) -> float:
-        return self._engine_ctx.state.opentrades_qty(int(index))
-
-    def opentrades_side(self, index: int | float) -> str:
-        return self._engine_ctx.state.opentrades_side(int(index))
-
-    def opentrades_profit(self, index: int | float) -> float:
-        return self._engine_ctx.state.opentrades_profit(int(index))
-
-    def opentrades_profit_percent(self, index: int | float) -> float:
-        return self._engine_ctx.state.opentrades_profit_percent(int(index))
-
-    def risk_allow_entry_in(self, direction: str) -> None:
-        self._engine_ctx.risk_allow_entry_in(direction)
-
-    def risk_max_drawdown(self, value: float, type: str) -> None:
-        self._engine_ctx.risk_max_drawdown(value, type)
-
-    def risk_max_position_size(self, value: float, type: str = "fixed") -> None:
-        self._engine_ctx.risk_max_position_size(value, type)
-
-    def risk_max_intraday_loss(self, value: float, type: str) -> None:
-        self._engine_ctx.risk_max_intraday_loss(value, type)
-
-    def risk_max_intraday_filled_orders(self, value: float, type: str = "fixed") -> None:
-        self._engine_ctx.risk_max_intraday_filled_orders(value, type)
-
-    def entry(
-        self,
-        id: str,
-        direction: str,
-        qty: float | None = None,
-        limit: float | None = None,
-        stop: float | None = None,
-        comment: str | None = None,
-        *,
-        source_map: object | None = None,
-    ) -> None:
-        del source_map
-        self._engine_ctx.entry(
-            id=id,
-            direction=_direction(direction),
-            qty=_none_if_pine_na(qty),
-            limit=_none_if_pine_na(limit),
-            stop=_none_if_pine_na(stop),
-            comment=comment,
-        )
-
-    def order(
-        self,
-        id: str,
-        direction: str,
-        qty: float | None = None,
-        limit: float | None = None,
-        stop: float | None = None,
-        oca_name: str | None = None,
-        oca_type: str | None = None,
-        comment: str | None = None,
-        *,
-        source_map: object | None = None,
-    ) -> None:
-        del source_map
-        self._engine_ctx.order(
-            id=id,
-            direction=_direction(direction),
-            qty=_none_if_pine_na(qty),
-            limit=_none_if_pine_na(limit),
-            stop=_none_if_pine_na(stop),
-            oca_name=oca_name,
-            oca_type=oca_type,
-            comment=comment,
-        )
-
-    def exit(
-        self,
-        id: str,
-        from_entry: str | None = None,
-        qty: float | None = None,
-        qty_percent: float | None = None,
-        limit: float | None = None,
-        stop: float | None = None,
-        profit: float | None = None,
-        loss: float | None = None,
-        trail_price: float | None = None,
-        trail_points: float | None = None,
-        trail_offset: float | None = None,
-        oca_name: str | None = None,
-        oca_type: str | None = None,
-        comment: str | None = None,
-        *,
-        source_map: object | None = None,
-    ) -> None:
-        del source_map
-        self._engine_ctx.exit(
-            id=id,
-            from_entry=from_entry,
-            qty=_none_if_pine_na(qty),
-            qty_percent=_none_if_pine_na(qty_percent),
-            limit=_none_if_pine_na(limit),
-            stop=_none_if_pine_na(stop),
-            profit=_none_if_pine_na(profit),
-            loss=_none_if_pine_na(loss),
-            trail_price=_none_if_pine_na(trail_price),
-            trail_points=_none_if_pine_na(trail_points),
-            trail_offset=_none_if_pine_na(trail_offset),
-            oca_name=oca_name,
-            oca_type=oca_type,
-            comment=comment,
-        )
-
-    def close(
-        self,
-        id: str,
-        qty: float | None = None,
-        qty_percent: float | None = None,
-        immediately: bool = False,
-        comment: str | None = None,
-        *,
-        source_map: object | None = None,
-    ) -> None:
-        del source_map
-        self._engine_ctx.close(
-            id=id,
-            qty=_none_if_pine_na(qty),
-            qty_percent=_none_if_pine_na(qty_percent),
-            immediately=immediately,
-            comment=comment,
-        )
-
-    def close_all(
-        self,
-        immediately: bool = False,
-        *,
-        comment: str | None = None,
-        source_map: object | None = None,
-    ) -> None:
-        del source_map
-        self._engine_ctx.close_all(immediately=immediately, comment=comment)
-
-    def cancel(self, id: str, *, source_map: object | None = None) -> None:
-        del source_map
-        self._engine_ctx.cancel(id)
-
-    def cancel_all(self, *, source_map: object | None = None) -> None:
-        del source_map
-        self._engine_ctx.cancel_all()
-
-    def accept_orders_from_generated_code(self) -> None:
-        return None
 
 
 def make_generated_strategy_adapter(
@@ -479,10 +91,15 @@ def make_generated_strategy_adapter(
         ) -> None:
             del runtime
             if ctx is None:
-                raise GeneratedStrategyBridgeError("BacktestEngine StrategyContext is required")
+                raise GeneratedStrategyBridgeError(
+                    "BacktestEngine StrategyContext is required"
+                )
             self.ctx = ctx
             self._pine_runtime = _make_pine_runtime(adapter_options)
-            data_provider = getattr(self.__class__, "runtime_data_provider", None) or adapter_options.data_provider
+            data_provider = (
+                getattr(self.__class__, "runtime_data_provider", None)
+                or adapter_options.data_provider
+            )
             intrabar_provider = (
                 getattr(self.__class__, "runtime_intrabar_provider", None)
                 or adapter_options.intrabar_provider
@@ -494,7 +111,9 @@ def make_generated_strategy_adapter(
             self._pine_runtime.config.extra["max_bars_back"] = int(
                 getattr(ctx.config, "max_bars_back", 0) or 0
             )
-            request_data_end_ms = getattr(self.__class__, "runtime_request_data_end_ms", None)
+            request_data_end_ms = getattr(
+                self.__class__, "runtime_request_data_end_ms", None
+            )
             if request_data_end_ms is not None:
                 self._pine_runtime.request_data_end_ms = int(request_data_end_ms)
             plot_recorder = getattr(self._pine_runtime, "plot_recorder", None)
@@ -507,7 +126,9 @@ def make_generated_strategy_adapter(
                         getattr(self.__class__, "runtime_plot_from_ms", None),
                         getattr(self.__class__, "runtime_plot_to_ms", None),
                     )
-            self.generated = generated_strategy_class(params=params, runtime=self._pine_runtime)
+            self.generated = generated_strategy_class(
+                params=params, runtime=self._pine_runtime
+            )
             self._validate_generated_declaration(
                 getattr(self.generated, "ctx", None), adapter_options, ctx.config
             )
@@ -517,7 +138,9 @@ def make_generated_strategy_adapter(
             self._active_engine_bar_index: int | None = None
 
         def _process_bar(self, bar: EngineBar, bar_index: int) -> None:
-            fixed_timeframe_ms = getattr(getattr(self._pine_runtime, "timeframe", None), "interval_ms", None)
+            fixed_timeframe_ms = getattr(
+                getattr(self._pine_runtime, "timeframe", None), "interval_ms", None
+            )
             pine_bar = _to_pine_bar(bar, fixed_timeframe_ms=fixed_timeframe_ms)
             if self._active_engine_bar_index != bar_index:
                 if self._active_engine_bar_index is not None:
@@ -526,9 +149,8 @@ def make_generated_strategy_adapter(
                 plot_from_ms = getattr(self.__class__, "runtime_plot_from_ms", None)
                 plot_to_ms = getattr(self.__class__, "runtime_plot_to_ms", None)
                 is_visible = (
-                    (plot_from_ms is None or pine_bar.time >= plot_from_ms)
-                    and (plot_to_ms is None or pine_bar.time < plot_to_ms)
-                )
+                    plot_from_ms is None or pine_bar.time >= plot_from_ms
+                ) and (plot_to_ms is None or pine_bar.time < plot_to_ms)
                 is_last_visible = bool(
                     is_visible
                     and plot_to_ms is not None
@@ -546,7 +168,9 @@ def make_generated_strategy_adapter(
             self._bridge_ctx._sync_from_engine()
             process = getattr(self.generated, "_process_bar", None)
             if not callable(process):
-                raise GeneratedStrategyBridgeError("generated strategy must expose _process_bar(bar)")
+                raise GeneratedStrategyBridgeError(
+                    "generated strategy must expose _process_bar(bar)"
+                )
             process(pine_bar)
             current_index = self._pine_runtime.bar_index + 1
             if current_index != bar_index:
@@ -562,7 +186,9 @@ def make_generated_strategy_adapter(
 
         @staticmethod
         def _validate_generated_declaration(
-            generated_ctx: Any, opts: GeneratedStrategyAdapterOptions, engine_config: Any
+            generated_ctx: Any,
+            opts: GeneratedStrategyAdapterOptions,
+            engine_config: Any,
         ) -> None:
             declaration = getattr(generated_ctx, "declaration", None)
             if declaration is None:
@@ -601,14 +227,16 @@ def make_generated_strategy_adapter(
                         "generated declaration/config mismatch: " + repr(diff)
                     )
 
-    BacktestGeneratedStrategyAdapter.__name__ = (
-        f"Backtest{getattr(generated_strategy_class, '__name__', 'GeneratedStrategy')}Adapter"
+    BacktestGeneratedStrategyAdapter.__name__ = f"Backtest{getattr(generated_strategy_class, '__name__', 'GeneratedStrategy')}Adapter"
+    BacktestGeneratedStrategyAdapter.__qualname__ = (
+        BacktestGeneratedStrategyAdapter.__name__
     )
-    BacktestGeneratedStrategyAdapter.__qualname__ = BacktestGeneratedStrategyAdapter.__name__
     return BacktestGeneratedStrategyAdapter
 
 
-def _declaration_config_diff(declaration: Any, engine_config: Any) -> dict[str, dict[str, Any]]:
+def _declaration_config_diff(
+    declaration: Any, engine_config: Any
+) -> dict[str, dict[str, Any]]:
     field_pairs = {
         "initial_capital": "initial_capital",
         "default_qty_type": "default_qty_type",
@@ -656,14 +284,6 @@ def _make_pine_runtime(options: GeneratedStrategyAdapterOptions) -> Any:
     )
 
 
-def _pine_na() -> Any:
-    try:
-        from pinelib.core import na
-    except ImportError as exc:  # pragma: no cover - depends on optional install state
-        raise GeneratedStrategyBridgeError("PineLib is required for Pine na values") from exc
-    return na
-
-
 def _pine_timestamp(value: int | None) -> int | None:
     if value is None:
         return None
@@ -681,7 +301,10 @@ def _normalize_pine_time_close(
 ) -> int | None:
     if time_close is None:
         return None
-    if fixed_timeframe_ms is not None and int(time_close) == int(open_time) + fixed_timeframe_ms - 1:
+    if (
+        fixed_timeframe_ms is not None
+        and int(time_close) == int(open_time) + fixed_timeframe_ms - 1
+    ):
         return int(open_time) + fixed_timeframe_ms
     return int(time_close)
 
@@ -710,17 +333,13 @@ def _to_pine_bar(bar: EngineBar, *, fixed_timeframe_ms: int | None = None) -> An
     )
 
 
-def _direction(value: str) -> str:
-    if value not in {"long", "short"}:
-        raise UnsupportedGeneratedStrategySemantics(
-            f"unsupported generated strategy direction: {value!r}"
-        )
-    return value
-
-
 __all__ = [
     "GeneratedStrategyAdapterOptions",
     "GeneratedStrategyBridgeError",
     "UnsupportedGeneratedStrategySemantics",
     "make_generated_strategy_adapter",
+    "_BridgeScalarSeries",
+    "_direction",
+    "_none_if_pine_na",
+    "_pine_na",
 ]

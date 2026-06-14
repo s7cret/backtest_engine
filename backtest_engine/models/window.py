@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-
 Phase = Literal["prehistory", "score"]
 WarmupConfidence = Literal["complete", "capped", "partial", "unknown"]
 PlanConfidence = Literal["exact", "heuristic", "unknown"]

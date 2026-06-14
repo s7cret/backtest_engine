@@ -82,7 +82,12 @@ def test_long_take_profit_limit_touched_intrabar_fills_at_limit():
 
 
 def test_short_marketable_limit_exit_fills_next_open_not_literal_limit():
-    bars = [Bar(1, 10, 10, 10, 10), Bar(2, 11, 12, 9, 11), Bar(3, 8, 10, 7, 8), Bar(4, 7, 9, 6, 7)]
+    bars = [
+        Bar(1, 10, 10, 10, 10),
+        Bar(2, 11, 12, 9, 11),
+        Bar(3, 8, 10, 7, 8),
+        Bar(4, 7, 9, 6, 7),
+    ]
     r = BacktestEngine(cfg(end_time=4)).run(ShortMarketableLimitExit, bars=bars)
     assert r.closed_trades[0].exit_price == 7
     assert r.closed_trades[0].profit == 4
@@ -187,15 +192,27 @@ class DefaultPercentNextOpenEntry:
 
 
 def test_default_cash_sizing_uses_fill_price_and_qty_step_floor():
-    bars = [Bar(1, 0.160714, 0.160714, 0.160714, 0.160714), Bar(2, 0.13, 0.13, 0.13, 0.13)]
+    bars = [
+        Bar(1, 0.160714, 0.160714, 0.160714, 0.160714),
+        Bar(2, 0.13, 0.13, 0.13, 0.13),
+    ]
     r = BacktestEngine(
-        cfg(end_time=2, default_qty_type="cash", default_qty_value=100, qty_step=1, process_orders_on_close=True)
+        cfg(
+            end_time=2,
+            default_qty_type="cash",
+            default_qty_value=100,
+            qty_step=1,
+            process_orders_on_close=True,
+        )
     ).run(DefaultCashEntryClose, bars=bars)
     assert r.closed_trades[0].qty == 622
 
 
 def test_default_percent_sizing_reserves_percent_commission_and_qty_step_floor():
-    bars = [Bar(1, 0.160714, 0.160714, 0.160714, 0.160714), Bar(2, 0.13, 0.13, 0.13, 0.13)]
+    bars = [
+        Bar(1, 0.160714, 0.160714, 0.160714, 0.160714),
+        Bar(2, 0.13, 0.13, 0.13, 0.13),
+    ]
     r = BacktestEngine(
         cfg(
             end_time=2,

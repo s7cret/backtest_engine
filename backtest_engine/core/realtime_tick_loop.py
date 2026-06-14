@@ -58,7 +58,9 @@ def guarded_realtime_strategy_tick_loop_skeleton(
 ) -> tuple[RealtimeTickAttempt, ...]:
     policy = commit_policy or RealtimeTickCommitPolicy()
     if policy.allow_intrabar_order_fills:
-        validate_realtime_order_fill_oracle_proof(policy.intrabar_order_fill_oracle_proof)
+        validate_realtime_order_fill_oracle_proof(
+            policy.intrabar_order_fill_oracle_proof
+        )
     attempts: list[RealtimeTickAttempt] = []
     update_realtime_tick = (
         getattr(runtime, "update_realtime_tick", None) if runtime is not None else None
@@ -85,7 +87,9 @@ def guarded_realtime_strategy_tick_loop_skeleton(
                 if maybe_bar is not None:
                     current_bar = maybe_bar
             engine._call_strategy(strategy, current_bar, tick_slice.bar_index)
-            if action == "commit_final" and len(ctx.buffer.commands) != len(buffered_commands):
+            if action == "commit_final" and len(ctx.buffer.commands) != len(
+                buffered_commands
+            ):
                 raise ConfigError(
                     "realtime order commands require TradingView intrabar order/fill oracle evidence"
                 )

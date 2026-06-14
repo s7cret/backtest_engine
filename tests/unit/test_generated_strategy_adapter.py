@@ -93,7 +93,9 @@ def test_generated_strategy_adapter_exposes_max_bars_back_to_pinelib_runtime() -
 
     strategy_class = make_generated_strategy_adapter(GeneratedReadsRuntimeConfig)
     bars = [Bar(i, 100 + i, 101 + i, 99 + i, 100 + i, 1.0) for i in range(2)]
-    config = BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=1, max_bars_back=5000)
+    config = BacktestConfig(
+        symbol="TEST", timeframe="1", start_time=0, end_time=1, max_bars_back=5000
+    )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -102,7 +104,9 @@ def test_generated_strategy_adapter_exposes_max_bars_back_to_pinelib_runtime() -
 
 
 def test_strategy_context_buffers_typed_command_payloads() -> None:
-    ctx = StrategyContext(BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=1))
+    ctx = StrategyContext(
+        BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=1)
+    )
 
     ctx.entry("L", "long", qty=2.0)
     ctx.exit("XL", from_entry="L", profit=3.0)
@@ -170,7 +174,9 @@ class GeneratedClosedTradesChangeStrategy:
 
 def test_generated_strategy_adapter_tracks_strategy_scalar_history() -> None:
     GeneratedClosedTradesChangeStrategy.events = []
-    strategy_class = make_generated_strategy_adapter(GeneratedClosedTradesChangeStrategy)
+    strategy_class = make_generated_strategy_adapter(
+        GeneratedClosedTradesChangeStrategy
+    )
     bars = [Bar(i, 100 + i, 101 + i, 99 + i, 100 + i, 1.0) for i in range(7)]
     config = BacktestConfig(
         symbol="TEST",
@@ -251,8 +257,12 @@ def test_generated_strategy_adapter_exposes_trade_accessors() -> None:
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
     assert result.status == "completed"
-    assert GeneratedReadsTradeAccessors.open_seen[-1] == pytest.approx((102.0, 2.0, 4.0, 2))
-    assert GeneratedReadsTradeAccessors.closed_seen[-1] == pytest.approx((6.0, 0.0, 2.0, 102.0, 105.0, 2, 5))
+    assert GeneratedReadsTradeAccessors.open_seen[-1] == pytest.approx(
+        (102.0, 2.0, 4.0, 2)
+    )
+    assert GeneratedReadsTradeAccessors.closed_seen[-1] == pytest.approx(
+        (6.0, 0.0, 2.0, 102.0, 105.0, 2, 5)
+    )
 
 
 class GeneratedRecordsPlots:
@@ -312,12 +322,16 @@ class UnsupportedGeneratedLikeStrategy:
         self.ctx = _GeneratedCtx()
 
 
-def test_generated_strategy_adapter_fails_closed_for_unsupported_recalc_semantics() -> None:
+def test_generated_strategy_adapter_fails_closed_for_unsupported_recalc_semantics() -> (
+    None
+):
     strategy_class = make_generated_strategy_adapter(UnsupportedGeneratedLikeStrategy)
     bars = [Bar(0, 1, 1, 1, 1, 1.0)]
     config = BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=0)
 
-    with pytest.raises(UnsupportedGeneratedStrategySemantics, match="calc_on_order_fills"):
+    with pytest.raises(
+        UnsupportedGeneratedStrategySemantics, match="calc_on_order_fills"
+    ):
         BacktestEngine(config).run(strategy_class, bars=bars)
 
 
@@ -340,7 +354,9 @@ class GeneratedCalcOnFillStrategy:
             self.ctx.close("L")
 
 
-def test_generated_strategy_adapter_supports_calc_on_order_fills_recalc_bridge() -> None:
+def test_generated_strategy_adapter_supports_calc_on_order_fills_recalc_bridge() -> (
+    None
+):
     strategy_class = make_generated_strategy_adapter(GeneratedCalcOnFillStrategy)
     bars = [Bar(i, 100.0, 100.0, 100.0, 100.0, 1.0) for i in range(3)]
     config = BacktestConfig(
@@ -417,7 +433,9 @@ def test_generated_strategy_adapter_config_handshake_rejects_mismatch() -> None:
         commission_value=0.0,
     )
     with pytest.raises(UnsupportedGeneratedStrategySemantics, match="initial_capital"):
-        BacktestEngine(config).run(strategy_class, bars=[Bar(0, 1, 1, 1, 1), Bar(1, 1, 1, 1, 1)])
+        BacktestEngine(config).run(
+            strategy_class, bars=[Bar(0, 1, 1, 1, 1), Bar(1, 1, 1, 1, 1)]
+        )
 
 
 class GeneratedRecordsPineTime:
@@ -433,7 +451,9 @@ class GeneratedRecordsPineTime:
         self.__class__.seen_times.append(self.rt.time.current)
 
 
-def test_generated_strategy_adapter_converts_second_timestamps_to_pine_milliseconds() -> None:
+def test_generated_strategy_adapter_converts_second_timestamps_to_pine_milliseconds() -> (
+    None
+):
     GeneratedRecordsPineTime.seen_times = []
     strategy_class = make_generated_strategy_adapter(GeneratedRecordsPineTime)
     config = BacktestConfig(
@@ -462,7 +482,9 @@ class GeneratedProcessOrdersOnCloseStrategy:
 
 
 def test_generated_strategy_adapter_covers_process_orders_on_close_entry() -> None:
-    strategy_class = make_generated_strategy_adapter(GeneratedProcessOrdersOnCloseStrategy)
+    strategy_class = make_generated_strategy_adapter(
+        GeneratedProcessOrdersOnCloseStrategy
+    )
     bars = [
         Bar(0, 10, 10, 10, 10, 1.0),
         Bar(1, 20, 20, 20, 20, 1.0),
@@ -611,7 +633,10 @@ def test_generated_strategy_adapter_covers_close_all_immediately() -> None:
 
     assert result.status == "completed"
     assert result.total_trades == 2
-    assert [trade.exit_id for trade in result.closed_trades] == ["close_all", "close_all"]
+    assert [trade.exit_id for trade in result.closed_trades] == [
+        "close_all",
+        "close_all",
+    ]
     assert result.net_profit == pytest.approx(0.0)
 
 
@@ -631,8 +656,12 @@ class GeneratedCloseThenOppositeEntryStrategy:
             self.ctx.entry("S", "short")
 
 
-def test_generated_strategy_close_then_opposite_entry_does_not_double_reversal_qty() -> None:
-    strategy_class = make_generated_strategy_adapter(GeneratedCloseThenOppositeEntryStrategy)
+def test_generated_strategy_close_then_opposite_entry_does_not_double_reversal_qty() -> (
+    None
+):
+    strategy_class = make_generated_strategy_adapter(
+        GeneratedCloseThenOppositeEntryStrategy
+    )
     bars = [
         Bar(0, 100, 100, 100, 100, 1.0),
         Bar(1, 100, 100, 100, 100, 1.0),

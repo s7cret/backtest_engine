@@ -9,8 +9,18 @@ def build_price_path(bar: Bar) -> list[tuple[float, str]]:
     rule aligned with pinelib StrategyContext.ohlc_path.
     """
     if abs(bar.open - bar.high) < abs(bar.open - bar.low):
-        return [(bar.open, "open"), (bar.high, "high"), (bar.low, "low"), (bar.close, "close")]
-    return [(bar.open, "open"), (bar.low, "low"), (bar.high, "high"), (bar.close, "close")]
+        return [
+            (bar.open, "open"),
+            (bar.high, "high"),
+            (bar.low, "low"),
+            (bar.close, "close"),
+        ]
+    return [
+        (bar.open, "open"),
+        (bar.low, "low"),
+        (bar.high, "high"),
+        (bar.close, "close"),
+    ]
 
 
 def limit_reached(

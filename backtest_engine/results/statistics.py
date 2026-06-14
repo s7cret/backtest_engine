@@ -10,7 +10,9 @@ def summarize(profits: list[float], initial: float, final: float) -> dict:
         "net_profit_percent": ((final - initial) / initial * 100 if initial else 0.0),
         "gross_profit": gp,
         "gross_loss": gross_loss,
-        "profit_factor": (gp / gross_loss if gross_loss else (float("inf") if gp else 0.0)),
+        "profit_factor": (
+            gp / gross_loss if gross_loss else (float("inf") if gp else 0.0)
+        ),
         "total_trades": total,
         "winning_trades": len(wins),
         "losing_trades": len(losses),
