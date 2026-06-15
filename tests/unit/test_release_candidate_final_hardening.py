@@ -372,7 +372,11 @@ def test_clock_resume_snapshot_and_pinelib_helpers_without_optional_dependency()
     )
     assert converted.time_close == 60_000
     assert converted.volume == 1.0
-    assert _is_pine_na(float("nan")) is False
+    # Pine v5/v6 semantics: `na` is the canonical NaN, so any NaN
+    # value (including float('nan')) is recognized as a Pine `na`.
+    # Pre-4.0 the helper treated NaN as a regular float; the 4.0 line
+    # aligns with `math.isnan` and Pine Script's `na` sentinel.
+    assert _is_pine_na(float("nan")) is True
 
 
 def test_price_path_bar_magnifier_edges_and_margin_oca_helpers() -> None:
