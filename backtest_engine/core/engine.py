@@ -310,8 +310,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         return abs(q)
 
     def _entry_allowed(self, direction: str) -> bool:
-        if self.position.direction == direction and self.config.pyramiding <= 0:
-            return False
+        max_same_direction_entries = max(1, self.config.pyramiding)
         existing_orders = sum(
             1
             for o in self.orders
@@ -319,10 +318,8 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             and o.direction == direction
             and o.status in ("pending", "active")
         )
-        if existing_orders and self.config.pyramiding <= 0:
-            return False
         active = sum(1 for t in self.open_trades if t.direction == direction)
-        return active + existing_orders <= self.config.pyramiding
+        return active + existing_orders < max_same_direction_entries
 
     def _pending_entry_position_delta(
         self, exclude_order: Order | None = None

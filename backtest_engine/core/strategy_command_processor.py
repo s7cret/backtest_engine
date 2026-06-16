@@ -224,18 +224,13 @@ def _apply_exit_command(
         )
     qty = min(qty, available)
     base = engine._exit_base_price(from_entry)
+    tick = getattr(engine, "_effective_mintick", 1.0) or 1.0
     if payload.profit is not None and limit is None:
-        limit = (
-            base + float(payload.profit)
-            if direction == "long"
-            else base - float(payload.profit)
-        )
+        profit_price = float(payload.profit) * tick
+        limit = base + profit_price if direction == "long" else base - profit_price
     if payload.loss is not None and stop is None:
-        stop = (
-            base - float(payload.loss)
-            if direction == "long"
-            else base + float(payload.loss)
-        )
+        loss_price = float(payload.loss) * tick
+        stop = base - loss_price if direction == "long" else base + loss_price
     has_trail = (
         payload.trail_price is not None
         or payload.trail_points is not None
@@ -309,7 +304,7 @@ def _apply_exit_command(
     if has_trail:
         points = payload.trail_points
         activation = payload.trail_price
-        tick = engine._effective_mintick or 1.0
+        tick = getattr(engine, "_effective_mintick", 1.0) or 1.0
         points_price = float(points) * tick if points is not None else None
         if activation is None and points_price is not None:
             activation = (
@@ -501,16 +496,6 @@ def _apply_entry_or_order_command(
         else:
             effect = "reverse"
             qty = abs(engine.position.size) + qty
-    if kind == "entry" and not engine._entry_allowed(direction):
-        engine._diag(
-            "ORDER_REJECTED_PYRAMIDING",
-            "pyramiding limit reached",
-            "warning",
-            bar_index,
-            bar.time,
-            payload.id,
-        )
-        return
     existing = next(
         (
             order
@@ -547,12 +532,34 @@ def _apply_entry_or_order_command(
     )
     new.qty_is_default = uses_default_qty
     if existing:
+        if new.qty <= 0:
+            engine._diag(
+                "ORDER_REJECTED_ZERO_QTY",
+                "order qty is zero",
+                "warning",
+                bar_index,
+                bar.time,
+                new.id,
+            )
+            return
         if not engine._risk_allows_order(new, bar, bar_index, existing):
             return
         existing.qty = new.qty
         existing.limit_price = new.limit_price
         existing.stop_price = new.stop_price
         existing.order_type = new.order_type
+        existing.direction = new.direction
+        existing.side = new.side
+        existing.position_effect = new.position_effect
+        existing.position_direction = new.position_direction
+        existing.oca_name = new.oca_name
+        existing.oca_type = new.oca_type
+        existing.comment = new.comment
+        existing.qty_is_default = new.qty_is_default
+        existing.created_bar_index = new.created_bar_index
+        existing.created_time = new.created_time
+        existing.active_from_bar_index = new.active_from_bar_index
+        existing.status = "active" if new.active_from_bar_index <= bar_index else "pending"
         engine._event(
             "ORDER_MODIFIED",
             f"order {existing.id} modified",
@@ -560,8 +567,18 @@ def _apply_entry_or_order_command(
             bar.time,
             existing.id,
         )
-    else:
-        engine._add_order(new, bar, bar_index)
+        return
+    if kind == "entry" and not engine._entry_allowed(direction):
+        engine._diag(
+            "ORDER_REJECTED_PYRAMIDING",
+            "pyramiding limit reached",
+            "warning",
+            bar_index,
+            bar.time,
+            payload.id,
+        )
+        return
+    engine._add_order(new, bar, bar_index)
 
 
 def _pending_full_close_for_current_position(engine: Any) -> bool:

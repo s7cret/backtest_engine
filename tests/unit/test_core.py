@@ -158,6 +158,76 @@ def test_pyramiding_reject_and_force_close():
     assert r.closed_trades
 
 
+def test_pyramiding_limit_is_max_same_direction_entries_not_plus_one():
+    class EveryBarEntry:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index in (0, 1, 2):
+                self.ctx.entry("L" + str(bar_index), "long", qty=1)
+
+    bars = BARS + [Bar(5, 13, 14, 10, 11)]
+    result = BacktestEngine(cfg(pyramiding=2, force_close_on_end=True, end_time=5)).run(
+        EveryBarEntry, bars=bars
+    )
+
+    assert [trade.entry_id for trade in (result.closed_trades or [])] == ["L0", "L1"]
+    assert any(d.code == "ORDER_REJECTED_PYRAMIDING" for d in result.warnings)
+
+
+def test_same_id_pending_entry_modification_bypasses_pyramiding_limit():
+    class ModifyPendingStopEntry:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1, stop=20)
+            if bar_index == 1:
+                self.ctx.entry("L", "long", qty=1, stop=12)
+
+    bars = [
+        Bar(1, 10, 11, 9, 10),
+        Bar(2, 10, 11, 9, 10),
+        Bar(3, 10, 13, 9, 10),
+    ]
+    result = BacktestEngine(cfg(end_time=3, pyramiding=0)).run(
+        ModifyPendingStopEntry, bars=bars
+    )
+
+    assert [trade.entry_price for trade in (result.open_trades or [])] == [12]
+    assert any(event.code == "ORDER_MODIFIED" for event in (result.events or []))
+    assert not any(
+        warning.code == "ORDER_REJECTED_PYRAMIDING" for warning in (result.warnings or [])
+    )
+
+
+def test_strategy_exit_profit_and_loss_are_ticks_not_price_delta():
+    class ProfitLossTicks:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1)
+            if bar_index == 1:
+                self.ctx.exit("X", "L", qty=1, profit=10, loss=5)
+
+    bars = [
+        Bar(1, 100.00, 100.00, 100.00, 100.00),
+        Bar(2, 100.00, 100.00, 100.00, 100.00),
+        Bar(3, 100.00, 100.11, 99.99, 100.00),
+    ]
+    result = BacktestEngine(cfg(end_time=3, mintick=0.01)).run(
+        ProfitLossTicks, bars=bars
+    )
+
+    assert result.closed_trades
+    assert result.closed_trades[0].exit_id == "X:L"
+    assert result.closed_trades[0].exit_price == pytest.approx(100.10)
+
+
 def test_early_stop_and_preloaded():
     c = cfg(early_stop_enabled=True, min_equity_stop=9999)
     r = BacktestEngine(c).run(BuyOnce, bars=BARS)
