@@ -103,7 +103,7 @@ def _fill_pricing(engine, order: Order, price: float) -> FillPricing:
     )
     rounding_mode = engine.config.price_rounding
     if order.order_type in {"limit", "stop_limit"} and engine.config.mintick:
-        rounding_mode = "floor"
+        rounding_mode = "ceil" if order.side == "sell" else "floor"
     fill_price = round_to_step(price + slip, engine.config.mintick, rounding_mode)
     commission = calculate_commission(
         fill_price,

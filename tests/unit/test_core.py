@@ -272,6 +272,29 @@ def test_stop_gap_fill_uses_open_price_rounding_not_stop_direction_rounding():
     assert result.open_trades[0].entry_price == pytest.approx(10.06)
 
 
+def test_sell_limit_exit_rounds_fractional_price_up_to_tick():
+    class FractionalLimitExit:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1)
+            if self.ctx.state.position_size > 0:
+                self.ctx.exit("TP", "L", limit=10.064, qty_percent=100)
+
+    bars = [
+        Bar(1, 10.00, 10.00, 10.00, 10.00),
+        Bar(2, 10.00, 10.10, 9.90, 10.05),
+    ]
+    result = BacktestEngine(cfg(end_time=2, mintick=0.01, calc_on_order_fills=True)).run(
+        FractionalLimitExit, bars=bars
+    )
+
+    assert result.closed_trades
+    assert result.closed_trades[0].exit_price == pytest.approx(10.07)
+
+
 def test_early_stop_and_preloaded():
     c = cfg(early_stop_enabled=True, min_equity_stop=9999)
     r = BacktestEngine(c).run(BuyOnce, bars=BARS)

@@ -128,7 +128,9 @@ def test_fractional_limit_fills_round_directionally_to_tick_grid():
         FractionalLimitRoundTrip, bars=bars
     )
     assert r.closed_trades[0].entry_price == 0.15
-    assert r.closed_trades[0].exit_price == 0.14
+    # Buy limits round down; sell limits round up to the next tick, matching
+    # TradingView's directional limit price normalization.
+    assert r.closed_trades[0].exit_price == 0.15
 
 
 def test_intrabar_drawdown_uses_open_trade_adverse_price():
