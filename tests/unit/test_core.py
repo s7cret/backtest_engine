@@ -272,6 +272,32 @@ def test_stop_gap_fill_uses_open_price_rounding_not_stop_direction_rounding():
     assert result.open_trades[0].entry_price == pytest.approx(10.06)
 
 
+def test_pending_trailing_exit_created_on_close_does_not_look_back_intrabar():
+    class CloseCreatedTrailingExit:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1)
+            if self.ctx.state.position_size > 0:
+                self.ctx.exit("Trail", "L", qty=1, trail_price=10, trail_offset=1)
+
+    bars = [
+        Bar(1, 10, 10, 10, 10),
+        # Entry fills at this open.  The strategy creates the trailing exit only
+        # at this bar's close, so this high must not activate its trailing stop.
+        Bar(2, 10, 20, 5, 10),
+        # If the previous bar's high leaked into the pending trail state, this
+        # gap/open falsely closes the trade.  Correct TV semantics keep it open.
+        Bar(3, 7, 9, 6, 8),
+    ]
+    result = BacktestEngine(cfg(end_time=3)).run(CloseCreatedTrailingExit, bars=bars)
+
+    assert result.closed_trades == []
+    assert len(result.open_trades) == 1
+
+
 def test_sell_limit_exit_rounds_fractional_price_up_to_tick():
     class FractionalLimitExit:
         def __init__(self, params, runtime, ctx):

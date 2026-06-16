@@ -138,13 +138,6 @@ def _scan_orders_at_path_point(
         if close_activation_only and same_bar_close_order and not is_close_point:
             continue
         if order.status != "active":
-            if not (
-                order.status == "pending"
-                and order.created_bar_index == bar_index
-                and order.trail_price is not None
-            ):
-                continue
-            update_trailing_order(order, price)
             continue
         fill_price = _fill_price_for_order(
             engine,

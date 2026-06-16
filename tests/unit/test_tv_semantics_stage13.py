@@ -38,7 +38,7 @@ class PyramidingHoldThenClose:
             self.ctx.close_all()
 
 
-def test_trailing_stop_updates_on_entry_fill_bar_then_gaps_next_open():
+def test_trailing_stop_created_after_entry_fill_does_not_look_back_intrabar():
     bars = [
         Bar(1, 100, 100, 100, 100),
         Bar(2, 100, 112, 99, 108),
@@ -46,8 +46,8 @@ def test_trailing_stop_updates_on_entry_fill_bar_then_gaps_next_open():
     ]
     r = BacktestEngine(cfg(end_time=3)).run(LongTrailingExit, bars=bars)
     assert r.closed_trades[0].exit_bar_index == 2
-    assert r.closed_trades[0].exit_price == 106
-    assert r.closed_trades[0].profit == 6
+    assert r.closed_trades[0].exit_price == 115
+    assert r.closed_trades[0].profit == 15
 
 
 def test_intrabar_drawdown_uses_initial_capital_baseline_not_prior_open_profit_peak():

@@ -839,7 +839,7 @@ def test_fill_scanner_remaining_price_and_recalc_branches() -> None:
         0,
         trailing_only=True,
     )
-    assert pending_trailing.trail_activated is True
+    assert pending_trailing.trail_activated is False
 
     exit_order = _order("exit", kind="exit")
     exit_order.from_entry = "missing"
