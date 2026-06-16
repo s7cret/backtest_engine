@@ -533,13 +533,13 @@ def _apply_entry_or_order_command(
     new.qty_is_default = uses_default_qty
     if existing:
         if new.qty <= 0:
-            engine._diag(
-                "ORDER_REJECTED_ZERO_QTY",
-                "order qty is zero",
-                "warning",
+            existing.status = "cancelled"
+            engine._event(
+                "ORDER_CANCELLED",
+                f"order {existing.id} cancelled by zero-qty replacement",
                 bar_index,
                 bar.time,
-                new.id,
+                existing.id,
             )
             return
         if not engine._risk_allows_order(new, bar, bar_index, existing):

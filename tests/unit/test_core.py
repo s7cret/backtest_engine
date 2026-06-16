@@ -203,6 +203,31 @@ def test_same_id_pending_entry_modification_bypasses_pyramiding_limit():
     )
 
 
+def test_same_id_pending_entry_qty_zero_cancels_pending_stop_order():
+    class CancelPendingStopEntry:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1, stop=20)
+            if bar_index == 1:
+                self.ctx.entry("L", "long", qty=0, stop=12)
+
+    bars = [
+        Bar(1, 10, 11, 9, 10),
+        Bar(2, 10, 11, 9, 10),
+        Bar(3, 10, 13, 9, 10),
+        Bar(4, 10, 21, 9, 10),
+    ]
+    result = BacktestEngine(cfg(end_time=4, pyramiding=0)).run(
+        CancelPendingStopEntry, bars=bars
+    )
+
+    assert result.open_trades == []
+    assert any(event.code == "ORDER_CANCELLED" for event in (result.events or []))
+
+
 def test_strategy_exit_profit_and_loss_are_ticks_not_price_delta():
     class ProfitLossTicks:
         def __init__(self, params, runtime, ctx):
