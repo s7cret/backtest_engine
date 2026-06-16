@@ -79,7 +79,12 @@ def execute_fill(
 
 
 def _fill_pricing(engine, order: Order, price: float) -> FillPricing:
-    if order.order_type == "stop" and engine.config.mintick:
+    if (
+        order.order_type == "stop"
+        and engine.config.mintick
+        and order.stop_price is not None
+        and abs(price - order.stop_price) <= max(1e-12, engine.config.mintick * 1e-9)
+    ):
         price = round_to_step(
             price,
             engine.config.mintick,

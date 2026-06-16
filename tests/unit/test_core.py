@@ -253,6 +253,25 @@ def test_strategy_exit_profit_and_loss_are_ticks_not_price_delta():
     assert result.closed_trades[0].exit_price == pytest.approx(100.10)
 
 
+def test_stop_gap_fill_uses_open_price_rounding_not_stop_direction_rounding():
+    class BuyStopGap:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1, stop=10.00)
+
+    bars = [
+        Bar(1, 9.50, 9.80, 9.40, 9.60),
+        Bar(2, 10.0645, 10.10, 10.00, 10.05),
+    ]
+    result = BacktestEngine(cfg(end_time=2, mintick=0.01)).run(BuyStopGap, bars=bars)
+
+    assert result.open_trades
+    assert result.open_trades[0].entry_price == pytest.approx(10.06)
+
+
 def test_early_stop_and_preloaded():
     c = cfg(early_stop_enabled=True, min_equity_stop=9999)
     r = BacktestEngine(c).run(BuyOnce, bars=BARS)
