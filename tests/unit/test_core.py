@@ -203,15 +203,21 @@ def test_same_id_pending_entry_modification_bypasses_pyramiding_limit():
     )
 
 
-def test_same_id_pending_entry_qty_zero_cancels_pending_stop_order():
-    class CancelPendingStopEntry:
+def test_pending_entry_zero_qty_replacement_on_creation_bar_cancels():
+    """strategy.entry with qty=0 on the SAME bar as creation cancels the order.
+
+    Pine semantic: zero-qty replacement cancels ONLY when the strategy is
+    still on the creation bar. Once the order has aged to a later bar, it
+    has entered its fill window and must be left alone.
+    """
+    class CancelOnCreationBar:
         def __init__(self, params, runtime, ctx):
             self.ctx = ctx
 
         def _process_bar(self, bar, bar_index):
             if bar_index == 0:
                 self.ctx.entry("L", "long", qty=1, stop=20)
-            if bar_index == 1:
+                # Same-bar replacement with qty=0 cancels.
                 self.ctx.entry("L", "long", qty=0, stop=12)
 
     bars = [
@@ -221,9 +227,80 @@ def test_same_id_pending_entry_qty_zero_cancels_pending_stop_order():
         Bar(4, 10, 21, 9, 10),
     ]
     result = BacktestEngine(cfg(end_time=4, pyramiding=0)).run(
-        CancelPendingStopEntry, bars=bars
+        CancelOnCreationBar, bars=bars
     )
 
+    assert result.open_trades == []
+    assert any(event.code == "ORDER_CANCELLED" for event in (result.events or []))
+
+
+def test_pending_entry_zero_qty_replacement_after_creation_bar_preserves():
+    """strategy.entry with qty=0 on a LATER bar (after creation) must NOT cancel.
+
+    Applies to MARKET orders only. The order has entered its fill window and
+    fills at the open of the activation bar, before the strategy can cancel it.
+    This guards the SOL/ADA daily parity bug where orders created on the signal
+    bar were cancelled on the next bar when the strategy repeated
+    strategy.entry with a conditional qty=lot?0:0.
+    """
+    class PreserveAfterCreation:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1)
+            if bar_index == 1:
+                # Next-bar zero-qty replacement must NOT cancel market order.
+                self.ctx.entry("L", "long", qty=0)
+
+    bars = [
+        Bar(1, 10, 11, 9, 10),
+        Bar(2, 10, 11, 9, 10),
+    ]
+    result = BacktestEngine(cfg(end_time=2, pyramiding=0)).run(
+        PreserveAfterCreation, bars=bars
+    )
+
+    # Market order fills at bar 1 open despite qty=0 on bar 1.
+    assert len(result.open_trades) == 1
+    assert result.open_trades[0].entry_bar_index == 1
+    assert not any(
+        event.code == "ORDER_CANCELLED" for event in (result.events or [])
+    )
+
+
+def test_pending_stop_entry_zero_qty_cancels_after_creation_bar():
+    """strategy.entry with qty=0 on a LATER bar CANCELS a STOP order.
+
+    Stop orders may sit unfilled for many bars waiting for the stop level.
+    A qty=0 replacement cancels them even on the activation bar, matching
+    TradingView semantics. This fixes the SOL daily parity bug where
+    strategy.entry(id, dir, allowLong ? lot : 0, stop=uplevel) kept stale
+    stop orders alive when allowLong turned false.
+    """
+    class CancelStopAfterCreation:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1, stop=20)
+            if bar_index == 1:
+                # Next-bar zero-qty replacement CANCELS stop order.
+                self.ctx.entry("L", "long", qty=0, stop=12)
+
+    bars = [
+        Bar(1, 10, 11, 9, 10),
+        Bar(2, 10, 11, 9, 10),
+        Bar(3, 10, 13, 9, 10),
+        Bar(4, 10, 21, 9, 10),
+    ]
+    result = BacktestEngine(cfg(end_time=4, pyramiding=0)).run(
+        CancelStopAfterCreation, bars=bars
+    )
+
+    # Stop order cancelled on bar 1; never fills even when price reaches 20.
     assert result.open_trades == []
     assert any(event.code == "ORDER_CANCELLED" for event in (result.events or []))
 

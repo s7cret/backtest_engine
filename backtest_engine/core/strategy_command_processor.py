@@ -533,14 +533,34 @@ def _apply_entry_or_order_command(
     new.qty_is_default = uses_default_qty
     if existing:
         if new.qty <= 0:
-            existing.status = "cancelled"
-            engine._event(
-                "ORDER_CANCELLED",
-                f"order {existing.id} cancelled by zero-qty replacement",
-                bar_index,
-                bar.time,
-                existing.id,
-            )
+            # Pine semantic for strategy.entry(...qty=0) replacement:
+            # cancel the existing order only while it is still pending AND
+            # its fill window is in the future. Once a MARKET order has
+            # reached its activation bar (active_from_bar_index <= bar_index)
+            # it has entered its fill window and Pine leaves it alone — the
+            # only way to abort an already-queued market entry is an explicit
+            # strategy.cancel call. This guards the SOL/ADA daily parity bug
+            # where orders created on the signal bar were cancelled on the
+            # next bar when the strategy repeated strategy.entry with a
+            # conditional qty=lot?0:0.
+            #
+            # STOP orders are different: they may sit unfilled for many bars
+            # waiting for price to reach the stop level. A qty=0 replacement
+            # cancels them even on the activation bar, matching TradingView
+            # semantics where strategy.entry(id, dir, 0, stop=X) replaces the
+            # pending stop order with nothing.
+            is_unfilled_stop = existing.order_type in ("stop", "stop_limit")
+            if existing.active_from_bar_index > bar_index or is_unfilled_stop:
+                existing.status = "cancelled"
+                engine._event(
+                    "ORDER_CANCELLED",
+                    f"order {existing.id} cancelled by zero-qty replacement",
+                    bar_index,
+                    bar.time,
+                    existing.id,
+                )
+                return
+            # Order already in its fill window: keep it so it can fill.
             return
         if not engine._risk_allows_order(new, bar, bar_index, existing):
             return
