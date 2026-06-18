@@ -398,6 +398,77 @@ def test_sell_limit_exit_rounds_fractional_price_up_to_tick():
     assert result.closed_trades[0].exit_price == pytest.approx(10.07)
 
 
+def test_sell_limit_gap_fill_uses_open_price_rounding_not_limit_direction_rounding():
+    class GapLimitExit:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1)
+            if self.ctx.state.position_size > 0:
+                self.ctx.exit("TP", "L", limit=10.05, qty_percent=100)
+
+    bars = [
+        Bar(1, 10.00, 10.00, 10.00, 10.00),
+        Bar(2, 10.00, 10.00, 10.00, 10.00),
+        Bar(3, 10.0645, 10.10, 10.05, 10.08),
+    ]
+    result = BacktestEngine(cfg(end_time=3, mintick=0.01)).run(GapLimitExit, bars=bars)
+
+    assert result.closed_trades
+    assert result.closed_trades[0].exit_price == pytest.approx(10.06)
+
+
+def test_exit_qty_rounding_dust_below_step_flattens_position():
+    class RoundedPartialExits:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=25020.697)
+            if self.ctx.state.position_size > 0:
+                self.ctx.exit("TP1", "L", limit=10.00, qty_percent=35)
+                self.ctx.exit("TP2", "L", limit=10.00, qty_percent=30)
+                self.ctx.exit("TP3", "L", limit=10.00, qty_percent=35)
+                self.ctx.exit("Dust", "L", limit=10.00)
+
+    bars = [
+        Bar(1, 10.00, 10.00, 10.00, 10.00),
+        Bar(2, 10.00, 10.00, 10.00, 10.00),
+        Bar(3, 10.0645, 10.10, 10.00, 10.00),
+    ]
+    result = BacktestEngine(
+        cfg(end_time=3, mintick=0.01, qty_step=0.001, qty_rounding="floor")
+    ).run(RoundedPartialExits, bars=bars)
+
+    assert result.closed_trades
+    assert result.open_trades == []
+
+
+def test_trailing_exit_activated_at_open_uses_offset_not_open_price_stop():
+    class OpenActivatedTrail:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1)
+            if self.ctx.state.position_size > 0:
+                self.ctx.exit("Trail", "L", trail_price=18.06, trail_offset=6)
+
+    bars = [
+        Bar(1, 18.06, 18.06, 18.06, 18.06),
+        Bar(2, 18.06, 18.06, 18.06, 18.06),
+        Bar(3, 18.9504, 20.87, 18.9105, 19.0685),
+    ]
+    result = BacktestEngine(cfg(end_time=3, mintick=0.01)).run(OpenActivatedTrail, bars=bars)
+
+    assert result.closed_trades
+    assert result.closed_trades[0].exit_price == pytest.approx(20.81)
+
+
 def test_early_stop_and_preloaded():
     c = cfg(early_stop_enabled=True, min_equity_stop=9999)
     r = BacktestEngine(c).run(BuyOnce, bars=BARS)

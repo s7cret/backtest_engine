@@ -651,7 +651,8 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
         False,
     ) == (False, 0, False)
 
-    # Trailing activation at open fixes stop price to the activation price.
+    # Trailing activation at open keeps the offset-derived stop; it must not
+    # overwrite the stop with the open price and force an immediate open fill.
     trailing = _order(
         "T", kind="exit", effect="reduce", order_type="stop", from_entry=None
     )
@@ -661,7 +662,7 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
         _fill_price_for_order(skip_engine, trailing, _bar(0), 0, 11.0, "open", True)
         == 11.0
     )
-    assert trailing.stop_price == 11.0
+    assert trailing.stop_price == 10.0
 
     # Position-accounting no-target and no-unreserved-qty branches.
     engine2 = BacktestEngine(BacktestConfig("BTC", "1", 0, 1))

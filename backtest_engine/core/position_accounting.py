@@ -187,7 +187,9 @@ def _reduce_or_reverse_position(
     )
     _cancel_orphaned_exit_orders(engine, order, bar, bar_index)
     engine.position.size += signed
-    if abs(engine.position.size) < 1e-12:
+    qty_epsilon = _qty_epsilon(engine)
+    if abs(engine.position.size) < qty_epsilon:
+        _drop_dust_open_trades(engine, qty_epsilon)
         engine.position = Position(realized_profit=engine.position.realized_profit)
         return "flat"
     same_direction = [
@@ -317,8 +319,17 @@ def _close_target_trades(
         trade.qty -= qty
         trade.commission_entry -= entry_commission
         remaining -= qty
-        if trade.qty <= 1e-12:
+        if trade.qty <= _qty_epsilon(engine):
             engine.open_trades.remove(trade)
+
+
+def _qty_epsilon(engine: Any) -> float:
+    qty_step = getattr(getattr(engine, "config", None), "qty_step", None) or 0.0
+    return max(1e-12, float(qty_step) * 1e-6)
+
+
+def _drop_dust_open_trades(engine: Any, qty_epsilon: float) -> None:
+    engine.open_trades[:] = [trade for trade in engine.open_trades if trade.qty > qty_epsilon]
 
 
 def _excursion_bar_for_close_fill(bar: Bar, price: float, fill_point: str) -> Bar:

@@ -144,9 +144,7 @@ def run_native_strategy(
                 engine._cb("on_order_activated", order)
         runtime.begin_bar(bar, i)
         engine._process_bar_fills(strategy, ctx, bar, i, open_only=True)
-        engine._process_bar_fills(
-            strategy, ctx, bar, i, skip_open=True, skip_trailing=True
-        )
+        engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
         engine._update_open_profit(bar.close)
         engine._update_state()
         engine._call_strategy(strategy, bar, i)
@@ -161,14 +159,6 @@ def run_native_strategy(
                 i,
                 skip_open=True,
                 close_activation_only=True,
-            )
-            engine._process_bar_fills(
-                strategy,
-                ctx,
-                bar,
-                i,
-                skip_open=True,
-                trailing_only=True,
             )
         engine._update_intrabar_drawdown(bar)
         engine._update_open_profit(bar.close)

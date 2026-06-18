@@ -176,15 +176,7 @@ def _fill_price_for_order(
     point: str,
     path_is_open: bool,
 ) -> float | None:
-    was_trail_activated = order.trail_activated
     update_trailing_order(order, price)
-    if (
-        path_is_open
-        and order.trail_price is not None
-        and not was_trail_activated
-        and order.trail_activated
-    ):
-        order.stop_price = price
     if (
         order.kind == "exit"
         and order.from_entry is not None

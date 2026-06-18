@@ -40,7 +40,7 @@ def execute_fill(
             return
         order.qty = min(order.qty, available)
 
-    pricing = _fill_pricing(engine, order, price)
+    pricing = _fill_pricing(engine, order, price, point)
     before = engine.position.direction
     engine.cash -= pricing.commission
     engine.position.realized_profit -= pricing.commission
@@ -78,7 +78,7 @@ def execute_fill(
     engine._apply_oca(order, bar, bar_index)
 
 
-def _fill_pricing(engine, order: Order, price: float) -> FillPricing:
+def _fill_pricing(engine, order: Order, price: float, point: str) -> FillPricing:
     if (
         order.order_type == "stop"
         and engine.config.mintick
@@ -102,7 +102,11 @@ def _fill_pricing(engine, order: Order, price: float) -> FillPricing:
         engine.config.mintick,
     )
     rounding_mode = engine.config.price_rounding
-    if order.order_type in {"limit", "stop_limit"} and engine.config.mintick:
+    if (
+        order.order_type in {"limit", "stop_limit"}
+        and engine.config.mintick
+        and not _is_limit_gap_open_fill(order, price, point, engine.config.mintick)
+    ):
         rounding_mode = "ceil" if order.side == "sell" else "floor"
     fill_price = round_to_step(price + slip, engine.config.mintick, rounding_mode)
     commission = calculate_commission(
@@ -112,6 +116,20 @@ def _fill_pricing(engine, order: Order, price: float) -> FillPricing:
         engine.config.commission_value,
     )
     return FillPricing(fill_price, commission, slip)
+
+
+def _is_limit_gap_open_fill(order: Order, price: float, point: str, tick: float) -> bool:
+    if order.kind != "exit":
+        return False
+    if not (point == "open" or point.endswith(".open")):
+        return False
+    limit = order.limit_price
+    if limit is None:
+        return False
+    eps = max(1e-12, tick * 1e-9)
+    if order.side == "sell":
+        return price > limit + eps
+    return price < limit - eps
 
 
 def _stop_rounding_mode(side: Literal["buy", "sell"]) -> Literal["ceil", "floor"]:
