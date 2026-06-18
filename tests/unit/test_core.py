@@ -2,6 +2,7 @@ import pytest
 from backtest_engine import BacktestConfig, BacktestEngine, Bar, BarSeries
 from backtest_engine.models import Trade
 from backtest_engine.broker.fill_simulator import build_price_path
+from backtest_engine.broker.rounding import round_to_step
 from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.errors import BarValidationError
 from backtest_engine.core.validation import validate_bars
@@ -418,6 +419,33 @@ def test_sell_limit_gap_fill_uses_open_price_rounding_not_limit_direction_roundi
 
     assert result.closed_trades
     assert result.closed_trades[0].exit_price == pytest.approx(10.06)
+
+
+def test_open_profit_marks_close_to_mintick_like_tradingview():
+    class MarkToRoundedClose:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1)
+
+    bars = [
+        Bar(1, 14.8, 14.8, 14.8, 14.8),
+        Bar(2, 14.8, 14.8, 14.1552, 14.1552),
+    ]
+    result = BacktestEngine(cfg(end_time=2, mintick=0.01)).run(
+        MarkToRoundedClose, bars=bars
+    )
+
+    assert result.final_equity == pytest.approx(10_000 + (14.16 - 14.8))
+    assert result.open_trades is not None
+    assert result.open_trades[0].profit == pytest.approx(14.16 - 14.8)
+
+
+def test_round_to_step_floor_absorbs_float_noise_at_exact_qty_step():
+    assert 8267.3 * 0.30 == pytest.approx(2480.19)
+    assert round_to_step(8267.3 * 0.30, 0.001, "floor") == 2480.19
 
 
 def test_exit_qty_rounding_dust_below_step_flattens_position():

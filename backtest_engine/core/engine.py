@@ -513,12 +513,14 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
     def _update_trade_excursions(self, bar: Bar) -> None:
         if not self.config.collect_mfe_mae:
             return
+        tick = getattr(self, "_effective_mintick", None) or self.config.mintick
+        mark_close = round_to_step(bar.close, tick, "nearest") if tick else bar.close
         for tr in self.open_trades:
             tr.mfe, tr.mae, tr.max_runup, tr.max_drawdown = (
                 self._trade_excursion_values(tr, bar)
             )
             tr.profit = (
-                self.instrument.pnl(tr.entry_price, bar.close, tr.qty, tr.direction)
+                self.instrument.pnl(tr.entry_price, mark_close, tr.qty, tr.direction)
                 - tr.commission_entry
             )
             self._cb("on_trade_update", tr)
@@ -550,26 +552,28 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         self._fill(o, bar, i, bar.close, "close")
 
     def _update_open_profit(self, price: float) -> None:
+        tick = getattr(self, "_effective_mintick", None) or self.config.mintick
+        mark_price = round_to_step(price, tick, "nearest") if tick else price
         self.position.open_profit = (
             0.0
             if self.position.direction == "flat"
             else self.instrument.pnl(
                 self.position.avg_price,
-                price,
+                mark_price,
                 abs(self.position.size),
                 self.position.direction,
             )
         )
         for trade in self.open_trades:
             exit_commission = calculate_commission(
-                price,
+                mark_price,
                 trade.qty,
                 self.config.commission_type,
                 self.config.commission_value,
             )
             trade.profit = (
                 self.instrument.pnl(
-                    trade.entry_price, price, trade.qty, trade.direction
+                    trade.entry_price, mark_price, trade.qty, trade.direction
                 )
                 - trade.commission_entry
                 - exit_commission
