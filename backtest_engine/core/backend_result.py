@@ -46,6 +46,8 @@ def trade_from_backend_trade(trade: Any, idx: int) -> Trade:
         max_runup=max_runup,
         max_drawdown=max_drawdown,
         exit_reason=getattr(trade, "exit_reason", None),
+        stop_price=getattr(trade, "stop_price", None),
+        take_profit_price=getattr(trade, "take_profit_price", None),
         bars_held=(
             None
             if getattr(trade, "exit_bar_index", None) is None

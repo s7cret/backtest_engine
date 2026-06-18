@@ -329,6 +329,59 @@ def test_strategy_exit_profit_and_loss_are_ticks_not_price_delta():
     assert result.closed_trades
     assert result.closed_trades[0].exit_id == "X:L"
     assert result.closed_trades[0].exit_price == pytest.approx(100.10)
+    assert result.closed_trades[0].take_profit_price == pytest.approx(100.10)
+    assert result.closed_trades[0].stop_price == pytest.approx(99.95)
+
+
+def test_strategy_exit_stop_fill_preserves_sibling_take_profit_price():
+    class ProfitLossTicks:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1)
+            if bar_index == 1:
+                self.ctx.exit("X", "L", qty=1, profit=10, loss=5)
+
+    bars = [
+        Bar(1, 100.00, 100.00, 100.00, 100.00),
+        Bar(2, 100.00, 100.00, 100.00, 100.00),
+        Bar(3, 100.00, 100.04, 99.94, 100.00),
+    ]
+    result = BacktestEngine(cfg(end_time=3, mintick=0.01)).run(
+        ProfitLossTicks, bars=bars
+    )
+
+    assert result.closed_trades
+    assert result.closed_trades[0].exit_id == "X:S"
+    assert result.closed_trades[0].exit_price == pytest.approx(99.95)
+    assert result.closed_trades[0].stop_price == pytest.approx(99.95)
+    assert result.closed_trades[0].take_profit_price == pytest.approx(100.10)
+
+
+def test_strategy_exit_loss_price_is_preserved_on_closed_trade():
+    class LossTicks:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("L", "long", qty=1)
+            if bar_index == 1:
+                self.ctx.exit("X", "L", qty=1, loss=5)
+
+    bars = [
+        Bar(1, 100.00, 100.00, 100.00, 100.00),
+        Bar(2, 100.00, 100.00, 100.00, 100.00),
+        Bar(3, 100.00, 100.00, 99.94, 100.00),
+    ]
+    result = BacktestEngine(cfg(end_time=3, mintick=0.01)).run(LossTicks, bars=bars)
+
+    assert result.closed_trades
+    assert result.closed_trades[0].exit_price == pytest.approx(99.95)
+    assert result.closed_trades[0].stop_price == pytest.approx(99.95)
+    assert result.closed_trades[0].take_profit_price is None
 
 
 def test_stop_gap_fill_uses_open_price_rounding_not_stop_direction_rounding():
@@ -397,6 +450,8 @@ def test_sell_limit_exit_rounds_fractional_price_up_to_tick():
 
     assert result.closed_trades
     assert result.closed_trades[0].exit_price == pytest.approx(10.07)
+    assert result.closed_trades[0].take_profit_price == pytest.approx(10.064)
+    assert result.closed_trades[0].stop_price is None
 
 
 def test_sell_limit_gap_fill_uses_open_price_rounding_not_limit_direction_rounding():

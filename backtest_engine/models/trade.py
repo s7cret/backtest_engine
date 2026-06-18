@@ -26,3 +26,5 @@ class Trade:
     exit_reason: str | None = None
     bars_held: int | None = None
     is_open: bool = False
+    stop_price: float | None = None
+    take_profit_price: float | None = None

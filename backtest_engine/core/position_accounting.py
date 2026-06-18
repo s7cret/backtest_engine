@@ -282,6 +282,7 @@ def _close_target_trades(
             trade,
             excursion_bar,
         )
+        stop_price, take_profit_price = _closed_trade_exit_prices(engine, order)
         closed = replace(
             trade,
             exit_id=order.id,
@@ -304,6 +305,8 @@ def _close_target_trades(
             exit_reason=order.id,
             bars_held=bar_index - trade.entry_bar_index,
             is_open=False,
+            stop_price=stop_price,
+            take_profit_price=take_profit_price,
         )
         engine.closed_trades.append(closed)
         if order.kind == "exit" and order.parent_exit_id is not None:
@@ -321,6 +324,36 @@ def _close_target_trades(
         remaining -= qty
         if trade.qty <= _qty_epsilon(engine):
             engine.open_trades.remove(trade)
+
+
+def _closed_trade_exit_prices(engine: Any, order: Order) -> tuple[float | None, float | None]:
+    """Return both planned exit legs for the closed trade row.
+
+    A filled strategy.exit bracket has two internal orders (":L" and ":S").
+    The filled leg carries only its own price, but the trade ledger/UI needs the
+    full bracket: TP and SL. Snapshot sibling legs before OCA cancellation runs.
+    """
+
+    stop_price = order.stop_price
+    take_profit_price = order.limit_price
+    if order.kind != "exit":
+        return stop_price, take_profit_price
+
+    parent_exit_id = order.parent_exit_id or order.id
+    for sibling in engine.orders:
+        if sibling is order:
+            continue
+        if sibling.kind != "exit" or sibling.status not in {"pending", "active"}:
+            continue
+        if (sibling.parent_exit_id or sibling.id) != parent_exit_id:
+            continue
+        if sibling.from_entry != order.from_entry:
+            continue
+        if stop_price is None and sibling.stop_price is not None:
+            stop_price = sibling.stop_price
+        if take_profit_price is None and sibling.limit_price is not None:
+            take_profit_price = sibling.limit_price
+    return stop_price, take_profit_price
 
 
 def _qty_epsilon(engine: Any) -> float:
