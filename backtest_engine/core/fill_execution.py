@@ -85,11 +85,12 @@ def _fill_pricing(engine, order: Order, price: float, point: str) -> FillPricing
         and order.stop_price is not None
         and abs(price - order.stop_price) <= max(1e-12, engine.config.mintick * 1e-9)
     ):
-        price = round_to_step(
-            price,
-            engine.config.mintick,
-            _stop_rounding_mode(order.side),
+        mode = (
+            _trailing_stop_rounding_mode(order.side)
+            if _is_trailing_stop(order)
+            else _stop_rounding_mode(order.side)
         )
+        price = round_to_step(price, engine.config.mintick, mode)
     slip_raw = (
         0.0 if order.order_type in {"limit", "stop_limit"} else engine.config.slippage
     )
@@ -118,6 +119,14 @@ def _fill_pricing(engine, order: Order, price: float, point: str) -> FillPricing
     return FillPricing(fill_price, commission, slip)
 
 
+def _is_trailing_stop(order: Order) -> bool:
+    return (
+        order.trail_price is not None
+        or order.trail_points is not None
+        or order.trail_offset is not None
+    )
+
+
 def _is_limit_gap_open_fill(order: Order, price: float, point: str, tick: float) -> bool:
     if order.kind != "exit":
         return False
@@ -134,3 +143,10 @@ def _is_limit_gap_open_fill(order: Order, price: float, point: str, tick: float)
 
 def _stop_rounding_mode(side: Literal["buy", "sell"]) -> Literal["ceil", "floor"]:
     return "ceil" if side == "buy" else "floor"
+
+
+def _trailing_stop_rounding_mode(side: Literal["buy", "sell"]) -> Literal["ceil", "floor"]:
+    # TV rounds trailing stop levels in the favorable direction for the
+    # position: long trail exits (sell stops) up, short trail exits (buy stops)
+    # down. Plain fixed stops still use conservative stop rounding above.
+    return "floor" if side == "buy" else "ceil"

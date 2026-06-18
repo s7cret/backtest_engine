@@ -111,7 +111,7 @@ def _scan_orders_at_path_point(
     skip_trailing: bool,
     trailing_only: bool,
 ) -> tuple[bool, int, bool]:
-    for order in list(engine.orders):
+    for order in _orders_for_path_point(engine, price, bar, path_is_open):
         is_trailing = (
             order.trail_price is not None
             or order.trail_offset is not None
@@ -165,6 +165,33 @@ def _scan_orders_at_path_point(
             )
             return True, recalc, filled
     return False, recalc, filled
+
+
+def _orders_for_path_point(engine: Any, price: float, bar: Bar, path_is_open: bool) -> list[Order]:
+    orders = list(engine.orders)
+    if not path_is_open:
+        return orders
+
+    mintick = engine.config.mintick
+    assumption_ticks = engine.config.backtest_fill_limits_assumption_ticks
+
+    def key(item: tuple[int, Order]) -> tuple[int, float, int]:
+        idx, order = item
+        if (
+            order.status == "active"
+            and order.kind == "exit"
+            and order.order_type == "limit"
+            and order.limit_price is not None
+            and limit_reached(order, price, bar, mintick, assumption_ticks)
+        ):
+            # At an open gap beyond multiple exit limits, TV lists/fills the
+            # more favorable target first. Normal intrabar path crossings keep
+            # creation order because price reaches nearer targets first.
+            favored_price = -order.limit_price if order.side == "sell" else order.limit_price
+            return (0, favored_price, idx)
+        return (1, 0.0, idx)
+
+    return [order for _, order in sorted(enumerate(orders), key=key)]
 
 
 def _fill_price_for_order(
