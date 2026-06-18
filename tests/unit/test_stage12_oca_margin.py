@@ -1,4 +1,7 @@
+import pytest
+
 from backtest_engine import BacktestConfig, BacktestEngine, Bar
+from backtest_engine.models import Position, Trade
 
 
 def cfg(**kw):
@@ -103,3 +106,44 @@ def test_nonstandard_margin_runs_without_unsupported_warning_when_no_call():
     )
     assert r.status == "completed"
     assert not any(d.code == "UNSUPPORTED_MARGIN_LIQUIDATION_MODEL" for d in r.warnings)
+
+
+def test_margin_call_can_liquidate_short_at_100_percent_margin():
+    engine = BacktestEngine(cfg(initial_capital=1000, margin_short=100, qty_step=None))
+    engine.position = Position(size=-80, avg_price=10, direction="short")
+    engine.cash = 1000
+    engine.equity = 1000
+    engine.open_trades = [
+        Trade(
+            id="t-Short",
+            entry_id="Short",
+            exit_id=None,
+            direction="short",
+            entry_time=1,
+            entry_bar_index=0,
+            entry_price=10,
+            exit_time=None,
+            exit_bar_index=None,
+            exit_price=None,
+            qty=80,
+            commission_entry=0,
+            commission_exit=0,
+            profit=0,
+            profit_percent=0,
+            is_open=True,
+        )
+    ]
+
+    did_liquidate = engine._maybe_margin_call(
+        12,
+        Bar(2, 10, 12, 10, 12),
+        1,
+        "high",
+    )
+
+    assert did_liquidate is True
+    assert len(engine.closed_trades) == 1
+    assert engine.closed_trades[0].exit_id == "Margin call"
+    assert engine.closed_trades[0].qty == pytest.approx(40)
+    assert engine.position.direction == "short"
+    assert engine.position.size == pytest.approx(-40)

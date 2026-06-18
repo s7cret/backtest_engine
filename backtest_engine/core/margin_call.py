@@ -18,8 +18,6 @@ def maybe_margin_call(
         if engine.position.direction == "long"
         else engine.config.margin_short
     )
-    if margin_percent >= 100.0:
-        return False
     margin_ratio = margin_percent / 100.0
     qty_abs = abs(engine.position.size)
     if qty_abs <= 0.0 or price <= 0.0 or margin_ratio <= 0.0:
@@ -27,7 +25,7 @@ def maybe_margin_call(
     engine._update_open_profit(price)
     margin_required = price * qty_abs * margin_ratio
     available_funds = engine.equity - margin_required
-    if available_funds > 1e-12:
+    if available_funds >= -1e-12:
         return False
     cover_raw = (-available_funds / margin_ratio) / price
     liquidation_qty = 1.0 if cover_raw < 1.0 else float(int(cover_raw) * 4)
