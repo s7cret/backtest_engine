@@ -306,6 +306,42 @@ def test_pending_stop_entry_zero_qty_cancels_after_creation_bar():
     assert any(event.code == "ORDER_CANCELLED" for event in (result.events or []))
 
 
+def test_pending_opposite_entry_close_component_removed_after_market_close_fills_first():
+    """A qty=0 opposite entry is close-only; explicit close consuming it cancels it.
+
+    This matches the SOL V1 4H case: conditional qty becomes 0 while a short
+    is open, so the opposite `strategy.entry(..., qty=0, stop=...)` contributes
+    only the reversal close component. If `strategy.close` flattens first, no
+    opening quantity remains and the pending opposite stop must not reopen.
+    """
+
+    class CloseThenOppositeStop:
+        def __init__(self, params, runtime, ctx):
+            self.ctx = ctx
+
+        def _process_bar(self, bar, bar_index):
+            if bar_index == 0:
+                self.ctx.entry("S", "short", qty=10)
+            if bar_index == 1:
+                self.ctx.entry("L", "long", qty=0, stop=12)
+                self.ctx.close("S")
+
+    bars = [
+        Bar(1, 10, 10, 10, 10),
+        Bar(2, 10, 11, 9, 10),
+        # Market close fills at open=11, then the opposite stop is touched.
+        Bar(3, 11, 13, 10, 12),
+    ]
+    result = BacktestEngine(cfg(end_time=3, pyramiding=0)).run(
+        CloseThenOppositeStop, bars=bars
+    )
+
+    assert result.open_trades == []
+    closed = result.closed_trades or []
+    assert len(closed) == 1
+    assert closed[0].exit_id == "S"
+
+
 def test_strategy_exit_profit_and_loss_are_ticks_not_price_delta():
     class ProfitLossTicks:
         def __init__(self, params, runtime, ctx):

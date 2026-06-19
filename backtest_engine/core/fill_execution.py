@@ -75,7 +75,58 @@ def execute_fill(
     engine._event(
         "ORDER_FILLED", f"order {order.id} filled", bar_index, bar.time, order.id
     )
+    _consume_opposite_reverse_close_component(
+        engine, order, before, bar, bar_index
+    )
     engine._apply_oca(order, bar, bar_index)
+
+
+def _consume_opposite_reverse_close_component(
+    engine, filled_order: Order, closed_direction: str, bar: Bar, bar_index: int
+) -> None:
+    if filled_order.position_effect != "close":
+        return
+    if closed_direction not in {"long", "short"}:
+        return
+    remaining = float(filled_order.qty)
+    if remaining <= 0.0:
+        return
+    opposite_direction = "short" if closed_direction == "long" else "long"
+    qty_step = getattr(getattr(engine, "config", None), "qty_step", None) or 0.0
+    eps = max(1e-12, float(qty_step) * 1e-6)
+    for order in engine.orders:
+        if remaining <= eps:
+            return
+        if order is filled_order:
+            continue
+        if order.kind != "entry" or order.status not in {"pending", "active"}:
+            continue
+        if order.position_effect != "reverse":
+            continue
+        if order.direction != opposite_direction:
+            continue
+        consumed = min(order.qty, remaining)
+        order.qty -= consumed
+        remaining -= consumed
+        if order.qty <= eps:
+            order.status = "cancelled"
+            engine._cb("on_order_cancelled", order)
+            engine._event(
+                "ORDER_CANCELLED",
+                f"opposite reverse entry {order.id} consumed by close order",
+                bar_index,
+                bar.time,
+                order.id,
+            )
+            continue
+        order.position_effect = "open"
+        engine._event(
+            "ORDER_MODIFIED",
+            f"opposite reverse entry {order.id} reduced by close order",
+            bar_index,
+            bar.time,
+            order.id,
+        )
 
 
 def _fill_pricing(engine, order: Order, price: float, point: str) -> FillPricing:
