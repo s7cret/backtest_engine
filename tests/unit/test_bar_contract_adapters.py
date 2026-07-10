@@ -2,14 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from backtest_engine.models.bar import Bar, from_contract_bar, to_contract_bar
+from marketdata_provider.contracts import InstrumentKey, parse_timeframe
 
-contracts = pytest.importorskip(
-    "marketdata_provider.contracts",
-    reason="marketdata-provider is an optional integration test dependency",
-)
-InstrumentKey = contracts.InstrumentKey
-parse_timeframe = contracts.parse_timeframe
+from backtest_engine.models.bar import Bar, from_contract_bar, to_contract_bar
 
 
 def test_to_contract_bar_requires_explicit_identity_and_fills_fixed_close_time() -> (

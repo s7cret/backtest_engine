@@ -1,0 +1,64 @@
+{
+  "evidence": {
+    "guarded_realtime_replay": {
+      "all_attempts_rolled_back": true,
+      "attempt_count": 4,
+      "attempt_sha256": "e5da3438c14bdc2e6aface90fe4084c44f1e4cf08001c946874b3ac697b80015",
+      "evidence_kind": "deterministic_guarded_skeleton",
+      "fixture_id": "phase2_guarded_realtime_replay_v1",
+      "oracle_verified": false,
+      "runtime_execution": "fail_closed",
+      "schedule_sha256": "da8da205a4d7a493cd908ee74d1560d2895ac8bb4ae947e47405842dd613617a",
+      "schedule_slice_count": 2,
+      "strategy_invoked": false,
+      "synthetic_fixture": true,
+      "tradingview_parity": "not_claimed"
+    }
+  },
+  "features": {
+    "calc_on_every_tick": {
+      "evidence_ref": "guarded_realtime_replay",
+      "reason": "Exact TradingView realtime rollback, varip, and tick semantics are not oracle-verified.",
+      "reason_code": "platform_blocked",
+      "status": "excluded"
+    },
+    "realtime_restart": {
+      "evidence_ref": "guarded_realtime_replay",
+      "reason": "Exact TradingView realtime rollback, varip, and tick semantics are not oracle-verified.",
+      "reason_code": "platform_blocked",
+      "status": "excluded"
+    },
+    "realtime_result_hash": {
+      "evidence_ref": "guarded_realtime_replay",
+      "reason": "Exact TradingView realtime rollback, varip, and tick semantics are not oracle-verified.",
+      "reason_code": "platform_blocked",
+      "status": "excluded"
+    },
+    "tick_driven_fills": {
+      "evidence_ref": "guarded_realtime_replay",
+      "reason": "Exact TradingView realtime rollback, varip, and tick semantics are not oracle-verified.",
+      "reason_code": "platform_blocked",
+      "status": "excluded"
+    },
+    "tick_driven_orders": {
+      "evidence_ref": "guarded_realtime_replay",
+      "reason": "Exact TradingView realtime rollback, varip, and tick semantics are not oracle-verified.",
+      "reason_code": "platform_blocked",
+      "status": "excluded"
+    },
+    "tick_driven_trades": {
+      "evidence_ref": "guarded_realtime_replay",
+      "reason": "Exact TradingView realtime rollback, varip, and tick semantics are not oracle-verified.",
+      "reason_code": "platform_blocked",
+      "status": "excluded"
+    },
+    "tick_replay": {
+      "evidence_ref": "guarded_realtime_replay",
+      "reason": "Exact TradingView realtime rollback, varip, and tick semantics are not oracle-verified.",
+      "reason_code": "platform_blocked",
+      "status": "excluded"
+    }
+  },
+  "profile": "backtest-engine-4.0",
+  "schema_version": 1
+}

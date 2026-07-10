@@ -1,27 +1,11 @@
 from __future__ import annotations
 
-import json
-import os
-from pathlib import Path
-
 import pytest
 
 from backtest_engine import BacktestConfig, BacktestEngine, Bar, Tick
 from backtest_engine.context import StrategyContext
 from backtest_engine.core.realtime import BarTickSlice
 from backtest_engine.errors import ConfigError
-
-WORKSPACE_ENV = os.environ.get("BACKTEST_ENGINE_TV_FIXTURE_WORKSPACE")
-WORKSPACE = Path(WORKSPACE_ENV).expanduser() if WORKSPACE_ENV else None
-TRACE = (
-    (
-        WORKSPACE
-        / "tv_strategy_oracle/realtime_probe/stage7j_to_9g_next50_2026-04-30/stage7n_guarded_tick_attempt_trace.json"
-    )
-    if WORKSPACE
-    else None
-)
-
 
 class NoopStrategy:
     def __init__(self, params, runtime, ctx):
@@ -46,13 +30,19 @@ def _config(**kw) -> BacktestConfig:
 def test_stage7i_boundary_trace_can_drive_guarded_skeleton_but_run_remains_fail_closed() -> (
     None
 ):
-    if TRACE is None or not TRACE.exists():
-        pytest.skip(f"optional TradingView realtime trace not found: {TRACE}")
-    trace = json.loads(TRACE.read_text(encoding="utf-8"))
-    bar_payload = trace["bar"]
-    attempts_payload = trace["attempts"]
-    bar = Bar(**bar_payload)
-    ticks = tuple(Tick(time=a["time"], price=a["price"]) for a in attempts_payload)
+    bar = Bar(
+        time=1_777_504_200_000,
+        open=75_950.0,
+        high=76_000.0,
+        low=75_900.0,
+        close=75_980.0,
+        volume=1.0,
+        time_close=1_777_504_500_000,
+    )
+    ticks = (
+        Tick(time=1_777_504_210_000, price=75_959.31),
+        Tick(time=1_777_504_220_000, price=75_987.62),
+    )
     tick_slice = BarTickSlice(bar_index=0, bar=bar, ticks=ticks)
 
     engine = BacktestEngine(_config())

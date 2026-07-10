@@ -18,10 +18,21 @@ Repository = "https://github.com/s7cret/backtest_engine"
 Issues = "https://github.com/s7cret/backtest_engine/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-cov>=6", "ruff>=0.5", "mypy>=1.10", "build>=1.2"]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=6",
+  "ruff>=0.5",
+  "mypy>=1.10",
+  "build>=1.2",
+  "pinelib @ git+https://github.com/s7cret/pinelib.git@33239a0093fa5d548058d79d5d079104db0ef43e",
+  "marketdata-provider @ git+https://github.com/s7cret/marketdata-provider.git@bcf733de6b0ff05d06d3fb2add5d068c52280965",
+]
 
 [project.scripts]
 backtest = "backtest_engine.cli.main:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

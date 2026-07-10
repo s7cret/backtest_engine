@@ -8,6 +8,7 @@ from pathlib import Path
 
 from backtest_engine.distribution import distribution_manifest
 from backtest_engine.quality import architecture_report, duplicate_report
+from backtest_engine.support_profile import verify_realtime_replay_support_profile
 
 EXPECTED_VERSION = "4.0.0"
 
@@ -21,6 +22,9 @@ class ReleaseReport:
     distribution_ok: bool
     duplicates_ok: bool
     architecture_ok: bool
+    support_profile_ok: bool
+    realtime_schedule_sha256: str | None
+    realtime_attempt_sha256: str | None
     notes: list[str]
 
 
@@ -45,6 +49,10 @@ def release_report(root: str | Path = ".") -> ReleaseReport:
     dist = distribution_manifest(base)
     dup = duplicate_report(base / "backtest_engine")
     arch = architecture_report(base / "backtest_engine", max_lines=700)
+    support_profile = verify_realtime_replay_support_profile(
+        base / "support_profile.json"
+    )
+    notes.extend(support_profile.notes)
     docs_ok = not missing_docs
     distribution_ok = dist.forbidden_count == 0
     duplicates_ok = dup.duplicate_group_count == 0
@@ -55,16 +63,20 @@ def release_report(root: str | Path = ".") -> ReleaseReport:
         and distribution_ok
         and duplicates_ok
         and architecture_ok
+        and support_profile.ok
     )
     return ReleaseReport(
-        ok,
-        str(project["name"]),
-        version,
-        docs_ok,
-        distribution_ok,
-        duplicates_ok,
-        architecture_ok,
-        notes,
+        ok=ok,
+        project=str(project["name"]),
+        package_version=version,
+        docs_ok=docs_ok,
+        distribution_ok=distribution_ok,
+        duplicates_ok=duplicates_ok,
+        architecture_ok=architecture_ok,
+        support_profile_ok=support_profile.ok,
+        realtime_schedule_sha256=support_profile.schedule_sha256,
+        realtime_attempt_sha256=support_profile.attempt_sha256,
+        notes=notes,
     )
 
 

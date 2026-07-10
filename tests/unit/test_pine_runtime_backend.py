@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("pinelib")
-
 from backtest_engine import BacktestConfig, BacktestEngine  # noqa: E402
 from backtest_engine.execution_backends import (  # noqa: E402
     ExecutionBackend,

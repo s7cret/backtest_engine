@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import runpy
 import sys
+import tomllib
 import types
 from pathlib import Path
 from typing import Any
@@ -999,3 +1000,30 @@ def test_phase0_release_gate_remaining_branches(monkeypatch: pytest.MonkeyPatch)
     )
     assert active_market.status == "active"
     assert active_market.qty == 1.0
+
+
+def test_release_suite_has_no_skip_xfail_or_importorskip_and_declares_siblings() -> None:
+    root = Path(__file__).resolve().parents[2]
+    forbidden = (
+        "pytest." + "skip",
+        "pytest.mark." + "skip",
+        "pytest.mark." + "xfail",
+        "pytest." + "importorskip",
+    )
+    offenders: list[str] = []
+    for path in sorted((root / "tests").rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        if any(token in text for token in forbidden):
+            offenders.append(str(path.relative_to(root)))
+    assert offenders == []
+
+    config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    dev_dependencies = config["project"]["optional-dependencies"]["dev"]
+    assert any(str(item).startswith("pinelib @ git+") for item in dev_dependencies)
+    assert any(
+        str(item).startswith("marketdata-provider @ git+") for item in dev_dependencies
+    )
+    for dependency in dev_dependencies:
+        if " @ git+" in str(dependency):
+            revision = str(dependency).rsplit("@", 1)[1]
+            assert len(revision) == 40 and set(revision) <= set("0123456789abcdef")

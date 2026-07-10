@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import sys
 import types
 from dataclasses import dataclass
@@ -457,32 +458,28 @@ def test_generated_strategy_adapter_lifecycle_and_declaration_checks(
         )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Negative scenario: relies on pinelib.core being NOT installed.  "
-        "4.0 ships with pinelib 4.0 installed editable in the dev venv, so "
-        "sys.modules['pinelib.core'] survives any monkeypatch; the error "
-        "path is unrunnable.  Re-enable if/when a venv without pinelib is "
-        "available, or convert to a direct unit test against the import "
-        "guard with mock.patch('sys.modules', {...})."
-    ),
-    strict=False,
-)
 def test_bridge_helper_errors_and_config_diff(monkeypatch: pytest.MonkeyPatch) -> None:
-    sys.modules.pop("pinelib.core", None)
-    sys.modules.pop("pinelib.core.types", None)
-    with pytest.raises(
-        bridge.GeneratedStrategyBridgeError, match="PineLib is required"
-    ):
-        bridge._make_pine_runtime(bridge.GeneratedStrategyAdapterOptions())
-    with pytest.raises(
-        bridge.GeneratedStrategyBridgeError, match="PineLib is required"
-    ):
-        bridge._pine_na()
-    with pytest.raises(
-        bridge.GeneratedStrategyBridgeError, match="PineLib is required"
-    ):
-        bridge._to_pine_bar(Bar(0, 1, 1, 1, 1))
+    original_import = builtins.__import__
+
+    def fail_pinelib_core_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "pinelib.core" or name.startswith("pinelib.core."):
+            raise ImportError("forced missing PineLib")
+        return original_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(builtins, "__import__", fail_pinelib_core_import)
+        with pytest.raises(
+            bridge.GeneratedStrategyBridgeError, match="PineLib is required"
+        ):
+            bridge._make_pine_runtime(bridge.GeneratedStrategyAdapterOptions())
+        with pytest.raises(
+            bridge.GeneratedStrategyBridgeError, match="PineLib is required"
+        ):
+            bridge._pine_na()
+        with pytest.raises(
+            bridge.GeneratedStrategyBridgeError, match="PineLib is required"
+        ):
+            bridge._to_pine_bar(Bar(0, 1, 1, 1, 1))
     assert bridge._direction("long") == "long"
     with pytest.raises(bridge.UnsupportedGeneratedStrategySemantics, match="direction"):
         bridge._direction("flat")
