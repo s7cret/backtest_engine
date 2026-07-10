@@ -1,20 +1,47 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from backtest_engine.context import StrategyContext
+from backtest_engine.config import BacktestConfig
+from backtest_engine.context import StrategyContext, StrategyStateView
 from backtest_engine.core.resume_state import export_resume_state, restore_resume_state
 from backtest_engine.core.result_builder import build_backtest_result
 from backtest_engine.models import (
+    BacktestCallbacks,
     BacktestResumeState,
     BarSeries,
     Diagnostic,
     EquityPoint,
+    Position,
+    Trade,
 )
 from backtest_engine.results import BacktestResult
 
 
 class EngineSupportMixin:
+    config: BacktestConfig
+    callbacks: BacktestCallbacks
+    position: Position
+    state: StrategyStateView
+    cash: float
+    equity: float
+    max_drawdown: float
+    max_drawdown_percent: float
+    max_runup: float
+    max_runup_percent: float
+    closed_trades: list[Trade]
+    open_trades: list[Trade]
+    events: list[Diagnostic]
+    warnings: list[Diagnostic]
+    errors: list[Diagnostic]
+    _callbacks_disabled: bool
+    _closed_trade_stats_count: int
+    _gross_profit_total: float
+    _gross_loss_total: float
+    _win_trades_total: int
+    _loss_trades_total: int
+    _even_trades_total: int
+
     def _update_state(self) -> None:
         if len(self.closed_trades) < self._closed_trade_stats_count:
             self._closed_trade_stats_count = 0
@@ -98,7 +125,7 @@ class EngineSupportMixin:
         self,
         series: BarSeries,
         equity_curve: list[EquityPoint] | None,
-        status: str,
+        status: Literal["completed", "failed", "early_stopped"],
         reason: str | None,
         ms: float,
         strategy: Any | None = None,

@@ -2,7 +2,7 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass, field, asdict, is_dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 from backtest_engine.models import Diagnostic
 
 
@@ -23,7 +23,7 @@ class ComparisonReport:
 
 def _row(obj: Any) -> dict[str, Any]:
     if is_dataclass(obj):
-        return asdict(obj)
+        return asdict(cast(Any, obj))
     if isinstance(obj, dict):
         return obj
     return {

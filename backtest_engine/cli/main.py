@@ -2,8 +2,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from importlib.util import spec_from_file_location, module_from_spec
+from typing import Any, cast
 from backtest_engine import BacktestConfig, BacktestEngine, BarSeries
 from backtest_engine.results import (
     JSONResultWriter,
@@ -21,7 +23,7 @@ def _load_class(path: str, name: str):
     strategy_path = Path(path).resolve()
     module_name = f"_backtest_strategy_{strategy_path.stem}_{abs(hash(strategy_path))}"
     spec = spec_from_file_location(module_name, strategy_path)
-    mod = module_from_spec(spec)
+    mod = module_from_spec(cast(ModuleSpec, spec))
     assert spec and spec.loader
     sys.modules[module_name] = mod
     spec.loader.exec_module(mod)
@@ -120,10 +122,10 @@ def main(argv=None) -> int:
     if a.cmd == "compare":
         our = _load_result(a.our).get("closed_trades") or []
         tv = load_trades_csv(a.tv)
-        report = compare_trades(
+        comparison_report = compare_trades(
             our, tv, price_tolerance=a.price_tolerance, qty_tolerance=a.qty_tolerance
         )
-        Path(a.output).write_text(render_compare(report, format=a.format))
+        Path(a.output).write_text(render_compare(comparison_report, format=a.format))
         return 0
     if a.cmd == "benchmark":
         params = json.loads(Path(a.params).read_text()) if a.params else {}
@@ -134,14 +136,14 @@ def main(argv=None) -> int:
             end_time=a.end,
             initial_capital=a.capital,
         )
-        report = run_benchmark(
+        benchmark_report = run_benchmark(
             cfg,
             _load_class(a.strategy, a.cls),
             bars=_load_bars(a.bars),
             params=params,
             runs=a.runs,
         )
-        Path(a.output).write_text(render_benchmark(report, format=a.format))
+        Path(a.output).write_text(render_benchmark(benchmark_report, format=a.format))
         return 0
     if a.cmd == "batch":
         strategy = _load_class(a.strategy, a.cls)
@@ -184,7 +186,7 @@ def main(argv=None) -> int:
         if a.trades_csv:
 
             class R:
-                pass
+                closed_trades: list[dict[str, Any]]
 
             r = R()
             r.closed_trades = result.get("closed_trades") or []

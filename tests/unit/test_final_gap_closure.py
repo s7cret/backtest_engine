@@ -878,3 +878,123 @@ def test_last_tiny_gap_branches(
     assert dataclass_report.matched
     mismatch_report = compare_trades([Row()], [])
     assert not mismatch_report.matched and mismatch_report.first_mismatch_index == 0
+
+
+def test_phase0_release_gate_remaining_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+    import builtins
+
+    from backtest_engine.adapters.generated_strategy_context import _direction, _is_pine_na
+    from backtest_engine.adapters.generated_strategy_errors import (
+        UnsupportedGeneratedStrategySemantics,
+    )
+    from backtest_engine.context.command_buffer import EntryOrderPayload
+    from backtest_engine.core.fill_execution import (
+        _consume_opposite_reverse_close_component,
+        _is_limit_gap_open_fill,
+    )
+    from backtest_engine.core.fill_scanner import _scan_orders_at_path_point
+    from backtest_engine.core.position_accounting import _closed_trade_exit_prices
+    from backtest_engine.core.strategy_command_processor import _apply_entry_or_order_command
+    from backtest_engine.models.timeframe import infer_close_from_timeframe
+
+    original_import = builtins.__import__
+
+    def fail_optional_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name in {"pinelib.core.na", "marketdata_provider.contracts"}:
+            raise ImportError(name)
+        return original_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(builtins, "__import__", fail_optional_import)
+        assert _is_pine_na(object()) is False
+        assert infer_close_from_timeframe(1_000, "1") == 61_000
+        with pytest.raises(BarValidationError, match="duration is unknown"):
+            infer_close_from_timeframe(1_000, "1M")
+
+    with pytest.raises(UnsupportedGeneratedStrategySemantics, match="direction"):
+        _direction("flat")
+
+    engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, pyramiding=10))
+    bar = _bar(0)
+    filled = _order("filled", kind="close", effect="close", side="sell", qty=1.0)
+    _consume_opposite_reverse_close_component(engine, filled, "flat", bar, 0)
+    filled.qty = 0.0
+    _consume_opposite_reverse_close_component(engine, filled, "long", bar, 0)
+
+    filled.qty = 1.0
+    wrong_direction = _order("wrong", effect="reverse", direction="long", qty=2.0)
+    reduced_reverse = _order("reverse", effect="reverse", direction="short", qty=2.0)
+    engine.orders = [filled, wrong_direction, reduced_reverse]
+    _consume_opposite_reverse_close_component(engine, filled, "long", bar, 0)
+    assert wrong_direction.qty == 2.0
+    assert reduced_reverse.qty == 1.0
+    assert reduced_reverse.position_effect == "open"
+
+    no_limit = _order("no-limit", kind="exit", effect="reduce", side="buy")
+    assert _is_limit_gap_open_fill(no_limit, 9.0, "open", 0.01) is False
+    no_limit.limit_price = 10.0
+    assert _is_limit_gap_open_fill(no_limit, 9.0, "open", 0.01) is True
+
+    trailing = _order("trailing", kind="exit", effect="reduce", order_type="stop")
+    trailing.trail_offset = 1.0
+    engine.orders = [trailing]
+    assert _scan_orders_at_path_point(
+        engine,
+        NoopStrategy(),
+        StrategyContext(engine.config),
+        bar,
+        0,
+        10.0,
+        "open",
+        True,
+        0,
+        0,
+        False,
+        False,
+        True,
+        False,
+    ) == (False, 0, False)
+
+    ordinary = _order("ordinary")
+    engine.orders = [ordinary]
+    assert _scan_orders_at_path_point(
+        engine,
+        NoopStrategy(),
+        StrategyContext(engine.config),
+        bar,
+        0,
+        10.0,
+        "open",
+        True,
+        0,
+        0,
+        False,
+        False,
+        False,
+        True,
+    ) == (False, 0, False)
+
+    bracket = _order("bracket", kind="exit", effect="reduce", from_entry="A")
+    bracket.parent_exit_id = "group"
+    sibling = _order("sibling", kind="exit", effect="reduce", from_entry="B")
+    sibling.parent_exit_id = "group"
+    sibling.stop_price = 9.0
+    sibling.limit_price = 12.0
+    engine.orders = [bracket, sibling]
+    assert _closed_trade_exit_prices(engine, bracket) == (None, None)
+
+    active_market = _order("E", status="active", created=0)
+    engine.orders = [active_market]
+    _apply_entry_or_order_command(
+        engine,
+        "entry",
+        EntryOrderPayload("E", "long", qty=0.0),
+        bar,
+        0,
+        False,
+        None,
+        None,
+        "market",
+    )
+    assert active_market.status == "active"
+    assert active_market.qty == 1.0

@@ -1,6 +1,6 @@
 from __future__ import annotations
 import time
-from typing import Any
+from typing import Any, Literal, cast
 from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext, StrategyStateView
 from backtest_engine.errors import (
@@ -534,18 +534,19 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         apply_oca(self, o, bar, i)
 
     def _force_close(self, bar: Bar, i: int) -> None:
+        direction = cast(Literal["long", "short"], self.position.direction)
         o = Order(
             "forced_end_close",
             "close",
-            self.position.direction,
-            "sell" if self.position.direction == "long" else "buy",
+            direction,
+            "sell" if direction == "long" else "buy",
             "close",
             "market",
             abs(self.position.size),
             i,
             bar.time,
             i,
-            self.position.direction,
+            direction,
             True,
             immediately=True,
         )

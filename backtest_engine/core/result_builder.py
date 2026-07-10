@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from backtest_engine.core.score_window import (
     build_phase_trades,
@@ -24,7 +24,7 @@ def build_backtest_result(
     engine: Any,
     series: BarSeries,
     equity_curve: list[EquityPoint] | None,
-    status: str,
+    status: Literal["completed", "failed", "early_stopped"],
     reason: str | None,
     execution_time_ms: float,
     strategy: Any | None = None,

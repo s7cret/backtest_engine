@@ -2,6 +2,7 @@ import csv
 import json
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
+from typing import Any, cast
 
 
 class JSONResultWriter:
@@ -23,7 +24,10 @@ class CSVTradeWriter:
             if not trades:
                 f.write("")
                 return
-            rows = [asdict(t) if is_dataclass(t) else t for t in trades]
+            rows = [
+                asdict(cast(Any, trade)) if is_dataclass(trade) else trade
+                for trade in trades
+            ]
             w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
             w.writeheader()
             w.writerows(rows)

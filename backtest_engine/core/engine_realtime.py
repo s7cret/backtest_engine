@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from inspect import signature
-from typing import Any
+from typing import Any, Callable
+
+from backtest_engine.config import BacktestConfig
 
 from backtest_engine.context import StrategyContext, StrategyStateView
 from backtest_engine.core.deterministic_hash import sha256_obj
@@ -25,6 +27,9 @@ from backtest_engine.errors import ResumeUnsupportedError
 
 
 class EngineRealtimeMixin:
+    config: BacktestConfig
+    _update_state: Callable[[], None]
+
     def _config_hash(self) -> str:
         snapshot = self.config.snapshot()
         snapshot.pop("export_resume_state", None)

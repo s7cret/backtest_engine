@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from backtest_engine.models import Trade
 from backtest_engine.models.window import Phase, TradeResult, WarmupQuality
@@ -54,7 +55,7 @@ def phase_for_bar(bar_index: int | None, bar_phases: list[str]) -> Phase | None:
         return None
     phase = bar_phases[bar_index]
     if phase == "prehistory" or phase == "score":
-        return phase
+        return cast(Phase, phase)
     return None
 
 

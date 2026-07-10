@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, is_dataclass
-from typing import Any
+from typing import Any, cast
 
 
 def _row(item: Any) -> dict[str, Any]:
     if is_dataclass(item):
-        return asdict(item)
+        return asdict(cast(Any, item))
     if hasattr(item, "__dict__"):
         return dict(item.__dict__)
     return {"value": item}

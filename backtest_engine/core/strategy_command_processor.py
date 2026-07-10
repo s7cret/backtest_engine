@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, cast
 
 from backtest_engine.context import (
     CancelPayload,
@@ -12,6 +12,13 @@ from backtest_engine.context import (
     StrategyContext,
 )
 from backtest_engine.models import Bar, Order
+
+EntryCommandKind = Literal["entry", "order"]
+OrderDirection = Literal["long", "short"]
+OrderSide = Literal["buy", "sell"]
+OrderType = Literal["market", "limit", "stop", "stop_limit"]
+PositionEffect = Literal["open", "reduce", "close", "reverse"]
+OcaType = Literal["cancel", "reduce", "none"]
 
 
 def flush_strategy_commands(
@@ -63,7 +70,7 @@ def flush_strategy_commands(
         assert isinstance(payload, EntryOrderPayload | ExitPayload)
         limit = _clean_price(payload.limit)
         stop = _clean_price(payload.stop)
-        order_type = (
+        order_type: OrderType = (
             "market"
             if limit is None and stop is None
             else "limit" if stop is None else "stop" if limit is None else "stop_limit"
@@ -84,7 +91,7 @@ def flush_strategy_commands(
         assert isinstance(payload, EntryOrderPayload)
         _apply_entry_or_order_command(
             engine,
-            kind,
+            cast(EntryCommandKind, kind),
             payload,
             bar,
             bar_index,
@@ -189,7 +196,7 @@ def _apply_exit_command(
         )
         return
     direction = engine.position.direction
-    side = "sell" if direction == "long" else "buy"
+    side: OrderSide = "sell" if direction == "long" else "buy"
     from_entry = payload.from_entry
     if _exit_id_already_filled_for_open_entry(engine, payload.id, from_entry):
         return
@@ -429,17 +436,17 @@ def _add_or_modify_exit_order(
 
 def _apply_entry_or_order_command(
     engine: Any,
-    kind: str,
+    kind: EntryCommandKind,
     payload: EntryOrderPayload,
     bar: Bar,
     bar_index: int,
     recalc_after_fill: bool,
     limit: float | None,
     stop: float | None,
-    order_type: str,
+    order_type: OrderType,
 ) -> None:
-    direction = payload.direction
-    side = "buy" if direction == "long" else "sell"
+    direction = cast(OrderDirection, payload.direction)
+    side: OrderSide = "buy" if direction == "long" else "sell"
     uses_default_qty = payload.qty is None
     qty = engine._qty_from_args(_qty_args(payload.qty), None, bar.close)
     if kind == "entry" and not engine._entry_direction_allowed(direction):
@@ -447,8 +454,8 @@ def _apply_entry_or_order_command(
             engine.position.direction != "flat"
             and engine.position.direction != direction
         ):
-            close_direction = engine.position.direction
-            close_side = "sell" if close_direction == "long" else "buy"
+            close_direction = cast(OrderDirection, engine.position.direction)
+            close_side: OrderSide = "sell" if close_direction == "long" else "buy"
             engine._add_order(
                 Order(
                     id=payload.id,
@@ -484,7 +491,7 @@ def _apply_entry_or_order_command(
             payload.id,
         )
         return
-    effect = "open"
+    effect: PositionEffect = "open"
     if (
         kind == "entry"
         and engine.position.direction != "flat"
@@ -527,7 +534,7 @@ def _apply_entry_or_order_command(
         stop,
         None,
         payload.oca_name,
-        payload.oca_type or "none",
+        cast(OcaType, payload.oca_type or "none"),
         comment=payload.comment,
     )
     new.qty_is_default = uses_default_qty
@@ -579,7 +586,9 @@ def _apply_entry_or_order_command(
         existing.created_bar_index = new.created_bar_index
         existing.created_time = new.created_time
         existing.active_from_bar_index = new.active_from_bar_index
-        existing.status = "active" if new.active_from_bar_index <= bar_index else "pending"
+        existing.status = (
+            "active" if new.active_from_bar_index <= bar_index else "pending"
+        )
         engine._event(
             "ORDER_MODIFIED",
             f"order {existing.id} modified",

@@ -1,13 +1,13 @@
 import hashlib
 import json
 from dataclasses import asdict, is_dataclass
-from typing import Any
+from typing import Any, cast
 
 
 def stable_json(obj: Any) -> str:
     def default(o: Any) -> Any:
         if is_dataclass(o):
-            return asdict(o)
+            return asdict(cast(Any, o))
         if isinstance(o, set):
             return sorted(o)
         if hasattr(o, "__dict__"):

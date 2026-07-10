@@ -5,7 +5,7 @@ import json
 import os
 import pickle
 from dataclasses import asdict, dataclass, field, is_dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar, cast
 
 from backtest_engine.models import (
     BacktestResumeState,
@@ -15,6 +15,8 @@ from backtest_engine.models import (
     Position,
     Trade,
 )
+
+_T = TypeVar("_T")
 
 
 class StateSerializer(Protocol):
@@ -110,19 +112,19 @@ class RealtimeExecutionCheckpoint:
 
 def _plain(value: object) -> object:
     if is_dataclass(value):
-        return asdict(value)
+        return asdict(cast(Any, value))
     if isinstance(value, dict):
         return {str(k): _plain(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_plain(v) for v in value]
     if isinstance(value, set):
-        return sorted(_plain(v) for v in value)
+        return sorted(cast(Any, _plain(item)) for item in value)
     return value
 
 
-def clone_state(value: object | None) -> object | None:
+def clone_state(value: _T) -> _T:
     """Deep-copy state so exported resume snapshots are detached from the live run."""
-    return None if value is None else copy.deepcopy(value)
+    return cast(_T, None) if value is None else copy.deepcopy(value)
 
 
 def build_resume_state(

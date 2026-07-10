@@ -5,6 +5,7 @@ from dataclasses import dataclass, asdict
 from typing import Any
 from backtest_engine.config import BacktestConfig
 from backtest_engine.core import BacktestEngine
+from backtest_engine.models import Bar, BarSeries
 
 
 @dataclass
@@ -24,7 +25,7 @@ def run_benchmark(
     config: BacktestConfig,
     strategy_class: type,
     *,
-    bars: object,
+    bars: BarSeries | list[Bar] | None,
     params: dict | None = None,
     runs: int = 1,
 ) -> BenchmarkReport:

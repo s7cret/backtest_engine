@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, TypedDict, Unpack
 
 Phase = Literal["prehistory", "score"]
 WarmupConfidence = Literal["complete", "capped", "partial", "unknown"]
 PlanConfidence = Literal["exact", "heuristic", "unknown"]
+
+
+class _WarmupQualityExtras(TypedDict, total=False):
+    provider_fetch_start_ms: int | None
+    requested_start_ms: int | None
+    first_output_time_ms: int | None
+    score_rows_written: int | None
+    reasons: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +87,7 @@ class WarmupQuality:
         effective_pre_bars: int,
         actual_pre_bars: int,
         insufficient_prehistory: bool = False,
-        **kwargs: object,
+        **kwargs: Unpack[_WarmupQualityExtras],
     ) -> "WarmupQuality":
         capped = recommended_pre_bars_raw > requested_max_pre_bars
         if actual_pre_bars < effective_pre_bars or insufficient_prehistory:

@@ -79,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     arch.add_argument("root", nargs="?", default=".")
     arch.add_argument("--max-lines", type=int, default=700)
     args = parser.parse_args(argv)
+    report: DuplicateReport | ArchitectureReport
     if args.command == "duplicates":
         report = duplicate_report(args.root)
     else:

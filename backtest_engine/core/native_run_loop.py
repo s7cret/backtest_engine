@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext
@@ -17,6 +17,14 @@ from backtest_engine.models import (
     Position,
 )
 from backtest_engine.results import BacktestResult, EquityExtremes
+
+BacktestStatus = Literal["completed", "failed", "early_stopped"]
+
+
+class NativeRuntime(Protocol):
+    def begin_bar(self, bar: Bar, bar_index: int) -> None: ...
+
+    def end_bar(self) -> None: ...
 
 
 class NativeRunEngine(Protocol):
@@ -85,7 +93,7 @@ class NativeRunEngine(Protocol):
         self,
         series: BarSeries,
         equity_curve: list[EquityPoint] | None,
-        status: str,
+        status: BacktestStatus,
         early_reason: str | None,
         duration_ms: float,
         strategy: Any | None = None,
@@ -110,7 +118,7 @@ def run_native_strategy(
     resume_state: BacktestResumeState | None,
 ) -> BacktestResult:
     ctx = StrategyContext(engine.config, engine.state)
-    runtime = engine.config.runtime or NoopRuntime()
+    runtime = cast(NativeRuntime, engine.config.runtime or NoopRuntime())
     try:
         strategy = strategy_class(params=params, runtime=runtime, ctx=ctx)
     except TypeError:
@@ -121,13 +129,13 @@ def run_native_strategy(
     if resume_state is not None:
         start_index = engine._restore_resume_state(resume_state, strategy, runtime, ctx)
 
-    equity_curve = (
+    equity_curve: list[EquityPoint] | None = (
         []
         if engine._want("equity_curve") or engine.config.collect_equity_curve
         else None
     )
-    status = "completed"
-    early_reason = None
+    status: BacktestStatus = "completed"
+    early_reason: str | None = None
     for i in range(start_index, len(series)):
         bar = series.get_bar(i)
         engine._cb("on_bar_start", bar, i)
@@ -217,7 +225,7 @@ def run_native_strategy(
 
 def _early_stop_state(
     engine: NativeRunEngine, bar_index: int, extremes: EquityExtremes
-) -> tuple[bool, str, str | None]:
+) -> tuple[bool, BacktestStatus, str | None]:
     if not engine._early_stop_enabled:
         return False, "completed", None
     if engine._min_equity_stop is not None and engine.equity <= engine._min_equity_stop:

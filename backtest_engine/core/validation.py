@@ -19,10 +19,10 @@ def infer_price_tick(series: BarSeries, *, sample_size: int = 100) -> float | No
 def validate_bars(
     series: BarSeries, duplicate_policy: str = "error"
 ) -> tuple[BarSeries, list[Diagnostic]]:
-    diags = []
-    seen = {}
-    keep = []
-    last = None
+    diags: list[Diagnostic] = []
+    seen: dict[int, int] = {}
+    keep: list[bool] = []
+    last: int | None = None
     for i in range(len(series)):
         b = series.get_bar(i)
         msg = None
