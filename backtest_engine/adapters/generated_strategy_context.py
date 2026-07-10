@@ -7,6 +7,7 @@ adapter façade. It intentionally remains private: the public entrypoint is
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from backtest_engine.context import StrategyContext as EngineStrategyContext
@@ -119,7 +120,7 @@ def _is_pine_na(value: Any) -> bool:
     try:
         from pinelib.core.na import is_na
     except ImportError:
-        return False
+        return isinstance(value, float) and math.isnan(value)
     return bool(is_na(value))
 
 

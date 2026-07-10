@@ -907,6 +907,7 @@ def test_phase0_release_gate_remaining_branches(monkeypatch: pytest.MonkeyPatch)
     with monkeypatch.context() as scoped:
         scoped.setattr(builtins, "__import__", fail_optional_import)
         assert _is_pine_na(object()) is False
+        assert _is_pine_na(float("nan")) is True
         assert infer_close_from_timeframe(1_000, "1") == 61_000
         with pytest.raises(BarValidationError, match="duration is unknown"):
             infer_close_from_timeframe(1_000, "1M")
