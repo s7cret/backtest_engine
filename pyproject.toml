@@ -25,7 +25,7 @@ dev = [
   "mypy>=1.10",
   "build>=1.2",
   "pinelib @ git+https://github.com/s7cret/pinelib.git@33239a0093fa5d548058d79d5d079104db0ef43e",
-  "marketdata-provider @ git+https://github.com/s7cret/marketdata-provider.git@bcf733de6b0ff05d06d3fb2add5d068c52280965",
+  "marketdata-provider @ git+https://github.com/s7cret/marketdata-provider.git@ae95042ee482feb82d87a51484658fdb031dd0d5",
 ]
 
 [project.scripts]

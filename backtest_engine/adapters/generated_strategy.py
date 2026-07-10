@@ -13,7 +13,7 @@ broker-owned semantics fail closed instead of being approximated silently.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Protocol, TypeVar
+from typing import Any, overload, Protocol, TypeVar
 
 from backtest_engine.context import StrategyContext as EngineStrategyContext
 from backtest_engine.models import Bar as EngineBar
@@ -282,6 +282,14 @@ def _make_pine_runtime(options: GeneratedStrategyAdapterOptions) -> Any:
         timeframe=TimeframeInfo.from_string(options.timeframe),
         config=RuntimeConfig(extra={"record_lower_tf_metadata": False}),
     )
+
+
+@overload
+def _pine_timestamp(value: int) -> int: ...
+
+
+@overload
+def _pine_timestamp(value: None) -> None: ...
 
 
 def _pine_timestamp(value: int | None) -> int | None:
