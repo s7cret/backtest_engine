@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from backtest_engine.core.deterministic_hash import sha256_obj
 from backtest_engine.core.score_window import (
     build_phase_trades,
     classify_warmup_quality,
@@ -32,6 +33,14 @@ def build_backtest_result(
 ) -> BacktestResult:
     profits = [trade.profit for trade in engine.closed_trades]
     stats = summarize(profits, engine.config.initial_capital, engine.equity)
+    config_snapshot = engine.config.snapshot()
+    tick_schedule_fingerprint = getattr(
+        engine, "_realtime_tick_schedule_fingerprint", None
+    )
+    if tick_schedule_fingerprint is not None:
+        config_snapshot["realtime_tick_schedule_fingerprint"] = (
+            tick_schedule_fingerprint
+        )
     result = BacktestResult(
         trades=(
             engine.closed_trades + engine.open_trades
@@ -56,7 +65,7 @@ def build_backtest_result(
         execution_time_ms=execution_time_ms,
         status=status,
         early_stop_reason=reason,
-        config_snapshot=engine.config.snapshot(),
+        config_snapshot=config_snapshot,
         warnings=engine.warnings,
         errors=engine.errors,
         events=(
@@ -64,7 +73,7 @@ def build_backtest_result(
             if engine.config.collect_events or engine._want("order_events")
             else None
         ),
-        data_fingerprint=engine.config.data_fingerprint or data_fingerprint(series),
+        data_fingerprint=_result_data_fingerprint(engine, series),
         strategy_fingerprint=engine.config.strategy_fingerprint,
         runtime_fingerprint=engine.config.runtime_fingerprint,
     )
@@ -112,7 +121,7 @@ def build_backtest_result(
     mark_available_outputs(result)
     if engine.config.export_resume_state:
         result.resume_state = engine._export_resume_state(
-            len(series) - 1, strategy, runtime
+            len(series) - 1, strategy, runtime, series
         )
     if engine.config.content_hash_enabled:
         result.content_hash_value = result.content_hash(
@@ -133,6 +142,23 @@ def build_backtest_result(
     )
 
     return result
+
+
+def _result_data_fingerprint(engine: Any, series: BarSeries) -> str:
+    schedule = getattr(engine, "_realtime_tick_schedule", None)
+    configured = engine.config.data_fingerprint
+    if schedule is None:
+        return configured or data_fingerprint(series)
+    if configured:
+        return sha256_obj(
+            {
+                "configured_data_fingerprint": configured,
+                "realtime_tick_schedule_fingerprint": getattr(
+                    engine, "_realtime_tick_schedule_fingerprint"
+                ),
+            }
+        )
+    return data_fingerprint(series, realtime_tick_schedule=schedule)
 
 
 def _strategy_plot_records(strategy: Any | None, runtime: Any | None) -> Any | None:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from inspect import signature
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from backtest_engine.config import BacktestConfig
 
@@ -13,6 +13,7 @@ from backtest_engine.core.realtime import (
     BarTickSlice,
     RealtimeTickAttempt,
     RealtimeTickCommitPolicy,
+    RuntimeTickUpdate,
 )
 from backtest_engine.core.realtime_tick_loop import (
     guarded_realtime_strategy_tick_loop_skeleton,
@@ -170,6 +171,86 @@ class EngineRealtimeMixin:
                     "strategy_state is present but strategy does not implement restore_state(state)"
                 )
             restore(clone_state(checkpoint.strategy_state))
+
+    def _begin_realtime_script_bar(self, strategy: Any, runtime: Any) -> None:
+        """Capture the committed prior-bar script state used by every tick."""
+
+        strategy_export = cast(
+            Any,
+            getattr(strategy, "export_realtime_state", None)
+            or getattr(strategy, "export_state", None),
+        )
+        runtime_export = cast(Any, getattr(runtime, "export_state", None))
+        self._realtime_strategy_checkpoint = clone_state(strategy_export())
+        self._realtime_runtime_checkpoint = clone_state(
+            runtime_export(include_varip=False)
+        )
+        self._realtime_script_runtime = runtime
+        self._realtime_tick_parent = None
+        self._realtime_tick_prefix = ()
+        self._realtime_tick_is_final = False
+
+    def _set_realtime_tick_prefix(
+        self,
+        parent: Any,
+        ticks: tuple[Any, ...],
+        is_final: bool,
+    ) -> None:
+        self._realtime_tick_parent = parent
+        self._realtime_tick_prefix = ticks
+        self._realtime_tick_is_final = is_final
+
+    def _prepare_realtime_strategy_invocation(self, strategy: Any) -> Any:
+        """Rollback ordinary state, preserve varip, then rebuild cumulative OHLC."""
+
+        runtime = cast(Any, self._realtime_script_runtime)
+        strategy_restore = cast(
+            Any,
+            getattr(strategy, "restore_realtime_state", None)
+            or getattr(strategy, "restore_state", None),
+        )
+        strategy_restore(clone_state(self._realtime_strategy_checkpoint))
+        runtime.restore_state(clone_state(self._realtime_runtime_checkpoint))
+        parent = cast(Any, self._realtime_tick_parent)
+        ticks = cast(tuple[Any, ...], self._realtime_tick_prefix)
+        current = parent
+        update = getattr(runtime, "update_realtime_tick", None)
+        if not callable(update):
+            raise ResumeUnsupportedError(
+                "calc_on_every_tick runtime must implement update_realtime_tick(tick)"
+            )
+        for index, tick in enumerate(ticks):
+            update(
+                RuntimeTickUpdate(
+                    price=tick.price,
+                    volume=float(tick.volume or 0.0),
+                    time=tick.time,
+                    is_final=self._realtime_tick_is_final and index == len(ticks) - 1,
+                )
+            )
+        prices = [tick.price for tick in ticks]
+        current = type(parent)(
+            time=parent.time,
+            open=parent.open,
+            high=max(prices),
+            low=min(prices),
+            close=prices[-1],
+            volume=sum(float(tick.volume or 0.0) for tick in ticks),
+            time_close=parent.time_close,
+        )
+        return current
+
+    def _end_realtime_script_bar(self) -> None:
+        for name in (
+            "_realtime_strategy_checkpoint",
+            "_realtime_runtime_checkpoint",
+            "_realtime_script_runtime",
+            "_realtime_tick_parent",
+            "_realtime_tick_prefix",
+            "_realtime_tick_is_final",
+        ):
+            if hasattr(self, name):
+                delattr(self, name)
 
     def _guarded_realtime_tick_loop_skeleton(
         self,

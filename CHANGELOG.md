@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.0.1
+
+- Implemented deterministic explicit-tick replay for guarded `calc_on_every_tick` execution with Pine-style rollback, `varip` persistence, cumulative intrabar OHLC, and next-tick order eligibility.
+- Added fail-closed tick completeness/OHLC reconstruction, provider error typing, serializable runtime/strategy state requirements, order-fill recalculation, deterministic resume, and stable content hashes.
+- Added comprehensive edge and lifecycle coverage while preserving the 100% release gate.
+
 ## 4.0.0
 
 - Primary release-candidate cleanup for the OpenPine 4.x package family.

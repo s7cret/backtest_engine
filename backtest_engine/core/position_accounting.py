@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 from backtest_engine.models import Bar, Order, Position, Trade
 
@@ -49,13 +49,14 @@ def _open_position(
     commission: float,
 ) -> str:
     engine.position.size = signed
-    engine.position.direction = "long" if signed > 0 else "short"
+    direction: Literal["long", "short"] = "long" if signed > 0 else "short"
+    engine.position.direction = direction
     engine.position.avg_price = price
     trade = Trade(
         order.id,
         order.id,
         None,
-        engine.position.direction,
+        direction,
         bar.time,
         bar_index,
         price,

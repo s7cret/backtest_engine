@@ -6,6 +6,14 @@ class ConfigError(BacktestEngineError):
     pass
 
 
+class TickReplayDataError(ConfigError):
+    """Explicit tick input cannot be replayed without approximation."""
+
+
+class TickReplayStateError(ConfigError):
+    """Strategy/runtime state cannot satisfy deterministic tick rollback."""
+
+
 class BarValidationError(BacktestEngineError):
     pass
 

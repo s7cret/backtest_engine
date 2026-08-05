@@ -16,6 +16,7 @@ from backtest_engine.models import (
     Order,
     Position,
 )
+from backtest_engine.core.state_snapshot import clone_state
 from backtest_engine.results import BacktestResult, EquityExtremes
 
 BacktestStatus = Literal["completed", "failed", "early_stopped"]
@@ -51,6 +52,7 @@ class NativeRunEngine(Protocol):
         strategy: Any,
         runtime: Any,
         ctx: StrategyContext,
+        series: BarSeries,
     ) -> int: ...
     def _cb(self, name: str, *args: Any) -> None: ...
     def _event(
@@ -73,6 +75,7 @@ class NativeRunEngine(Protocol):
         close_activation_only: bool = False,
         skip_trailing: bool = False,
         trailing_only: bool = False,
+        tick_phase: Literal["non_final", "final"] | None = None,
     ) -> None: ...
     def _update_open_profit(self, price: float) -> None: ...
     def _update_state(self) -> None: ...
@@ -117,6 +120,12 @@ def run_native_strategy(
     t0: float,
     resume_state: BacktestResumeState | None,
 ) -> BacktestResult:
+    if engine.config.calc_on_every_tick:
+        from backtest_engine.core.realtime_run_loop import run_realtime_strategy
+
+        return run_realtime_strategy(
+            engine, strategy_class, params, series, t0, resume_state
+        )
     ctx = StrategyContext(engine.config, engine.state)
     runtime = cast(NativeRuntime, engine.config.runtime or NoopRuntime())
     try:
@@ -127,13 +136,18 @@ def run_native_strategy(
 
     start_index = 0
     if resume_state is not None:
-        start_index = engine._restore_resume_state(resume_state, strategy, runtime, ctx)
+        start_index = engine._restore_resume_state(
+            resume_state, strategy, runtime, ctx, series
+        )
 
-    equity_curve: list[EquityPoint] | None = (
-        []
-        if engine._want("equity_curve") or engine.config.collect_equity_curve
-        else None
-    )
+    collect_equity_curve = engine._want("equity_curve") or engine.config.collect_equity_curve
+    equity_curve: list[EquityPoint] | None = None
+    if collect_equity_curve:
+        equity_curve = (
+            list(getattr(engine, "_resume_equity_curve_history", []))
+            if resume_state is not None
+            else []
+        )
     status: BacktestStatus = "completed"
     early_reason: str | None = None
     for i in range(start_index, len(series)):
@@ -212,6 +226,7 @@ def run_native_strategy(
         and len(series)
     ):
         engine._force_close(series.get_bar(len(series) - 1), len(series) - 1)
+    setattr(engine, "_resume_equity_curve_history", clone_state(equity_curve or []))
     return engine._result(
         series,
         equity_curve,

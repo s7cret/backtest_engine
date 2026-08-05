@@ -64,7 +64,7 @@ def test_declared_hash_evidence_matches_guarded_skeleton_output() -> None:
 def _write_release_root(root: Path, profile: dict[str, object] | None) -> None:
     root.mkdir()
     (root / "pyproject.toml").write_text(
-        '[project]\nname = "backtest-engine"\nversion = "4.0.0"\n',
+        '[project]\nname = "backtest-engine"\nversion = "4.0.1"\n',
         encoding="utf-8",
     )
     if profile is not None:

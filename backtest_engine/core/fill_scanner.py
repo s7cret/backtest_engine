@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from backtest_engine.broker.fill_simulator import limit_reached, stop_reached
 from backtest_engine.context import StrategyContext
@@ -50,7 +50,10 @@ def process_bar_fills(
     close_activation_only: bool = False,
     skip_trailing: bool = False,
     trailing_only: bool = False,
+    tick_phase: Literal["non_final", "final"] | None = None,
 ) -> None:
+    if tick_phase == "non_final" and engine.config.fill_model == "close_only":
+        return
     if not engine.config.collect_order_lifecycle and len(engine.orders) > 32:
         engine.orders = [
             order for order in engine.orders if order.status in ("pending", "active")
@@ -84,6 +87,7 @@ def process_bar_fills(
                 close_activation_only,
                 skip_trailing,
                 trailing_only,
+                tick_phase,
             )
             if restart_after_recalc:
                 path_cursor = path_index
@@ -110,6 +114,7 @@ def _scan_orders_at_path_point(
     close_activation_only: bool,
     skip_trailing: bool,
     trailing_only: bool,
+    tick_phase: Literal["non_final", "final"] | None,
 ) -> tuple[bool, int, bool]:
     for order in _orders_for_path_point(engine, price, bar, path_is_open):
         is_trailing = (
@@ -125,6 +130,8 @@ def _scan_orders_at_path_point(
             engine.config.process_orders_on_close
             and order.created_bar_index == bar_index
         )
+        if current_bar_close_activation and tick_phase == "non_final":
+            continue
         same_bar_close_order = order.created_bar_index == bar_index and (
             engine.config.process_orders_on_close or order.immediately
         )
@@ -218,7 +225,7 @@ def _fill_price_for_order(
     if order.order_type == "market" and (
         (is_open_point and order.created_bar_index < bar_index)
         or (
-            engine.config.calc_on_order_fills
+            (engine.config.calc_on_order_fills or engine.config.calc_on_every_tick)
             and order.created_bar_index == bar_index
             and order.active_from_bar_index <= bar_index
         )
@@ -270,7 +277,7 @@ def _stop_fill_price(
         return order.stop_price or price
     if not is_open_point and not engine.config.fill_worse_stop_at_path_price:
         if order.stop_price is not None and not (
-            engine.config.calc_on_order_fills
+            (engine.config.calc_on_order_fills or engine.config.calc_on_every_tick)
             and order.created_bar_index == bar_index
             and order.active_from_bar_index <= bar_index
         ):
@@ -299,6 +306,9 @@ def _recalculate_after_fill(
             bar.time,
         )
         return recalc
+    prepare = getattr(engine, "_prepare_realtime_strategy_invocation", None)
+    if getattr(engine, "_realtime_tick_execution", False) and callable(prepare):
+        bar = prepare(strategy)
     engine._call_strategy(strategy, bar, bar_index)
     engine._flush(ctx, bar, bar_index, recalc_after_fill=True)
     return recalc

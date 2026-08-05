@@ -26,10 +26,11 @@ def validate_backtest_config(config: BacktestConfig) -> None:
                 "calc_on_every_tick requires explicit realtime_ticks or realtime_tick_provider; "
                 "historical OHLC fallback is forbidden"
             )
-        raise ConfigError(
-            "calc_on_every_tick tick replay is not implemented; realtime rollback/commit "
-            "semantics must be oracle-verified before enabling execution"
-        )
+        if config.realtime_ticks is not None and config.realtime_tick_provider is not None:
+            raise ConfigError(
+                "calc_on_every_tick accepts exactly one tick source: realtime_ticks or "
+                "realtime_tick_provider"
+            )
     if "equity_curve" in config.required_outputs and not config.collect_equity_curve:
         config.collect_equity_curve = True
     if (

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Iterable, Sequence
-from typing import Literal, Mapping
+from decimal import Decimal, InvalidOperation
+from typing import Any, Literal, Mapping
 
+from backtest_engine.core.deterministic_hash import sha256_obj
 from backtest_engine.models import Bar, BarSeries, Tick
-from backtest_engine.errors import ConfigError
+from backtest_engine.errors import ConfigError, TickReplayDataError
 from backtest_engine.core.state_snapshot import RealtimeExecutionCheckpoint
 
 
@@ -122,6 +124,37 @@ class RuntimeTickUpdate:
 
 def _as_ticks(ticks: Iterable[Tick]) -> list[Tick]:
     out = list(ticks)
+    for index, tick in enumerate(out):
+        if not isinstance(tick, Tick):
+            raise ConfigError(
+                f"realtime_ticks[{index}] must be a Tick instance"
+            )
+        if isinstance(tick.time, bool) or not isinstance(tick.time, int):
+            raise ConfigError(f"realtime_ticks[{index}].time must be an integer")
+        for field_name in ("price", "volume", "bid", "ask"):
+            value = getattr(tick, field_name)
+            if value is None:
+                if field_name == "price":
+                    raise ConfigError(
+                        f"realtime_ticks[{index}].price must be finite"
+                    )
+                continue
+            canonical = _canonical_price(value)
+            if canonical is None:
+                raise ConfigError(
+                    f"realtime_ticks[{index}].{field_name} must be finite"
+                )
+            if field_name == "volume" and canonical < 0:
+                raise ConfigError(
+                    f"realtime_ticks[{index}].volume must be non-negative"
+                )
+        if tick.bid is not None and tick.ask is not None:
+            bid = _canonical_price(tick.bid)
+            ask = _canonical_price(tick.ask)
+            if bid is not None and ask is not None and bid > ask:
+                raise ConfigError(
+                    f"realtime_ticks[{index}] bid must be less than or equal to ask"
+                )
     for prev, cur in zip(out, out[1:], strict=False):
         if cur.time < prev.time:
             raise ConfigError("realtime_ticks must be sorted by non-decreasing time")
@@ -176,3 +209,124 @@ def build_bar_tick_schedule(
     if tick_i < n_ticks:
         raise ConfigError("realtime_ticks contain ticks outside available bar windows")
     return tuple(slices)
+
+
+def resolve_realtime_tick_schedule(
+    config: Any, bars: BarSeries | Sequence[Bar]
+) -> tuple[BarTickSlice, ...]:
+    """Resolve explicit ticks and prove they reconstruct every parent OHLC bar."""
+
+    series = bars if isinstance(bars, BarSeries) else BarSeries.from_bars(bars)
+    source = config.realtime_ticks
+    if source is None:
+        provider = config.realtime_tick_provider
+        get_ticks = getattr(provider, "get_ticks", None)
+        if not callable(get_ticks):
+            raise TickReplayDataError(
+                "realtime_tick_provider must implement get_ticks(symbol, timeframe, start, end)"
+            )
+        if not len(series):
+            source = ()
+        else:
+            last = series.get_bar(len(series) - 1)
+            end = int(last.time_close if last.time_close is not None else last.time)
+            try:
+                source = get_ticks(
+                    config.symbol, config.timeframe, int(series.time[0]), end
+                )
+            except Exception as exc:
+                raise TickReplayDataError(
+                    f"realtime_tick_provider.get_ticks failed: {type(exc).__name__}: {exc}"
+                ) from exc
+    try:
+        schedule = build_bar_tick_schedule(series, source)
+    except TypeError as exc:
+        raise TickReplayDataError("realtime tick source must be an iterable of Tick") from exc
+    for tick_slice in schedule:
+        _validate_tick_slice_reconstructs_bar(tick_slice)
+    return schedule
+
+
+def realtime_tick_schedule_payload(
+    schedule: Sequence[BarTickSlice],
+) -> list[dict[str, Any]]:
+    """Return the canonical, wall-clock-free execution identity for a schedule."""
+
+    return [
+        {
+            "parent_bar_index": tick_slice.bar_index,
+            "parent_time": tick_slice.bar.time,
+            "parent_time_close": tick_slice.bar.time_close,
+            "ticks": [
+                {
+                    "tick_index": tick_index,
+                    "time": tick.time,
+                    "price": tick.price,
+                    "volume": tick.volume,
+                    "bid": tick.bid,
+                    "ask": tick.ask,
+                }
+                for tick_index, tick in enumerate(tick_slice.ticks)
+            ],
+        }
+        for tick_slice in schedule
+    ]
+
+
+def realtime_tick_schedule_fingerprint(schedule: Sequence[BarTickSlice]) -> str:
+    """Hash every execution-relevant tick field, ordering, and parent mapping."""
+
+    return sha256_obj(realtime_tick_schedule_payload(schedule))
+
+
+def _canonical_price(value: object) -> Decimal | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return result if result.is_finite() else None
+
+
+def _same_price(left: float, right: float) -> bool:
+    canonical_left = _canonical_price(left)
+    canonical_right = _canonical_price(right)
+    return canonical_left is not None and canonical_left == canonical_right
+
+
+def _validate_tick_slice_reconstructs_bar(tick_slice: BarTickSlice) -> None:
+    ticks = tick_slice.ticks
+    bar = tick_slice.bar
+    if not ticks:
+        raise TickReplayDataError(
+            f"realtime ticks do not reconstruct parent OHLC for bar {tick_slice.bar_index}: no ticks"
+        )
+    prices = [tick.price for tick in ticks]
+    actual = (prices[0], max(prices), min(prices), prices[-1])
+    expected = (bar.open, bar.high, bar.low, bar.close)
+    if not all(_same_price(a, e) for a, e in zip(actual, expected, strict=True)):
+        raise TickReplayDataError(
+            "realtime ticks do not reconstruct parent OHLC for bar "
+            f"{tick_slice.bar_index}: expected={expected!r}, actual={actual!r}"
+        )
+    expected_volume = _canonical_price(bar.volume)
+    if expected_volume is None or expected_volume < 0:
+        raise TickReplayDataError(
+            "realtime ticks cannot reconstruct parent OHLCV for bar "
+            f"{tick_slice.bar_index}: parent volume must be finite and non-negative"
+        )
+    actual_volume = Decimal(0)
+    for tick_index, tick in enumerate(ticks):
+        tick_volume = _canonical_price(tick.volume)
+        if tick_volume is None or tick_volume < 0:
+            raise TickReplayDataError(
+                "realtime ticks cannot reconstruct parent OHLCV for bar "
+                f"{tick_slice.bar_index}: tick {tick_index} volume is missing or invalid"
+            )
+        actual_volume += tick_volume
+    if actual_volume != expected_volume:
+        raise TickReplayDataError(
+            "realtime ticks do not reconstruct parent OHLCV volume for bar "
+            f"{tick_slice.bar_index}: expected={expected_volume}, actual={actual_volume}"
+        )

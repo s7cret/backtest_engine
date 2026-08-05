@@ -5,7 +5,7 @@ import pytest
 from backtest_engine import BacktestConfig, BacktestEngine, Bar, Tick
 from backtest_engine.context import StrategyContext
 from backtest_engine.core.realtime import BarTickSlice
-from backtest_engine.errors import ConfigError
+from backtest_engine.errors import TickReplayDataError
 
 class NoopStrategy:
     def __init__(self, params, runtime, ctx):
@@ -60,5 +60,5 @@ def test_stage7i_boundary_trace_can_drive_guarded_skeleton_but_run_remains_fail_
             realtime_ticks=list(ticks),
         )
     )
-    with pytest.raises(ConfigError, match="tick replay is not implemented"):
+    with pytest.raises(TickReplayDataError, match="reconstruct parent OHLC"):
         run_engine.run(NoopStrategy, bars=[bar])

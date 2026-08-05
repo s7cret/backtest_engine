@@ -113,13 +113,18 @@ class EngineSupportMixin:
         strategy: Any,
         runtime: Any,
         ctx: StrategyContext,
+        series: BarSeries,
     ) -> int:
-        return restore_resume_state(self, resume_state, strategy, runtime, ctx)
+        return restore_resume_state(self, resume_state, strategy, runtime, ctx, series)
 
     def _export_resume_state(
-        self, bar_index: int, strategy: Any | None = None, runtime: Any | None = None
+        self,
+        bar_index: int,
+        strategy: Any | None = None,
+        runtime: Any | None = None,
+        series: BarSeries | None = None,
     ) -> BacktestResumeState:
-        return export_resume_state(self, bar_index, strategy, runtime)
+        return export_resume_state(self, bar_index, strategy, runtime, series)
 
     def _result(
         self,

@@ -1,8 +1,8 @@
-# Backtest Engine 4.0.0
+# Backtest Engine 4.0.1
 
 > Independent deterministic bar-by-bar strategy backtest engine for OpenPine-generated strategies and Python strategy classes.
 
-[![Version](https://img.shields.io/badge/version-4.0.0-blue)](https://github.com/s7cret/backtest_engine) [![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)](https://github.com/s7cret/backtest_engine) [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/s7cret/backtest_engine)
+[![Version](https://img.shields.io/badge/version-4.0.1-blue)](https://github.com/s7cret/backtest_engine) [![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)](https://github.com/s7cret/backtest_engine) [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/s7cret/backtest_engine)
 
 
 **GitHub description:** Backtest Engine is the deterministic broker, order, fill, position, trade, equity, and reporting authority for OpenPine backtests.
@@ -53,7 +53,7 @@ python -m pip install -e '.[dev]'
 Install from GitHub tag:
 
 ```bash
-python -m pip install 'git+https://github.com/s7cret/backtest_engine.git@v4.0.0'
+python -m pip install 'git+https://github.com/s7cret/backtest_engine.git@v4.0.1'
 ```
 
 ## Python quick start
@@ -138,7 +138,7 @@ Backtests are research tools. They depend on the correctness of input data, stra
 
 - `docs/ARCHITECTURE.md` — runtime responsibilities and hardening layout.
 - `docs/DEVELOPMENT.md` — local checks and release workflow.
-- `docs/RELEASE_4_0.md` — 4.0.0 scope and release gate.
+- `docs/RELEASE_4_0.md` — 4.0.1 scope and release gate.
 
 ## License
 

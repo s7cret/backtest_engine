@@ -14,6 +14,7 @@ from backtest_engine.core import (
     is_fast_mode,
 )
 from backtest_engine.core.state_snapshot import BrokerSnapshot
+from backtest_engine.errors import ResumeUnsupportedError
 from backtest_engine.models import BarSeries, InstrumentModel, Order, Trade
 from backtest_engine.ledger import trade_excursion_values
 from backtest_engine.results import (
@@ -210,6 +211,32 @@ def test_resume_state_export_and_restore_extension_point():
     assert second.bars_processed == 3
     assert second.open_trades[0].entry_id == "L"
     assert second_runtime.seen[-1] == 2
+
+
+def test_strict_resume_rejects_changed_processed_bar_prefix():
+    first_config = cfg(export_resume_state=True)
+    first_config.resume_validation_policy = "strict"
+    first_config.end_time = BARS[-1].time
+    first = BacktestEngine(first_config).run(SerializableStrategy, bars=BARS[:2])
+    assert first.resume_state is not None
+    changed = list(BARS)
+    original = changed[0]
+    changed[0] = Bar(
+        original.time,
+        original.open + 1,
+        original.high + 1,
+        original.low + 1,
+        original.close + 1,
+        original.volume,
+        original.time_close,
+    )
+    second_config = cfg(export_resume_state=True)
+    second_config.resume_validation_policy = "strict"
+
+    with pytest.raises(ResumeUnsupportedError, match="bar prefix fingerprint"):
+        BacktestEngine(second_config).run(
+            SerializableStrategy, bars=changed, resume_state=first.resume_state
+        )
 
 
 def test_resume_requires_broker_snapshot_not_bare_stub():

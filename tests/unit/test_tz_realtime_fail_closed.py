@@ -1,7 +1,7 @@
 import pytest
 
 from backtest_engine import BacktestConfig, BacktestEngine, Bar, Tick
-from backtest_engine.errors import ConfigError
+from backtest_engine.errors import ConfigError, TickReplayStateError
 
 
 class NoopStrategy:
@@ -34,13 +34,13 @@ def test_calc_on_every_tick_experimental_mode_still_requires_explicit_ticks():
         engine.run(NoopStrategy, bars=[Bar(1, 10, 10, 10, 10)])
 
 
-def test_calc_on_every_tick_with_ticks_fails_closed_until_replay_is_implemented():
+def test_calc_on_every_tick_requires_serializable_strategy_state():
     engine = BacktestEngine(
         cfg(
             calc_on_every_tick=True,
             experimental_intrabar_strategy_mode=True,
-            realtime_ticks=[Tick(time=1, price=10.0)],
+            realtime_ticks=[Tick(time=1, price=10.0, volume=1.0)],
         )
     )
-    with pytest.raises(ConfigError, match="tick replay is not implemented"):
-        engine.run(NoopStrategy, bars=[Bar(1, 10, 10, 10, 10)])
+    with pytest.raises(TickReplayStateError, match="export_state.*restore_state"):
+        engine.run(NoopStrategy, bars=[Bar(1, 10, 10, 10, 10, volume=1.0)])

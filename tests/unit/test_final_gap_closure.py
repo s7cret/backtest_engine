@@ -650,6 +650,7 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
         True,
         False,
         False,
+        None,
     ) == (False, 0, False)
 
     # Trailing activation at open keeps the offset-derived stop; it must not
@@ -955,6 +956,7 @@ def test_phase0_release_gate_remaining_branches(monkeypatch: pytest.MonkeyPatch)
         False,
         True,
         False,
+        None,
     ) == (False, 0, False)
 
     ordinary = _order("ordinary")
@@ -974,6 +976,7 @@ def test_phase0_release_gate_remaining_branches(monkeypatch: pytest.MonkeyPatch)
         False,
         False,
         True,
+        None,
     ) == (False, 0, False)
 
     bracket = _order("bracket", kind="exit", effect="reduce", from_entry="A")

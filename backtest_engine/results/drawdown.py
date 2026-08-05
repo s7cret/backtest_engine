@@ -28,7 +28,9 @@ def calculate_drawdowns(equity_values: Iterable[float]) -> list[DrawdownPoint]:
 
 def max_drawdown(equity_values: Iterable[float]) -> DrawdownPoint | None:
     points = calculate_drawdowns(equity_values)
-    return max(points, key=lambda p: (p.drawdown, p.drawdown_percent), default=None)
+    if not points:
+        return None
+    return max(points, key=lambda point: (point.drawdown, point.drawdown_percent))
 
 
 def max_drawdown_from_curve(curve: Iterable[EquityPoint]) -> DrawdownPoint | None:

@@ -50,14 +50,24 @@ def validate_bars(
     return BarSeries.from_bars(bars), diags
 
 
-def data_fingerprint(series: BarSeries) -> str:
-    return sha256_obj(
-        {
-            "time": list(series.time),
-            "open": list(series.open),
-            "high": list(series.high),
-            "low": list(series.low),
-            "close": list(series.close),
-            "volume": None if series.volume is None else list(series.volume),
-        }
-    )
+def data_fingerprint(
+    series: BarSeries, *, realtime_tick_schedule: object | None = None
+) -> str:
+    payload: dict[str, object] = {
+        "time": list(series.time),
+        "open": list(series.open),
+        "high": list(series.high),
+        "low": list(series.low),
+        "close": list(series.close),
+        "volume": None if series.volume is None else list(series.volume),
+    }
+    if realtime_tick_schedule is not None:
+        from backtest_engine.core.realtime import realtime_tick_schedule_payload
+
+        payload["time_close"] = (
+            None if series.time_close is None else list(series.time_close)
+        )
+        payload["realtime_tick_schedule"] = realtime_tick_schedule_payload(
+            realtime_tick_schedule  # type: ignore[arg-type]
+        )
+    return sha256_obj(payload)

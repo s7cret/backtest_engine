@@ -459,6 +459,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         close_activation_only: bool = False,
         skip_trailing: bool = False,
         trailing_only: bool = False,
+        tick_phase: Literal["non_final", "final"] | None = None,
     ) -> None:
         process_bar_fills(
             self,
@@ -471,6 +472,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             close_activation_only=close_activation_only,
             skip_trailing=skip_trailing,
             trailing_only=trailing_only,
+            tick_phase=tick_phase,
         )
 
     def _maybe_margin_call(self, price: float, bar: Bar, i: int, point: str) -> bool:
