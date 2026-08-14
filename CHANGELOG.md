@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.0.2
+
+- Pinned the coordinated PineLib and MarketData Provider 4.0.2 releases.
+- Refreshed deterministic release, distribution, and wheel evidence without changing execution contracts.
+
 ## 4.0.1
 
 - Implemented deterministic explicit-tick replay for guarded `calc_on_every_tick` execution with Pine-style rollback, `varip` persistence, cumulative intrabar OHLC, and next-tick order eligibility.
