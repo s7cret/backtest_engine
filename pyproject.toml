@@ -24,7 +24,7 @@ dev = [
   "ruff>=0.5",
   "mypy>=1.10",
   "build>=1.2",
-  "pinelib @ git+https://github.com/s7cret/pinelib.git@38987ec94bde5158ea379b45485b7ceb8614b30b",
+  "pinelib @ git+https://github.com/s7cret/pinelib.git@d16c100745f1aa21ca93f3249b1737a620307483",
   "marketdata-provider @ git+https://github.com/s7cret/marketdata-provider.git@83a242c493aac7a7c1d1a4c042ce4dcb688a6eb3",
 ]
 
