@@ -26,7 +26,10 @@ def validate_backtest_config(config: BacktestConfig) -> None:
                 "calc_on_every_tick requires explicit realtime_ticks or realtime_tick_provider; "
                 "historical OHLC fallback is forbidden"
             )
-        if config.realtime_ticks is not None and config.realtime_tick_provider is not None:
+        if (
+            config.realtime_ticks is not None
+            and config.realtime_tick_provider is not None
+        ):
             raise ConfigError(
                 "calc_on_every_tick accepts exactly one tick source: realtime_ticks or "
                 "realtime_tick_provider"
@@ -43,3 +46,9 @@ def validate_backtest_config(config: BacktestConfig) -> None:
         config.collect_trade_details = True
     if config.required_metrics:
         config.collect_equity_curve = True
+    from backtest_engine.core.warmup import SCORE_END_POLICIES, WARMUP_POLICIES
+
+    if config.warmup_policy is not None and config.warmup_policy not in WARMUP_POLICIES:
+        raise ConfigError(f"warmup_policy {config.warmup_policy!r} is unknown")
+    if config.score_end_policy not in SCORE_END_POLICIES:
+        raise ConfigError(f"score_end_policy {config.score_end_policy!r} is unknown")

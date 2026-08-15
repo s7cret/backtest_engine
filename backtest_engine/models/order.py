@@ -34,3 +34,4 @@ class Order:
     trail_offset: float | None = None
     trail_activated: bool = False
     qty_is_default: bool = False
+    phase: str | None = None

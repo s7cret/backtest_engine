@@ -59,6 +59,11 @@
       "status": "excluded"
     }
   },
+  "capabilities": {
+    "warmup_broker_reset_safe": {
+      "status": "supported"
+    }
+  },
   "profile": "backtest-engine-4.0",
   "schema_version": 1
 }

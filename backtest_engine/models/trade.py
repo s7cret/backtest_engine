@@ -28,3 +28,4 @@ class Trade:
     is_open: bool = False
     stop_price: float | None = None
     take_profit_price: float | None = None
+    phase: str | None = None

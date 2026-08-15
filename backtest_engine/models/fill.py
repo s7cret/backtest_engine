@@ -18,3 +18,4 @@ class Fill:
     commission: float
     slippage_value: float
     intrabar_point: str | None = None
+    phase: str | None = None

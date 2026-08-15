@@ -115,6 +115,8 @@ class BacktestConfig:
     store_backtest_result_in_memory: bool = True
     output_dir: Path | None = None
     finality_policy: Literal["CLOSED_BAR_ONLY", "ALLOW_OPEN"] = "ALLOW_OPEN"
+    warmup_policy: str | None = None
+    score_end_policy: str = "LEAVE_OPEN"
 
     def __post_init__(self) -> None:
         if self.bar_magnifier_missing_policy != "error":

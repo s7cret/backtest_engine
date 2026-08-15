@@ -15,3 +15,4 @@ class EquityPoint:
     drawdown_percent: float
     runup: float = 0.0
     runup_percent: float = 0.0
+    phase: str | None = None

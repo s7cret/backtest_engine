@@ -133,6 +133,7 @@ def run_native_strategy(
     except TypeError:
         strategy = strategy_class(params, runtime)
         strategy.ctx = ctx
+    engine.last_strategy = strategy
 
     start_index = 0
     if resume_state is not None:
@@ -140,7 +141,34 @@ def run_native_strategy(
             resume_state, strategy, runtime, ctx, series
         )
 
-    collect_equity_curve = engine._want("equity_curve") or engine.config.collect_equity_curve
+    from backtest_engine.core.warmup import (
+        BrokerState,
+        WarmupPhase,
+        WarmupPhaseMachine,
+        apply_canonical_broker_reset,
+        discard_command_buffer,
+        stamp_phase,
+    )
+
+    machine = None
+    if engine.config.warmup_policy:
+        score_end = len(series) - 1
+        if engine.config.score_end_time is not None:
+            for idx in range(len(series)):
+                if int(series.time[idx]) <= int(engine.config.score_end_time):
+                    score_end = idx
+        machine = WarmupPhaseMachine(
+            engine.config.warmup_policy,
+            warmup_end_index=engine._prehistory_end_index,
+            score_end_index=score_end,
+            series_len=len(series),
+        )
+        engine._warmup_machine = machine
+        engine.warmup_phase = machine.phase
+
+    collect_equity_curve = (
+        engine._want("equity_curve") or engine.config.collect_equity_curve
+    )
     equity_curve: list[EquityPoint] | None = None
     if collect_equity_curve:
         equity_curve = (
@@ -152,6 +180,20 @@ def run_native_strategy(
     early_reason: str | None = None
     for i in range(start_index, len(series)):
         bar = series.get_bar(i)
+        decision = None
+        if machine is not None:
+            upcoming = machine._phase_for(i)
+            if upcoming is WarmupPhase.SCORE and engine.score_opening_broker is None:
+                engine.warmup_boundary_buffer_len_before = len(ctx.buffer.commands)
+                if engine.config.warmup_policy != "TRADE_THROUGH_UNSCORED":
+                    discard_command_buffer(engine, ctx, i, bar.time)
+                if engine.config.warmup_policy == "CALC_THEN_RESET_BROKER":
+                    apply_canonical_broker_reset(engine)
+                engine.warmup_boundary_buffer_len_after = len(ctx.buffer.commands)
+                engine.score_opening_broker = BrokerState.capture(engine)
+            decision = machine.begin_bar(i)
+            engine.warmup_phase = machine.phase
+            engine._current_phase = decision.phase.label
         engine._cb("on_bar_start", bar, i)
         for order in engine.orders:
             if order.status == "pending" and order.active_from_bar_index <= i:
@@ -165,23 +207,32 @@ def run_native_strategy(
                 )
                 engine._cb("on_order_activated", order)
         runtime.begin_bar(bar, i)
-        engine._process_bar_fills(strategy, ctx, bar, i, open_only=True)
-        engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
+        allow_broker = decision is None or decision.broker_execution_allowed
+        if allow_broker:
+            engine._process_bar_fills(strategy, ctx, bar, i, open_only=True)
+            engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
         engine._update_open_profit(bar.close)
         engine._update_state()
         engine._call_strategy(strategy, bar, i)
-        engine._flush(ctx, bar, i)
-        if engine.config.process_orders_on_close or engine.config.calc_on_order_fills:
-            engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
-        else:
-            engine._process_bar_fills(
-                strategy,
-                ctx,
-                bar,
-                i,
-                skip_open=True,
-                close_activation_only=True,
-            )
+        if allow_broker:
+            engine._flush(ctx, bar, i)
+            if (
+                engine.config.process_orders_on_close
+                or engine.config.calc_on_order_fills
+            ):
+                engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
+            else:
+                engine._process_bar_fills(
+                    strategy,
+                    ctx,
+                    bar,
+                    i,
+                    skip_open=True,
+                    close_activation_only=True,
+                )
+        elif decision is not None and not decision.broker_execution_allowed:
+            discard_command_buffer(engine, ctx, i, bar.time)
+        stamp_phase(engine, getattr(engine, "_current_phase", None))
         engine._update_intrabar_drawdown(bar)
         engine._update_open_profit(bar.close)
         engine._update_trade_excursions(bar)
@@ -206,6 +257,7 @@ def run_native_strategy(
                 extremes.drawdown_percent,
                 extremes.runup,
                 extremes.runup_percent,
+                phase=getattr(engine, "_current_phase", None),
             )
             equity_curve.append(point)
             if engine._score_mode and i >= engine._score_start_index:
@@ -216,6 +268,16 @@ def run_native_strategy(
         engine._cb("on_bar_end", bar, i, engine.state)
         if stop_now:
             break
+        if machine is not None:
+            machine.end_bar(i)
+            if (
+                machine.phase is WarmupPhase.SCORE
+                and i == machine.score_end_index
+                and engine.config.score_end_policy == "FORCE_CLOSE"
+                and engine.position.direction != "flat"
+            ):
+                engine._force_close(bar, i)
+                stamp_phase(engine, engine._current_phase)
 
     finalize = getattr(strategy, "_finalize", None)
     if callable(finalize):
@@ -227,6 +289,15 @@ def run_native_strategy(
     ):
         engine._force_close(series.get_bar(len(series) - 1), len(series) - 1)
     setattr(engine, "_resume_equity_curve_history", clone_state(equity_curve or []))
+    if machine is not None:
+        machine.finalize()
+        engine.warmup_phase = machine.phase
+        if engine.score_opening_broker is None:
+            engine.score_opening_broker = BrokerState.canonical_initial(
+                engine.config.initial_capital
+            )
+            engine.warmup_boundary_buffer_len_before = 0
+            engine.warmup_boundary_buffer_len_after = 0
     return engine._result(
         series,
         equity_curve,

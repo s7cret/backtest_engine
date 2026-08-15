@@ -85,6 +85,9 @@ class BacktestResult:
     strategy_fingerprint: str | None = None
     runtime_fingerprint: str | None = None
     resume_state: BacktestResumeState | None = None
+    score_ledger_hash: str | None = None
+    warmup_ledger_hash: str | None = None
+    score_equity_baseline: float | None = None
 
     def content_hash(
         self, include_equity_curve: bool = True, include_events: bool = False

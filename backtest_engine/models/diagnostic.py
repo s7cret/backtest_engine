@@ -13,3 +13,4 @@ class Diagnostic:
     trade_id: str | None = None
     job_id: str | None = None
     context: dict | None = None
+    phase: str | None = None

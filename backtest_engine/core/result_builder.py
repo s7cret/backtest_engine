@@ -140,8 +140,40 @@ def build_backtest_result(
         recommended_pre_bars_raw=recommended_raw,
         requested_max_pre_bars=engine.config.max_pre_bars,
     )
+    opening = getattr(engine, "score_opening_broker", None)
+    if opening is not None:
+        result.score_equity_baseline = opening.equity
+    result.warmup_ledger_hash = _phase_ledger_hash(engine, result, "warmup")
+    result.score_ledger_hash = _phase_ledger_hash(engine, result, "score")
 
     return result
+
+
+def _phase_ledger_hash(engine: Any, result: BacktestResult, phase: str) -> str:
+    events = [
+        (event.code, event.phase, event.bar_index, event.order_id)
+        for event in (result.events or [])
+        if event.phase == phase
+    ]
+    fills = [
+        (
+            fill.order_id,
+            fill.bar_index,
+            fill.price,
+            fill.qty,
+            getattr(fill, "phase", None),
+        )
+        for fill in engine.fills
+        if getattr(fill, "phase", None) == phase
+    ]
+    trades = [
+        (trade.id, trade.entry_bar_index, trade.qty, getattr(trade, "phase", None))
+        for trade in (*engine.closed_trades, *engine.open_trades)
+        if getattr(trade, "phase", None) == phase
+    ]
+    return sha256_obj(
+        {"phase": phase, "events": events, "fills": fills, "trades": trades}
+    )
 
 
 def _result_data_fingerprint(engine: Any, series: BarSeries) -> str:

@@ -88,7 +88,17 @@ class EngineSupportMixin:
 
     def _event(self, code, msg, i=None, t=None, oid=None) -> None:
         if self.config.collect_events:
-            self.events.append(Diagnostic(code, msg, "info", i, t, oid))
+            self.events.append(
+                Diagnostic(
+                    code,
+                    msg,
+                    "info",
+                    i,
+                    t,
+                    oid,
+                    phase=getattr(self, "_current_phase", None),
+                )
+            )
 
     def _diag(self, code, msg, severity, i=None, t=None, oid=None) -> None:
         d = Diagnostic(code, msg, severity, i, t, oid)

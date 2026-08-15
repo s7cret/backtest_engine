@@ -38,5 +38,9 @@ class StrategyRuntimeError(BacktestEngineError):
     pass
 
 
+class WarmupAdmissionError(BacktestEngineError):
+    pass
+
+
 class UnsupportedRiskRuleError(BacktestEngineError):
     pass
