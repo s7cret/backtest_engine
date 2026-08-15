@@ -165,23 +165,36 @@ def run_native_strategy(
                 )
                 engine._cb("on_order_activated", order)
         runtime.begin_bar(bar, i)
-        engine._process_bar_fills(strategy, ctx, bar, i, open_only=True)
-        engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
+        phase = engine._bar_phases[i] if i < len(engine._bar_phases) else "score"
+        if (
+            phase == "score"
+            and i == engine._score_start_index
+            and engine.config.warmup_mode == "CALC_THEN_RESET_BROKER"
+        ):
+            engine._reset_broker_state()
+        allow_broker = phase == "score" or engine.config.warmup_mode == "TRADE_THROUGH_UNSCORED"
+        if allow_broker:
+            engine._process_bar_fills(strategy, ctx, bar, i, open_only=True)
+            engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
         engine._update_open_profit(bar.close)
         engine._update_state()
         engine._call_strategy(strategy, bar, i)
-        engine._flush(ctx, bar, i)
-        if engine.config.process_orders_on_close or engine.config.calc_on_order_fills:
-            engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
-        else:
-            engine._process_bar_fills(
-                strategy,
-                ctx,
-                bar,
-                i,
-                skip_open=True,
-                close_activation_only=True,
-            )
+        if allow_broker:
+            engine._flush(ctx, bar, i)
+        elif engine.config.warmup_mode == "CALC_ONLY":
+            ctx.buffer.commands.clear()
+        if allow_broker:
+            if engine.config.process_orders_on_close or engine.config.calc_on_order_fills:
+                engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
+            else:
+                engine._process_bar_fills(
+                    strategy,
+                    ctx,
+                    bar,
+                    i,
+                    skip_open=True,
+                    close_activation_only=True,
+                )
         engine._update_intrabar_drawdown(bar)
         engine._update_open_profit(bar.close)
         engine._update_trade_excursions(bar)

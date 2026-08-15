@@ -67,6 +67,11 @@ class BacktestConfig:
     max_bars_back: int = 0
     score_start_time: int | None = None
     score_end_time: int | None = None
+    warmup_mode: Literal[
+        "TRADE_THROUGH_UNSCORED",
+        "CALC_ONLY",
+        "CALC_THEN_RESET_BROKER",
+    ] = "TRADE_THROUGH_UNSCORED"
     auto_pre_bars: bool = False
     min_pre_bars: int = 0
     max_pre_bars: int = 0

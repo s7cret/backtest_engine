@@ -108,6 +108,16 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             _closed_trades_ref=self.closed_trades,
         )
         self.last_trade_bar: int | None = None
+
+    def _reset_broker_state(self) -> None:
+        self.position = Position()
+        self.cash = self.config.initial_capital
+        self.equity = self.config.initial_capital
+        self.orders = []
+        self.fills = []
+        self.open_trades = []
+        self.state.cash = self.config.initial_capital
+        self.state.equity = self.config.initial_capital
         self._effective_mintick: float | None = self.config.mintick
         # D5-C: score window state
         self._score_mode: bool = False
