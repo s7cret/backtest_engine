@@ -108,6 +108,11 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             _closed_trades_ref=self.closed_trades,
         )
         self.last_trade_bar: int | None = None
+        self._effective_mintick: float | None = self.config.mintick
+        self._score_mode: bool = False
+        self._prehistory_end_index: int = 0
+        self._score_start_index: int = 0
+        self._bar_phases: list[str] = []
 
     def _reset_broker_state(self) -> None:
         self.position = Position()
@@ -118,12 +123,6 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         self.open_trades = []
         self.state.cash = self.config.initial_capital
         self.state.equity = self.config.initial_capital
-        self._effective_mintick: float | None = self.config.mintick
-        # D5-C: score window state
-        self._score_mode: bool = False
-        self._prehistory_end_index: int = 0  # last prehistory bar index (inclusive)
-        self._score_start_index: int = 0  # first score bar index
-        self._bar_phases: list[str] = []  # "prehistory" or "score" per bar index
 
     def run(
         self,
