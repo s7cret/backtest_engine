@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "backtest-engine"
-version = "4.0.2"
+version = "5.0.0rc1"
 description = "Independent deterministic bar-by-bar strategy backtest engine."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,6 +24,7 @@ dev = [
   "ruff>=0.5",
   "mypy>=1.10",
   "build>=1.2",
+  "openpine-contracts @ git+https://github.com/s7cret/openpine-contracts.git@71d0c15da39071b4649ce81a9bbaa7cb5154db6d",
   "pinelib @ git+https://github.com/s7cret/pinelib.git@fcf9c0f92213313db39bc42c83f676786c85400c",
   "marketdata-provider @ git+https://github.com/s7cret/marketdata-provider.git@b868ace65524f5c3bf62498f667db411e299a4ce",
 ]

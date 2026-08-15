@@ -1,4 +1,4 @@
-from .bar import Bar
+from .bar import Bar, BarFinalityError, admit_closed_bar_only, from_contract_bar, to_contract_bar
 from .bar_series import BarSeries
 from .tick import Tick
 from .instrument import InstrumentModel
@@ -15,6 +15,10 @@ from .window import ExecutionWindow, PrehistoryPlan, TradeResult, WarmupQuality
 
 __all__ = [
     "Bar",
+    "BarFinalityError",
+    "admit_closed_bar_only",
+    "from_contract_bar",
+    "to_contract_bar",
     "BarSeries",
     "Tick",
     "InstrumentModel",
