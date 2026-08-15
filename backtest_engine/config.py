@@ -114,6 +114,7 @@ class BacktestConfig:
     bar_magnifier_bars: dict[int, object] | None = None
     store_backtest_result_in_memory: bool = True
     output_dir: Path | None = None
+    finality_policy: Literal["CLOSED_BAR_ONLY", "ALLOW_OPEN"] = "ALLOW_OPEN"
 
     def __post_init__(self) -> None:
         if self.bar_magnifier_missing_policy != "error":

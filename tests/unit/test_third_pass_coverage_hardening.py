@@ -612,7 +612,10 @@ def test_contract_bar_conversion_with_fake_marketdata_modules(
     calendar_tf = types.SimpleNamespace(duration_ms=None)
     with pytest.raises(ValueError, match="time_close is required"):
         to_contract_bar(
-            Bar(1000, 1, 2, 0.5, 1.5), instrument="BTC", timeframe=calendar_tf
+            Bar(1000, 1, 2, 0.5, 1.5),
+            instrument="BTC",
+            timeframe=calendar_tf,
+            closed=True,
         )
 
 

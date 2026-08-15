@@ -7,6 +7,9 @@ if TYPE_CHECKING:
     from marketdata_provider.contracts.bar import Bar as ContractBar
 
 
+from openpine_contracts import Finality
+
+
 @dataclass(frozen=True, slots=True)
 class Bar:
     time: int
@@ -16,6 +19,7 @@ class Bar:
     close: float
     volume: float | None = None
     time_close: int | None = None
+    finality: Finality | None = None
 
 
 def to_contract_bar(
@@ -23,7 +27,7 @@ def to_contract_bar(
     *,
     instrument: InstrumentKey,
     timeframe: Timeframe,
-    closed: bool = True,
+    closed: bool,
 ) -> ContractBar:
     from marketdata_provider.contracts.bar import Bar as ContractBar
 
@@ -56,4 +60,5 @@ def from_contract_bar(bar: ContractBar) -> Bar:
         close=bar.close,
         volume=bar.volume,
         time_close=bar.time_close,
+        finality=Finality.FINAL if bar.closed else Finality.OPEN,
     )

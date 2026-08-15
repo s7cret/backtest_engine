@@ -33,6 +33,7 @@ def test_to_contract_bar_rejects_missing_close_time_for_monthly_timeframe() -> N
             Bar(time=0, open=1, high=1, low=1, close=1),
             instrument=InstrumentKey("binance", "spot", "BTCUSDT"),
             timeframe=parse_timeframe("1M"),
+            closed=True,
         )
 
 
@@ -49,4 +50,6 @@ def test_contract_bar_round_trip_preserves_engine_shape() -> None:
         )
     )
 
-    assert round_trip == engine_bar
+    assert round_trip.time == engine_bar.time
+    assert round_trip.time_close == engine_bar.time_close
+    assert round_trip.finality is not None

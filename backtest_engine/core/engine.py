@@ -42,6 +42,7 @@ from backtest_engine.core.engine_realtime import EngineRealtimeMixin
 from backtest_engine.core.engine_support import EngineSupportMixin
 from backtest_engine.core.oca import apply_oca
 from backtest_engine.core.margin_call import maybe_margin_call
+from backtest_engine.core.finality import admit_bars
 from backtest_engine.core.native_run_loop import run_native_strategy
 from backtest_engine.core.price_path import (
     infer_parent_close,
@@ -230,9 +231,10 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             raise ProviderError(
                 "No bars supplied; load market data outside BacktestEngine"
             )
-        if isinstance(bars, BarSeries):
-            return bars
-        return BarSeries.from_bars(bars)
+        admitted = admit_bars(bars, policy=self.config.finality_policy)
+        if isinstance(admitted, BarSeries):
+            return admitted
+        return BarSeries.from_bars(admitted)
 
     def _call_strategy(self, strategy: Any, bar: Bar, i: int) -> None:
         try:
