@@ -117,12 +117,23 @@ class BacktestConfig:
     finality_policy: Literal["CLOSED_BAR_ONLY", "ALLOW_OPEN"] = "ALLOW_OPEN"
     warmup_policy: str | None = None
     score_end_policy: str = "LEAVE_OPEN"
+    semantic_profile: str = "legacy_4x"
 
     def __post_init__(self) -> None:
         if self.bar_magnifier_missing_policy != "error":
             raise ConfigError(
                 "bar_magnifier_missing_policy only supports fail-closed 'error'"
             )
+        from openpine_contracts import SemanticProfile
+
+        raw = self.semantic_profile
+        if isinstance(raw, SemanticProfile):
+            self.semantic_profile = raw.value
+            return
+        try:
+            self.semantic_profile = SemanticProfile(str(raw)).value
+        except ValueError as exc:
+            raise ConfigError(f"semantic_profile {raw!r} is unknown") from exc
 
     def snapshot(self) -> dict:
         d = {field.name: getattr(self, field.name) for field in fields(self)}

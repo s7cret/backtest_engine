@@ -52,3 +52,11 @@ def validate_backtest_config(config: BacktestConfig) -> None:
         raise ConfigError(f"warmup_policy {config.warmup_policy!r} is unknown")
     if config.score_end_policy not in SCORE_END_POLICIES:
         raise ConfigError(f"score_end_policy {config.score_end_policy!r} is unknown")
+    from openpine_contracts import SemanticProfile
+
+    try:
+        SemanticProfile(str(config.semantic_profile))
+    except ValueError as exc:
+        raise ConfigError(
+            f"semantic_profile {config.semantic_profile!r} is unknown"
+        ) from exc

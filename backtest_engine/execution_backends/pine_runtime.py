@@ -124,6 +124,7 @@ class PineRuntimeBackend:
             process_orders_on_close=getattr(config, "process_orders_on_close", None),
             calc_on_order_fills=getattr(config, "calc_on_order_fills", None),
             calc_on_every_tick=getattr(config, "calc_on_every_tick", None),
+            semantic_profile=getattr(config, "semantic_profile", "legacy_4x"),
             extra={
                 "exchange": getattr(config, "exchange", None),
                 "market_type": getattr(config, "market_type", None),
