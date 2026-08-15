@@ -115,6 +115,36 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         self._score_start_index: int = 0  # first score bar index
         self._bar_phases: list[str] = []  # "prehistory" or "score" per bar index
 
+    def _reset_broker_state(self) -> None:
+        self.position = Position()
+        self.cash = self.config.initial_capital
+        self.equity = self.config.initial_capital
+        self.peak_equity = self.config.initial_capital
+        self.trough_equity = self.config.initial_capital
+        self.max_drawdown = 0.0
+        self.max_drawdown_percent = 0.0
+        self.max_runup = 0.0
+        self.max_runup_percent = 0.0
+        self.orders = []
+        self.fills = []
+        self.closed_trades = []
+        self.open_trades = []
+        self._filled_exit_entry_keys = set()
+        self._closed_trade_stats_count = 0
+        self._gross_profit_total = 0.0
+        self._gross_loss_total = 0.0
+        self._win_trades_total = 0
+        self._loss_trades_total = 0
+        self._even_trades_total = 0
+        self.state = StrategyStateView(
+            initial_capital=self.config.initial_capital,
+            cash=self.config.initial_capital,
+            equity=self.config.initial_capital,
+            _open_trades_ref=self.open_trades,
+            _closed_trades_ref=self.closed_trades,
+        )
+        self.last_trade_bar = None
+
     def run(
         self,
         strategy_class: type,
