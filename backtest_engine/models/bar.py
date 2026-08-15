@@ -16,6 +16,7 @@ class Bar:
     close: float
     volume: float | None = None
     time_close: int | None = None
+    closed: bool | None = None
 
 
 def to_contract_bar(
@@ -56,4 +57,5 @@ def from_contract_bar(bar: ContractBar) -> Bar:
         close=bar.close,
         volume=bar.volume,
         time_close=bar.time_close,
+        closed=bar.closed,
     )

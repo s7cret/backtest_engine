@@ -40,7 +40,7 @@ def test_contract_bar_round_trip_preserves_engine_shape() -> None:
     instrument = InstrumentKey("binance", "spot", "BTCUSDT")
     timeframe = parse_timeframe("1m")
     engine_bar = Bar(
-        time=0, open=1, high=2, low=0.5, close=1.5, volume=10.0, time_close=59_999
+        time=0, open=1, high=2, low=0.5, close=1.5, volume=10.0, time_close=59_999, closed=True
     )
 
     round_trip = from_contract_bar(
@@ -50,3 +50,15 @@ def test_contract_bar_round_trip_preserves_engine_shape() -> None:
     )
 
     assert round_trip == engine_bar
+
+
+def test_from_contract_bar_preserves_open_finality() -> None:
+    instrument = InstrumentKey("binance", "spot", "BTCUSDT")
+    timeframe = parse_timeframe("1m")
+    contract = to_contract_bar(
+        Bar(time=0, open=1, high=2, low=0.5, close=1.5, volume=10.0, time_close=59_999),
+        instrument=instrument,
+        timeframe=timeframe,
+        closed=False,
+    )
+    assert from_contract_bar(contract).closed is False
