@@ -93,3 +93,19 @@ def apply_intents_for_bar(
         apply_intent(ctx, event)
         applied += 1
     return applied
+
+
+def require_live_tape(events: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    rows = list(events)
+    if not rows:
+        raise IntentReplayError("live pinelib tape is empty")
+    for event in rows:
+        if event.get("schema_id") != "openpine.intent.v2" or not event.get("content_hash"):
+            raise IntentReplayError("live pinelib tape required")
+    return rows
+
+
+def apply_live_intents_for_bar(
+    ctx: Any, events: list[Mapping[str, Any]], bar_index: int
+) -> int:
+    return apply_intents_for_bar(ctx, require_live_tape(events), bar_index)
