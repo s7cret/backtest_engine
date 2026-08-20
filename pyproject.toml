@@ -26,8 +26,8 @@ dev = [
   "ruff>=0.5",
   "mypy>=1.10",
   "build>=1.2",
-  "pinelib @ git+https://github.com/s7cret/pinelib.git@fcf9c0f92213313db39bc42c83f676786c85400c",
-  "marketdata-provider @ git+https://github.com/s7cret/marketdata-provider.git@b868ace65524f5c3bf62498f667db411e299a4ce",
+  "pinelib @ git+https://github.com/s7cret/pinelib.git@801b908e0ba53d1387cfd032cb6d29aa53ba0ca0",
+  "marketdata-provider @ git+https://github.com/s7cret/marketdata-provider.git@4710da99d0320e6fd1ddba6e4ae64b6d7ba68848",
 ]
 
 [project.scripts]
