@@ -115,13 +115,13 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         self._prehistory_end_index: int = 0  # last prehistory bar index (inclusive)
         self._score_start_index: int = 0  # first score bar index
         self._bar_phases: list[str] = []  # "prehistory" or "score" per bar index
-        self.warmup_phase = None
-        self.score_opening_broker = None
-        self.warmup_boundary_buffer_len_before = None
-        self.warmup_boundary_buffer_len_after = None
-        self.last_strategy = None
-        self._current_phase = None
-        self._warmup_machine = None
+        self.warmup_phase: Any = None
+        self.score_opening_broker: Any = None
+        self.warmup_boundary_buffer_len_before: int | None = None
+        self.warmup_boundary_buffer_len_after: int | None = None
+        self.last_strategy: Any = None
+        self._current_phase: str | None = None
+        self._warmup_machine: Any = None
 
     def run(
         self,

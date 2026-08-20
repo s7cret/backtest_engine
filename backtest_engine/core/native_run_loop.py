@@ -44,6 +44,14 @@ class NativeRunEngine(Protocol):
     _max_drawdown_stop_cash: float | None
     _max_bars_without_trade: int | None
     last_trade_bar: int | None
+    last_strategy: Any
+    _prehistory_end_index: int
+    _warmup_machine: Any
+    warmup_phase: Any
+    score_opening_broker: Any
+    warmup_boundary_buffer_len_before: int | None
+    warmup_boundary_buffer_len_after: int | None
+    _current_phase: str | None
 
     def _want(self, name: str) -> bool: ...
     def _restore_resume_state(

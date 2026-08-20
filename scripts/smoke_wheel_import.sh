@@ -17,6 +17,6 @@ if (( ${#wheels[@]} != 1 )); then
 fi
 
 "$PYTHON" -m venv "$VENV"
-"$VENV/bin/python" -m pip install "${wheels[0]}" --no-deps --quiet
+env -u PYTHONPATH "$VENV/bin/python" -m pip install "${wheels[0]}" --quiet
 cd "$SMOKE_ROOT"
 "$VENV/bin/python" -I -c "import pathlib, backtest_engine; path = pathlib.Path(backtest_engine.__file__).resolve(); assert 'site-packages' in path.parts, path; print(path, backtest_engine.__version__)"

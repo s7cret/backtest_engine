@@ -81,7 +81,7 @@ def test_contracts_pin_is_exact_git_sha() -> None:
         "openpine-contracts @ git+https://github.com/s7cret/openpine-contracts.git@"
         in text
     )
-    assert "51e32ebaaf02eecb81443e8ca7e89b2543cb25a3" in text
+    assert "af9ecbc455e9af83cdc609f6b6ff85c40fb6c8bb" in text
 
 
 def test_admit_unknown_policy_and_series_fail_closed() -> None:
