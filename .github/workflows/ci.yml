@@ -18,31 +18,32 @@ jobs:
         with:
           repository: s7cret/openpine-contracts
           ref: 91c405e759206b542d22df242ef55ac49b1f0bb4
-          path: openpine-contracts
+          path: stack/openpine-contracts
       - uses: actions/checkout@v4
         with:
           repository: s7cret/marketdata-provider
           ref: 99426a3a684589e1ba5b69d1a2316d1d77b86cd2
-          path: marketdata-provider
+          path: stack/marketdata-provider
       - uses: actions/checkout@v4
         with:
           repository: s7cret/pinelib
           ref: 7e681f3ce2945d2ba702833b1f82aa4da133d909
-          path: pinelib
+          path: stack/pinelib
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
         run: |
+          printf 'stack/\n' >> .git/info/exclude
           python -m pip install -U pip
-          python -m pip install -e ./openpine-contracts
-          python -m pip install -e ./marketdata-provider
-          python -m pip install -e ./pinelib
+          python -m pip install -e ./stack/openpine-contracts
+          python -m pip install -e ./stack/marketdata-provider
+          python -m pip install -e ./stack/pinelib
           python -m pip install -e '.[dev]'
           mkdir -p "$RUNNER_TEMP/stack-wheels"
-          python -m build --wheel --outdir "$RUNNER_TEMP/stack-wheels" ./openpine-contracts
-          python -m build --wheel --outdir "$RUNNER_TEMP/stack-wheels" ./marketdata-provider
-          python -m build --wheel --outdir "$RUNNER_TEMP/stack-wheels" ./pinelib
+          python -m build --wheel --outdir "$RUNNER_TEMP/stack-wheels" ./stack/openpine-contracts
+          python -m build --wheel --outdir "$RUNNER_TEMP/stack-wheels" ./stack/marketdata-provider
+          python -m build --wheel --outdir "$RUNNER_TEMP/stack-wheels" ./stack/pinelib
       - name: Release gate
         run: >-
           OPENPINE_CONTRACTS_WHEEL="$(echo "$RUNNER_TEMP"/stack-wheels/openpine_contracts-*.whl)"
