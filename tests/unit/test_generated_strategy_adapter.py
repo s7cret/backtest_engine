@@ -40,7 +40,8 @@ def test_generated_strategy_adapter_runs_orders_through_backtest_engine() -> Non
         default_qty_type="fixed",
         default_qty_value=1.0,
         force_close_on_end=False,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -68,7 +69,7 @@ def test_generated_strategy_adapter_sets_request_data_end_ms() -> None:
     strategy_class = make_generated_strategy_adapter(GeneratedReadsRequestEnd)
     strategy_class.runtime_request_data_end_ms = 12345
     bars = [Bar(i, 100 + i, 101 + i, 99 + i, 100 + i, 1.0) for i in range(2)]
-    config = BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=1)
+    config = BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN")
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -93,7 +94,9 @@ def test_generated_strategy_adapter_exposes_max_bars_back_to_pinelib_runtime() -
     bars = [Bar(i, 100 + i, 101 + i, 99 + i, 100 + i, 1.0) for i in range(2)]
     config = BacktestConfig(
         symbol="TEST", timeframe="1", start_time=0, end_time=1, max_bars_back=5000
-    )
+    ,
+     finality_policy="ALLOW_OPEN"
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -103,7 +106,7 @@ def test_generated_strategy_adapter_exposes_max_bars_back_to_pinelib_runtime() -
 
 def test_strategy_context_buffers_typed_command_payloads() -> None:
     ctx = StrategyContext(
-        BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=1)
+        BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN")
     )
 
     ctx.entry("L", "long", qty=2.0)
@@ -134,7 +137,8 @@ def test_generated_strategy_adapter_preserves_score_window_phase_metrics() -> No
         default_qty_type="fixed",
         default_qty_value=1.0,
         force_close_on_end=False,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars, effective_pre_bars=3)
 
@@ -186,7 +190,8 @@ def test_generated_strategy_adapter_tracks_strategy_scalar_history() -> None:
         default_qty_type="fixed",
         default_qty_value=1.0,
         force_close_on_end=False,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -250,7 +255,8 @@ def test_generated_strategy_adapter_exposes_trade_accessors() -> None:
         default_qty_type="fixed",
         default_qty_value=1.0,
         force_close_on_end=False,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -289,7 +295,8 @@ def test_generated_strategy_adapter_exports_plot_records() -> None:
         end_time=2,
         commission_type="none",
         commission_value=0.0,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -325,7 +332,7 @@ def test_generated_strategy_adapter_fails_closed_for_unsupported_recalc_semantic
 ):
     strategy_class = make_generated_strategy_adapter(UnsupportedGeneratedLikeStrategy)
     bars = [Bar(0, 1, 1, 1, 1, 1.0)]
-    config = BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=0)
+    config = BacktestConfig(symbol="TEST", timeframe="1", start_time=0, end_time=0, finality_policy="ALLOW_OPEN")
 
     with pytest.raises(
         UnsupportedGeneratedStrategySemantics, match="calc_on_order_fills"
@@ -366,7 +373,8 @@ def test_generated_strategy_adapter_supports_calc_on_order_fills_recalc_bridge()
         commission_value=0.0,
         process_orders_on_close=False,
         calc_on_order_fills=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -412,7 +420,8 @@ def test_generated_strategy_adapter_config_handshake_accepts_empty_diff() -> Non
         end_time=1,
         commission_type="none",
         commission_value=0.0,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     result = BacktestEngine(config).run(
         strategy_class, bars=[Bar(0, 1, 1, 1, 1), Bar(1, 1, 1, 1, 1)]
     )
@@ -429,7 +438,8 @@ def test_generated_strategy_adapter_config_handshake_rejects_mismatch() -> None:
         initial_capital=20000.0,
         commission_type="none",
         commission_value=0.0,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     with pytest.raises(UnsupportedGeneratedStrategySemantics, match="initial_capital"):
         BacktestEngine(config).run(
             strategy_class, bars=[Bar(0, 1, 1, 1, 1), Bar(1, 1, 1, 1, 1)]
@@ -461,7 +471,8 @@ def test_generated_strategy_adapter_converts_second_timestamps_to_pine_milliseco
         end_time=1_000,
         commission_type="none",
         commission_value=0.0,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     BacktestEngine(config).run(strategy_class, bars=[Bar(1_000, 1, 1, 1, 1)])
 
     assert GeneratedRecordsPineTime.seen_times == [1_000_000]
@@ -497,7 +508,8 @@ def test_generated_strategy_adapter_covers_process_orders_on_close_entry() -> No
         default_qty_type="fixed",
         default_qty_value=1.0,
         process_orders_on_close=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -538,7 +550,8 @@ def test_generated_strategy_adapter_covers_profit_loss_exit() -> None:
         default_qty_type="fixed",
         default_qty_value=1.0,
         mintick=1.0,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -581,7 +594,8 @@ def test_generated_strategy_adapter_covers_trailing_exit() -> None:
         default_qty_type="fixed",
         default_qty_value=1.0,
         mintick=1.0,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -625,7 +639,8 @@ def test_generated_strategy_adapter_covers_close_all_immediately() -> None:
         default_qty_type="fixed",
         default_qty_value=1.0,
         pyramiding=2,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 
@@ -678,7 +693,8 @@ def test_generated_strategy_close_then_opposite_entry_does_not_double_reversal_q
         default_qty_value=10.0,
         initial_capital=10000.0,
         force_close_on_end=False,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(config).run(strategy_class, bars=bars)
 

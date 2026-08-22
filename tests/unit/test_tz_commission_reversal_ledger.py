@@ -17,7 +17,7 @@ def cfg(**kw):
         process_orders_on_close=True,
     )
     d.update(kw)
-    return BacktestConfig(**d)
+    return BacktestConfig(**d, finality_policy="ALLOW_OPEN")
 
 
 class EntryThenCloseAll:

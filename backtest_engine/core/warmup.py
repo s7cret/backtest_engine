@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
@@ -19,14 +18,8 @@ SCORE_END_POLICIES: frozenset[str] = frozenset(
     {"MARK_TO_MARKET", "FORCE_CLOSE", "LEAVE_OPEN"}
 )
 _UNSAFE_PROJECTION_POLICIES = frozenset({"CALC_ONLY", "CALC_THEN_RESET_BROKER"})
-_BROKER_READ_MARKERS = (
-    "position_size",
-    "open_trades",
-    "closed_trades",
-    "closedtrades",
-    "opentrades",
-    "strategy.position",
-    "position.avg_price",
+_BROKER_PROJECTION_CAPABILITIES = frozenset(
+    {"broker_projection", "broker_projection_reads", "strategy_ledger_view"}
 )
 
 
@@ -193,18 +186,31 @@ class WarmupPhaseMachine:
 
 
 def strategy_reads_broker_projection(strategy_class: type) -> bool:
-    try:
-        source = inspect.getsource(strategy_class)
-    except (OSError, TypeError):
-        return False
-    lowered = source.replace(" ", "").lower()
-    return any(marker.replace(" ", "") in lowered for marker in _BROKER_READ_MARKERS)
+    capabilities = getattr(strategy_class, "required_runtime_capabilities", None)
+    if capabilities is None:
+        support_profile = getattr(strategy_class, "support_profile", None)
+        if isinstance(support_profile, dict):
+            if support_profile.get("broker_projection_reads") is True:
+                return True
+            capabilities = support_profile.get("required_runtime_capabilities")
+    if capabilities is None:
+        raise WarmupAdmissionError(
+            "WARMUP_CAPABILITY_METADATA_REQUIRED: strategy artifact does not declare "
+            "required_runtime_capabilities"
+        )
+    if not isinstance(capabilities, (list, tuple, set, frozenset)):
+        raise WarmupAdmissionError(
+            "WARMUP_CAPABILITY_METADATA_INVALID: required_runtime_capabilities "
+            "must be a sequence"
+        )
+    normalized = {str(item) for item in capabilities}
+    return bool(normalized & _BROKER_PROJECTION_CAPABILITIES)
 
 
 def admit_warmup_strategy(policy: str | None, strategy_class: type) -> None:
-    if policy in _UNSAFE_PROJECTION_POLICIES and strategy_reads_broker_projection(
-        strategy_class
-    ):
+    if policy not in _UNSAFE_PROJECTION_POLICIES:
+        return
+    if strategy_reads_broker_projection(strategy_class):
         raise WarmupAdmissionError(
             "WARMUP_UNSAFE_BROKER_PROJECTION: strategy reads broker projection "
             f"under {policy}"

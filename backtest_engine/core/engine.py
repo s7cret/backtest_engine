@@ -40,6 +40,11 @@ from backtest_engine.core.validation import infer_price_tick, validate_bars
 from backtest_engine.core.engine_validation import validate_backtest_config
 from backtest_engine.core.engine_realtime import EngineRealtimeMixin
 from backtest_engine.core.engine_support import EngineSupportMixin
+from backtest_engine.core.strategy_projection import (
+    build_strategy_ledger_projection,
+    compact_broker_projection,
+    compact_ledger_projection,
+)
 from backtest_engine.core.oca import apply_oca
 from backtest_engine.core.margin_call import maybe_margin_call
 from backtest_engine.core.finality import admit_bars
@@ -122,6 +127,8 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         self.last_strategy: Any = None
         self._current_phase: str | None = None
         self._warmup_machine: Any = None
+        self._strategy_callback_bar_index: int | None = None
+        self._strategy_callback_recalc_iteration = -1
 
     def run(
         self,
@@ -213,6 +220,21 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             execution_backend=execution_backend,
         )
 
+    def export_strategy_ledger_projection(self) -> dict[str, Any]:
+        """Return the canonical detached StrategyLedgerView worker payload."""
+
+        return build_strategy_ledger_projection(self)
+
+    def export_broker_projection(self) -> dict[str, Any]:
+        """Return a detached compact broker/account projection."""
+
+        return compact_broker_projection(self.export_strategy_ledger_projection())
+
+    def export_ledger_projection(self) -> dict[str, Any]:
+        """Return detached order/fill/trade ledgers without exposing engine objects."""
+
+        return compact_ledger_projection(self.export_strategy_ledger_projection())
+
     def _validate_config(self) -> None:
         validate_backtest_config(self.config)
 
@@ -223,7 +245,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             i for i, t in enumerate(series.time) if int(t) >= start and int(t) <= end
         ]
         if not idx:
-            return BarSeries([], [], [], [], [], [])
+            return BarSeries([], [], [], [], [], [], [], [])
         first = max(0, idx[0] - max(0, self.config.max_bars_back))
         last = idx[-1] + 1
         return BarSeries(
@@ -234,6 +256,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             series.close[first:last],
             None if series.volume is None else series.volume[first:last],
             None if series.time_close is None else series.time_close[first:last],
+            None if series.finality is None else series.finality[first:last],
         )
 
     def _resolve_bars(self, bars: BarSeries | list[Bar] | None) -> BarSeries:
@@ -247,6 +270,25 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         return BarSeries.from_bars(admitted)
 
     def _call_strategy(self, strategy: Any, bar: Bar, i: int) -> None:
+        if self._strategy_callback_bar_index != i:
+            self._strategy_callback_bar_index = i
+            self._strategy_callback_recalc_iteration = 0
+        else:
+            self._strategy_callback_recalc_iteration += 1
+        projection = self.export_strategy_ledger_projection()
+        self._cb(
+            "on_strategy_callback",
+            {
+                "callback": "strategy",
+                "bar_index": i,
+                "bar_open_time_utc_ms": int(bar.time),
+                "phase": self._current_phase,
+                "recalc_iteration": self._strategy_callback_recalc_iteration,
+                "projection": projection,
+                "broker": compact_broker_projection(projection),
+                "ledger": compact_ledger_projection(projection),
+            },
+        )
         try:
             strategy._process_bar(bar, i)
         except BacktestEngineError:

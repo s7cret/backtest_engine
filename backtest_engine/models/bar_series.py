@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence, Iterable, Mapping, Any
+from openpine_contracts import Finality
 from .bar import Bar
 
 
@@ -13,6 +14,7 @@ class BarSeries:
     close: Sequence[float]
     volume: Sequence[float | None] | None = None
     time_close: Sequence[int | None] | None = None
+    finality: Sequence[Finality | None] | None = None
 
     def __post_init__(self) -> None:
         n = len(self.time)
@@ -22,6 +24,8 @@ class BarSeries:
             raise ValueError("BarSeries volume length must match")
         if self.time_close is not None and len(self.time_close) != n:
             raise ValueError("BarSeries time_close length must match")
+        if self.finality is not None and len(self.finality) != n:
+            raise ValueError("BarSeries finality length must match")
 
     def __len__(self) -> int:
         return len(self.time)
@@ -35,6 +39,7 @@ class BarSeries:
             float(self.close[index]),
             None if self.volume is None else self.volume[index],
             None if self.time_close is None else self.time_close[index],
+            None if self.finality is None else self.finality[index],
         )
 
     @classmethod
@@ -48,6 +53,7 @@ class BarSeries:
             [x.close for x in b],
             [x.volume for x in b],
             [x.time_close for x in b],
+            [x.finality for x in b],
         )
 
     @classmethod
@@ -61,6 +67,11 @@ class BarSeries:
                 float(r["close"]),
                 None if r.get("volume") is None else float(r["volume"]),
                 None if r.get("time_close") is None else int(r["time_close"]),
+                (
+                    None
+                    if r.get("finality") is None
+                    else Finality(str(r["finality"]))
+                ),
             )
             for r in rows
         )

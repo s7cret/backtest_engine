@@ -175,7 +175,7 @@ def test_command_buffer_and_strategy_context_edge_commands() -> None:
         buffer.add("unknown")
 
     ctx = StrategyContext(
-        BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1)
+        BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN")
     )
     ctx.cancel_all()
     ctx.risk_allow_entry_in("both")
@@ -281,7 +281,8 @@ def test_generated_strategy_bridge_declaration_validation_edges() -> None:
         start_time=0,
         end_time=1,
         commission_type="fixed_per_order",
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     cls._validate_generated_declaration(
         types.SimpleNamespace(declaration=None), opts, config
     )
@@ -320,7 +321,8 @@ def test_validation_mutates_config_for_required_outputs_and_metrics() -> None:
         collect_trade_details=False,
         required_outputs={"equity_curve", "order_events", "mfe_mae"},
         required_metrics={"sharpe"},
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     validate_backtest_config(cfg)
     assert cfg.collect_equity_curve is True
     assert cfg.collect_events is True
@@ -339,7 +341,7 @@ def test_clock_resume_snapshot_and_pinelib_helpers_without_optional_dependency()
     assert _plain({"b": {2, 1}}) == {"b": [1, 2]}
     assert build_resume_state(bar_index=-1, config_snapshot_hash="h").bar_index == -1
     engine = types.SimpleNamespace(
-        config=BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1)
+        config=BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN")
     )
     with pytest.raises(ResumeUnsupportedError, match="missing broker_state"):
         restore_resume_state(
@@ -359,7 +361,9 @@ def test_clock_resume_snapshot_and_pinelib_helpers_without_optional_dependency()
         ctx,
         BacktestConfig(
             symbol="S", timeframe="1", start_time=0, end_time=1, initial_capital=42
-        ),
+        ,
+         finality_policy="ALLOW_OPEN"
+         ),
     )
     assert ctx.initial_capital == 42 and ctx.declaration.initial_capital == 42
 
@@ -388,7 +392,8 @@ def test_price_path_bar_magnifier_edges_and_margin_oca_helpers() -> None:
         use_bar_magnifier=True,
         bar_magnifier_lower_tf="1",
         bar_magnifier_bars={},
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     engine = types.SimpleNamespace(config=cfg)
     with pytest.raises(
         BarMagnifierUnavailableError, match="empty lower timeframe bars"
@@ -414,7 +419,9 @@ def test_price_path_bar_magnifier_edges_and_margin_oca_helpers() -> None:
         position=Position(size=1.0, avg_price=10.0, direction="long"),
         config=BacktestConfig(
             symbol="S", timeframe="1", start_time=0, end_time=1, margin_long=0.0
-        ),
+        ,
+         finality_policy="ALLOW_OPEN"
+         ),
     )
     assert maybe_margin_call(margin_engine, 10, _bar(), 0, "open") is False
 
@@ -461,7 +468,8 @@ class _FakeEngine:
             end_time=1,
             process_orders_on_close=True,
             max_position_size=1,
-        )
+        finality_policy="ALLOW_OPEN",
+         )
         self.position = Position(size=1.0, avg_price=10.0, direction="long")
         self.orders: list[Order] = []
         self.open_trades = [
@@ -627,7 +635,8 @@ def test_backtest_engine_internal_helper_edges() -> None:
         default_qty_type="fixed",
         default_qty_value=1,
         commission_type="none",
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     engine = BacktestEngine(config)
     assert len(engine._slice_range(BarSeries.from_bars([Bar(0, 1, 1, 1, 1)]))) == 0
     assert engine._qty_from_args({}, None, 10.0) == 0.0
@@ -648,7 +657,8 @@ def test_backtest_engine_internal_helper_edges() -> None:
             end_time=1,
             max_position_size=1,
             commission_type="none",
-        )
+        finality_policy="ALLOW_OPEN",
+         )
     )
     engine._max_position_size = 1
     oversized = _order("big", qty=2.0)
@@ -665,7 +675,8 @@ def test_resume_state_non_strict_and_restore_requirements() -> None:
         start_time=0,
         end_time=1,
         resume_validation_policy="diagnostic",
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     engine = BacktestEngine(config)
     state = engine._export_resume_state(
         0,
@@ -700,7 +711,7 @@ def test_risk_rules_all_branches_and_position_projection() -> None:
         _allow_long=False, _allow_short=False, _early_stop_enabled=False
     )
     ctx = StrategyContext(
-        BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1)
+        BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN")
     )
     ctx.risk_allow_entry_in("all")
     ctx.risk_max_drawdown(5, "percent")
@@ -711,7 +722,7 @@ def test_risk_rules_all_branches_and_position_projection() -> None:
     assert engine._max_position_size == 2
 
     bad_ctx = StrategyContext(
-        BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1)
+        BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN")
     )
     bad_ctx.risk_rules.append(RiskRule("unknown"))
     with pytest.raises(UnsupportedRiskRuleError):
@@ -741,7 +752,8 @@ class _FillEngine:
             calc_on_order_fills=True,
             max_recalc_depth=0,
             commission_type="none",
-        )
+        finality_policy="ALLOW_OPEN",
+         )
         self.orders: list[Order] = []
         self.filled: list[tuple[str, float, str]] = []
         self.diags: list[str] = []
@@ -938,7 +950,7 @@ def test_generated_adapter_runtime_provider_branches_and_bar_index_mismatch(
     adapter_cls.runtime_capture_plots = False
     adapter = adapter_cls(
         ctx=StrategyContext(
-            BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1),
+            BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN"),
             state=StrategyStateView(position_avg_price=0.0),
         )
     )

@@ -4,7 +4,7 @@ from backtest_engine import BacktestConfig
 
 
 def test_backtest_config_score_window_defaults_preserve_existing_behavior():
-    config = BacktestConfig(symbol="BTCUSDT", timeframe="15m", start_time=1, end_time=2)
+    config = BacktestConfig(symbol="BTCUSDT", timeframe="15m", start_time=1, end_time=2, finality_policy="ALLOW_OPEN")
 
     assert config.score_start_time is None
     assert config.score_end_time is None
@@ -31,7 +31,8 @@ def test_backtest_config_accepts_score_window_schema_fields():
         max_pre_bars=1000,
         warmup_confidence_mode="accurate",
         data_source_kind="MARKETDATA_API_PRODUCT",
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     assert config.score_start_time == start
     assert config.score_end_time == end
@@ -51,7 +52,8 @@ def test_backtest_config_snapshot_includes_score_window_schema_fields():
         max_pre_bars=500,
         warmup_confidence_mode="balanced",
         data_source_kind="CSV_EXACT_ORACLE",
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     snapshot = config.snapshot()
 

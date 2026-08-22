@@ -146,6 +146,7 @@ def test_cli_export_compare_benchmark_and_batch(tmp_path: Path) -> None:
                         "close": 1.5,
                         "volume": 1,
                         "time_close": 60999,
+                        "finality": "FINAL",
                     },
                     {
                         "time": 61000,
@@ -155,6 +156,7 @@ def test_cli_export_compare_benchmark_and_batch(tmp_path: Path) -> None:
                         "close": 2,
                         "volume": 1,
                         "time_close": 120999,
+                        "finality": "FINAL",
                     },
                 ]
             }
@@ -305,7 +307,9 @@ def test_process_pool_error_path(monkeypatch: pytest.MonkeyPatch) -> None:
         run_process_pool(
             BacktestConfig(
                 symbol="BTCUSDT", timeframe="1", start_time=0, end_time=99_999
-            ),
+            ,
+             finality_policy="ALLOW_OPEN"
+             ),
             [job],
         )
 
@@ -315,7 +319,9 @@ def test_validation_early_stop_execution_mode_and_lifecycle() -> None:
         validate_backtest_config(
             BacktestConfig(
                 symbol="BTC", timeframe="1", start_time=0, end_time=1, margin_long=0
-            )
+            ,
+             finality_policy="ALLOW_OPEN"
+             )
         )
     with pytest.raises(ConfigError, match="streaming"):
         validate_backtest_config(
@@ -325,7 +331,8 @@ def test_validation_early_stop_execution_mode_and_lifecycle() -> None:
                 start_time=0,
                 end_time=1,
                 tradingview_compare_mode="streaming",
-            )
+            finality_policy="ALLOW_OPEN",
+             )
         )
 
     cfg = BacktestConfig(
@@ -337,7 +344,8 @@ def test_validation_early_stop_execution_mode_and_lifecycle() -> None:
         min_equity_stop=90,
         max_drawdown_stop_percent=5,
         max_bars_without_trade=2,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     checker = EarlyStopChecker(cfg)
     assert (
         checker.check(
@@ -359,7 +367,7 @@ def test_validation_early_stop_execution_mode_and_lifecycle() -> None:
     )
     assert (
         EarlyStopChecker(
-            BacktestConfig(symbol="BTC", timeframe="1", start_time=0, end_time=1)
+            BacktestConfig(symbol="BTC", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN")
         )
         .check(equity=0, drawdown_percent=100, bar_index=1, last_trade_bar=0)
         .should_stop
@@ -468,7 +476,8 @@ def test_timeframe_bar_series_instrument_and_price_path_edges(
             start_time=0,
             end_time=1,
             fill_model="close_only",
-        )
+        finality_policy="ALLOW_OPEN",
+         )
     )
     assert price_path(engine, Bar(1, 1, 2, 0.5, 1.5)) == [(1.5, "close")]
     order = Order(
@@ -523,7 +532,9 @@ def test_resume_restore_error_paths_and_batch_unknown_backend() -> None:
         def __init__(self) -> None:
             self.config = BacktestConfig(
                 symbol="BTC", timeframe="1", start_time=0, end_time=1
-            )
+            ,
+             finality_policy="ALLOW_OPEN"
+             )
 
         def _config_hash(self) -> str:
             return "cfg"
@@ -535,7 +546,7 @@ def test_resume_restore_error_paths_and_batch_unknown_backend() -> None:
         restore_resume_state(Engine(), resume, object(), object(), object())
 
     with pytest.raises(ValueError, match="unknown batch backend"):
-        BatchBacktestRunner(BacktestConfig(symbol="BTC", timeframe="1", start_time=0, end_time=1), backend="bad").run([])  # type: ignore[arg-type]
+        BatchBacktestRunner(BacktestConfig(symbol="BTC", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN"), backend="bad").run([])  # type: ignore[arg-type]
 
 
 def test_commission_and_backend_warning_defaults() -> None:
@@ -671,7 +682,9 @@ def test_run_execution_backend_adapter_full_path() -> None:
         def __init__(self) -> None:
             self.config = BacktestConfig(
                 symbol="BTC", timeframe="1", start_time=0, end_time=100_000
-            )
+            ,
+             finality_policy="ALLOW_OPEN"
+             )
             self.closed_trades: list[Any] = []
             self.open_trades: list[Any] = []
             self._score_equity_points: list[Any] = []
@@ -721,7 +734,8 @@ def test_remaining_small_edges(tmp_path: Path) -> None:
                 start_time=0,
                 end_time=1,
                 early_stop_enabled=True,
-            )
+            finality_policy="ALLOW_OPEN",
+             )
         )
         .check(equity=100, drawdown_percent=0, bar_index=0, last_trade_bar=None)
         .reason

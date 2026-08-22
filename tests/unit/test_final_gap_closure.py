@@ -5,7 +5,7 @@ import sys
 import tomllib
 import types
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -49,6 +49,38 @@ from backtest_engine.models import (
 from backtest_engine.reporting.monte_carlo_report import render as render_monte_carlo
 from backtest_engine.results.comparison import compare_trades, load_trades_csv
 from backtest_engine.results.equity_curve import EquityPoint, final_equity
+
+
+_MISSING_MODULE = object()
+
+
+def _run_module_as_main(module_name: str) -> dict[str, Any]:
+    imported = sys.modules.pop(module_name, _MISSING_MODULE)
+    try:
+        return runpy.run_module(module_name, run_name="__main__")
+    finally:
+        if imported is _MISSING_MODULE:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = cast(types.ModuleType, imported)
+
+
+def test_run_module_as_main_restores_missing_module_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module_name = "backtest_engine._runpy_restore_probe"
+
+    def fake_run_module(name: str, *, run_name: str) -> dict[str, Any]:
+        assert name == module_name
+        assert run_name == "__main__"
+        sys.modules[module_name] = types.ModuleType(module_name)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(runpy, "run_module", fake_run_module)
+    sys.modules.pop(module_name, None)
+    with pytest.raises(SystemExit):
+        _run_module_as_main(module_name)
+    assert module_name not in sys.modules
 
 
 def _bar(
@@ -151,7 +183,7 @@ class NoopStrategy:
 
 
 def test_engine_public_wrappers_and_fail_closed_paths() -> None:
-    cfg = BacktestConfig(symbol="BTC", timeframe="1", start_time=0, end_time=120_000)
+    cfg = BacktestConfig(symbol="BTC", timeframe="1", start_time=0, end_time=120_000, finality_policy="ALLOW_OPEN")
     engine = BacktestEngine(cfg)
     result = engine.process_next_bar(NoopStrategy, _bar(0))
     assert result.status == "completed"
@@ -164,7 +196,8 @@ def test_engine_public_wrappers_and_fail_closed_paths() -> None:
                 start_time=0,
                 end_time=1,
                 use_bar_magnifier=True,
-            )
+            finality_policy="ALLOW_OPEN",
+             )
         ).run(NoopStrategy, bars=[_bar(0)])
 
     class Backend:
@@ -185,7 +218,9 @@ def test_engine_private_wrappers_reservations_and_callbacks() -> None:
     engine = BacktestEngine(
         BacktestConfig(
             symbol="BTC", timeframe="1", start_time=0, end_time=1, pyramiding=0
-        )
+        ,
+         finality_policy="ALLOW_OPEN"
+         )
     )
     engine.position = Position(size=1.0, avg_price=10.0, direction="long")
     engine.orders = [_order("pending", status="pending")]
@@ -236,7 +271,8 @@ def test_bar_magnifier_price_path_and_lower_tf_edges() -> None:
         use_bar_magnifier=True,
         bar_magnifier_lower_tf="1S",
         bar_magnifier_bars={0: [Bar(0, 1, 2, 0.5, 1.5, time_close=60_001)]},
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     engine = BacktestEngine(cfg)
     with pytest.raises(BarMagnifierUnavailableError):
         price_path(engine, parent)
@@ -250,7 +286,8 @@ def test_bar_magnifier_price_path_and_lower_tf_edges() -> None:
             use_bar_magnifier=True,
             bar_magnifier_lower_tf="1S",
             bar_magnifier_bars={0: []},
-        )
+        finality_policy="ALLOW_OPEN",
+         )
     )
     with pytest.raises(BarMagnifierUnavailableError, match="empty"):
         price_path(empty_engine, parent)
@@ -258,13 +295,13 @@ def test_bar_magnifier_price_path_and_lower_tf_edges() -> None:
     lower = BarSeries.from_bars([Bar(0, 1, 2, 0.5, 1.5, time_close=60_001)])
     with pytest.raises(BarValidationError, match="closes outside"):
         validate_lower_timeframe_bars(
-            BacktestEngine(BacktestConfig("BTC", "1", 0, 1)), lower, parent
+            BacktestEngine(BacktestConfig("BTC", "1", 0, 1, finality_policy="ALLOW_OPEN")), lower, parent
         )
 
     sell_limit = _order("S", side="sell", direction="short", order_type="limit")
     sell_limit.limit_price = 10.0
     eng = types.SimpleNamespace(
-        config=BacktestConfig("BTC", "1", 0, 1, limit_gap_fill_policy="tradingview")
+        config=BacktestConfig("BTC", "1", 0, 1, limit_gap_fill_policy="tradingview", finality_policy="ALLOW_OPEN")
     )
     assert limit_fill_price(eng, sell_limit, 11.0, True) == 11.0
 
@@ -279,7 +316,8 @@ def test_fill_scanner_trailing_pending_and_margin_recalc_branches() -> None:
             calc_on_order_fills=True,
             margin_long=50.0,
             qty_step=1000.0,
-        )
+        finality_policy="ALLOW_OPEN",
+         )
     )
     trailing = _order(
         "T",
@@ -311,7 +349,7 @@ def test_fill_scanner_trailing_pending_and_margin_recalc_branches() -> None:
 
     open_order = _order("O", kind="entry", order_type="market", created=0)
     engine2 = types.SimpleNamespace(
-        config=BacktestConfig("BTC", "1", 0, 1, calc_on_order_fills=True),
+        config=BacktestConfig("BTC", "1", 0, 1, calc_on_order_fills=True, finality_policy="ALLOW_OPEN"),
         _matching_open_trades=lambda from_entry: [],
         _limit_fill_price=lambda order, price, open_: price,
     )
@@ -333,7 +371,9 @@ def test_native_run_loop_legacy_strategy_signature_and_early_stops() -> None:
     engine = BacktestEngine(
         BacktestConfig(
             "BTC", "1", 0, 120_000, required_outputs=set(), collect_equity_curve=False
-        )
+        ,
+         finality_policy="ALLOW_OPEN"
+         )
     )
     result = run_native_strategy(engine, LegacyStrategy, {}, _series(), 0.0, None)
     assert result.status == "completed"
@@ -353,7 +393,7 @@ def test_native_run_loop_legacy_strategy_signature_and_early_stops() -> None:
 
 
 def test_realtime_checkpoint_runtime_fallback_and_restore_errors() -> None:
-    engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1))
+    engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, finality_policy="ALLOW_OPEN"))
 
     class Runtime:
         def export_state(self, include_varip: bool) -> dict[str, bool]:
@@ -379,7 +419,7 @@ def test_realtime_checkpoint_runtime_fallback_and_restore_errors() -> None:
 
 def test_resume_restore_diagnostic_policy_and_runtime_strategy_errors() -> None:
     engine = BacktestEngine(
-        BacktestConfig("BTC", "1", 0, 1, resume_validation_policy="diagnostic")
+        BacktestConfig("BTC", "1", 0, 1, resume_validation_policy="diagnostic", finality_policy="ALLOW_OPEN")
     )
     broker = engine._export_realtime_broker_state()
     resume = BacktestResumeState(
@@ -415,7 +455,8 @@ def test_result_builder_plot_recorders_and_metric_errors() -> None:
         1,
         required_metrics={"unknown", "sharpe", "sortino"},
         collect_equity_curve=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     engine = BacktestEngine(cfg)
     runtime = types.SimpleNamespace(
         plot_recorder=types.SimpleNamespace(get_records=lambda: [{"name": "p"}])
@@ -432,7 +473,7 @@ def test_result_builder_plot_recorders_and_metric_errors() -> None:
     strategy = types.SimpleNamespace(
         _pine_runtime=types.SimpleNamespace(plot_recorder=[{"raw": True}])
     )
-    result2 = BacktestEngine(BacktestConfig("BTC", "1", 0, 1))._result(
+    result2 = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, finality_policy="ALLOW_OPEN"))._result(
         _series(), None, "completed", None, 1.0, strategy=strategy
     )
     assert result2.plots == [{"raw": True}]
@@ -451,12 +492,12 @@ def test_generated_strategy_config_mismatch_line_and_cli_main_module(
     opts = GeneratedStrategyAdapterOptions(fail_on_config_mismatch=True)
     with pytest.raises(Exception, match="mismatch"):
         cls._validate_generated_declaration(
-            Generated(), opts, BacktestConfig("BTC", "1", 0, 1)
+            Generated(), opts, BacktestConfig("BTC", "1", 0, 1, finality_policy="ALLOW_OPEN")
         )
 
     monkeypatch.setattr(sys, "argv", ["backtest-engine"])
     with pytest.raises(SystemExit) as exc:
-        runpy.run_module("backtest_engine.cli.main", run_name="__main__")
+        _run_module_as_main("backtest_engine.cli.main")
     assert exc.value.code == 0
 
 
@@ -477,7 +518,7 @@ def test_infra_error_and_main_branches(
         sys, "argv", ["distribution", "manifest", "--root", str(tmp_path)]
     )
     with pytest.raises(SystemExit) as exc:
-        runpy.run_module("backtest_engine.distribution", run_name="__main__")
+        _run_module_as_main("backtest_engine.distribution")
     assert exc.value.code == 1
 
     bad = tmp_path / "bad"
@@ -490,7 +531,7 @@ def test_infra_error_and_main_branches(
         sys, "argv", ["quality", "architecture", str(bad), "--max-lines", "1"]
     )
     with pytest.raises(SystemExit) as exc:
-        runpy.run_module("backtest_engine.quality", run_name="__main__")
+        _run_module_as_main("backtest_engine.quality")
     assert exc.value.code == 1
 
     relroot = tmp_path / "rel"
@@ -505,7 +546,7 @@ def test_infra_error_and_main_branches(
     )
     monkeypatch.setattr(sys, "argv", ["release", "--root", str(relroot)])
     with pytest.raises(SystemExit) as exc:
-        runpy.run_module("backtest_engine.release", run_name="__main__")
+        _run_module_as_main("backtest_engine.release")
     assert exc.value.code == 1
 
 
@@ -588,7 +629,7 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
     from backtest_engine.core.validation import validate_bars
 
     # _entry_allowed existing-order branch.
-    engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, pyramiding=0))
+    engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, pyramiding=0, finality_policy="ALLOW_OPEN"))
     engine.orders = [_order("P", status="pending", direction="long")]
     assert engine._entry_allowed("long") is False
     engine._validate_lower_timeframe_bars(
@@ -611,7 +652,9 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
     close_engine = BacktestEngine(
         BacktestConfig(
             "BTC", "1", 0, 1, calc_on_order_fills=True, process_orders_on_close=True
-        )
+        ,
+         finality_policy="ALLOW_OPEN"
+         )
     )
     close_order = _order("C", created=0, order_type="market")
     close_engine.orders = [close_order]
@@ -632,7 +675,7 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
     skip_order = _order("S", created=0)
     skip_order.immediately = True
     skip_engine = BacktestEngine(
-        BacktestConfig("BTC", "1", 0, 1, process_orders_on_close=False)
+        BacktestConfig("BTC", "1", 0, 1, process_orders_on_close=False, finality_policy="ALLOW_OPEN")
     )
     skip_engine.orders = [skip_order]
     assert _scan_orders_at_path_point(
@@ -667,7 +710,7 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
     assert trailing.stop_price == 10.0
 
     # Position-accounting no-target and no-unreserved-qty branches.
-    engine2 = BacktestEngine(BacktestConfig("BTC", "1", 0, 1))
+    engine2 = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, finality_policy="ALLOW_OPEN"))
     engine2.position = Position(size=1.0, avg_price=10.0, direction="long")
     engine2.open_trades = []
     assert (
@@ -743,13 +786,13 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
         build_bar_tick_schedule([Bar(10, 1, 2, 0.5, 1, time_close=5)], [])
 
     # Score-mode with no score metrics returns without applying them.
-    score_engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1))
+    score_engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, finality_policy="ALLOW_OPEN"))
     score_engine._score_mode = True
     score_result = score_engine._result(_series(), [], "completed", None, 1.0)
     assert score_result.score_total_trades == 0
 
     # Strict resume config mismatch branch.
-    strict_engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1))
+    strict_engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, finality_policy="ALLOW_OPEN"))
     strict_resume = BacktestResumeState(
         0, "bad", broker_state=strict_engine._export_realtime_broker_state()
     )
@@ -763,7 +806,7 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
         )
 
     # Existing order + risk rejection branch in entry/order command processor.
-    proc_engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, pyramiding=10))
+    proc_engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, pyramiding=10, finality_policy="ALLOW_OPEN"))
     proc_engine.orders = [_order("E", status="active")]
     proc_engine._risk_allows_order = lambda *args: False  # type: ignore[method-assign]
     _apply_entry_or_order_command(
@@ -779,7 +822,7 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
     )
     assert proc_engine.orders[0].qty == 1.0
     pending_close_engine = BacktestEngine(
-        BacktestConfig("BTC", "1", 0, 1, pyramiding=10)
+        BacktestConfig("BTC", "1", 0, 1, pyramiding=10, finality_policy="ALLOW_OPEN")
     )
     pending_close_engine.position = Position(size=1.0, avg_price=10.0, direction="long")
     pending_close_engine.orders = [
@@ -838,7 +881,7 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
             LegacyRuntimeStrategy,
             [_bar(0)],
             params={},
-            config=BacktestConfig("BTC", "1", 0, 1),
+            config=BacktestConfig("BTC", "1", 0, 1, finality_policy="ALLOW_OPEN"),
             execution_window=None,
         )
 
@@ -917,7 +960,7 @@ def test_phase0_release_gate_remaining_branches(monkeypatch: pytest.MonkeyPatch)
     with pytest.raises(UnsupportedGeneratedStrategySemantics, match="direction"):
         _direction("flat")
 
-    engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, pyramiding=10))
+    engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, pyramiding=10, finality_policy="ALLOW_OPEN"))
     bar = _bar(0)
     filled = _order("filled", kind="close", effect="close", side="sell", qty=1.0)
     _consume_opposite_reverse_close_component(engine, filled, "flat", bar, 0)
@@ -1021,12 +1064,8 @@ def test_release_suite_has_no_skip_xfail_or_importorskip_and_declares_siblings()
     assert offenders == []
 
     config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    dev_dependencies = config["project"]["optional-dependencies"]["dev"]
-    assert any(str(item).startswith("pinelib @ git+") for item in dev_dependencies)
-    assert any(
-        str(item).startswith("marketdata-provider @ git+") for item in dev_dependencies
-    )
-    for dependency in dev_dependencies:
-        if " @ git+" in str(dependency):
-            revision = str(dependency).rsplit("@", 1)[1]
-            assert len(revision) == 40 and set(revision) <= set("0123456789abcdef")
+    dependencies = config["project"]["dependencies"]
+    assert "pinelib==5.0.0rc3" in dependencies
+    assert "marketdata-provider==5.0.0rc3" in dependencies
+    assert "openpine-contracts==5.0.0rc3" in dependencies
+    assert not any("git+" in str(item) for item in dependencies)

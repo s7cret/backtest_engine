@@ -37,7 +37,8 @@ def test_stage14_p1_trade_metrics_and_commission_total():
         commission_type="percent",
         commission_value=1.0,
         process_orders_on_close=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(cfg).run(TwoTrades, bars=bars)
 
@@ -83,7 +84,8 @@ def test_trade_max_runup_drawdown_are_stored_for_long_and_short():
         commission_value=0.0,
         process_orders_on_close=True,
         collect_trade_details=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(cfg).run(LongShortExcursions, bars=bars)
 
@@ -112,7 +114,8 @@ def test_trade_max_runup_drawdown_include_entry_commission_like_tradingview():
         commission_value=2.0,
         process_orders_on_close=True,
         collect_trade_details=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(cfg).run(LongShortExcursions, bars=bars)
 
@@ -152,7 +155,8 @@ def test_short_exit_on_next_open_excludes_exit_bar_high_from_trade_drawdown():
         commission_value=0.0,
         process_orders_on_close=False,
         collect_trade_details=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(cfg).run(ShortExitNextOpenExcursion, bars=bars)
 
@@ -192,7 +196,8 @@ def test_long_exit_on_next_open_excludes_exit_bar_low_from_trade_drawdown():
         commission_value=0.0,
         process_orders_on_close=False,
         collect_trade_details=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(cfg).run(LongExitNextOpenExcursion, bars=bars)
 
@@ -230,7 +235,8 @@ def test_risk_max_position_size_is_enforced_by_engine():
         end_time=3,
         commission_type="none",
         process_orders_on_close=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(cfg).run(RiskMaxPositionStrategy, bars=bars)
 
@@ -265,7 +271,8 @@ def test_risk_max_position_size_counts_pending_same_bar_entries():
         commission_type="none",
         process_orders_on_close=True,
         pyramiding=2,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(cfg).run(RiskMaxPositionPendingEntriesStrategy, bars=bars)
 
@@ -277,7 +284,7 @@ def test_risk_max_position_size_counts_pending_same_bar_entries():
 
 
 def test_strategy_context_registers_risk_rules_without_mutating_config():
-    cfg = BacktestConfig(symbol="S", timeframe="1D", start_time=1, end_time=1)
+    cfg = BacktestConfig(symbol="S", timeframe="1D", start_time=1, end_time=1, finality_policy="ALLOW_OPEN")
     ctx = StrategyContext(cfg)
 
     ctx.risk_allow_entry_in("short")
@@ -320,7 +327,8 @@ def test_risk_allow_entry_direction_is_enforced_by_engine():
         end_time=3,
         commission_type="none",
         process_orders_on_close=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(cfg).run(RiskAllowEntryStrategy, bars=bars)
 
@@ -353,7 +361,8 @@ def test_risk_allow_entry_in_opposite_direction_reduces_existing_position():
         end_time=3,
         commission_type="none",
         process_orders_on_close=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(cfg).run(RiskAllowEntryCloseOnlyStrategy, bars=bars)
 
@@ -399,7 +408,8 @@ def test_engine_risk_rules_do_not_mutate_shared_config_between_runs():
         end_time=2,
         commission_type="none",
         process_orders_on_close=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     BacktestEngine(cfg).run(RiskStateMutationStrategy, bars=bars)
     result = BacktestEngine(cfg).run(PlainLongStrategy, bars=bars)
@@ -439,7 +449,8 @@ def test_risk_max_drawdown_cash_uses_peak_equity_not_initial_capital():
         end_time=4,
         commission_type="none",
         process_orders_on_close=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     result = BacktestEngine(cfg).run(RiskCashDrawdownStrategy, bars=bars)
 
@@ -467,7 +478,8 @@ def test_unsupported_intraday_risk_rule_fails_closed():
         start_time=1,
         end_time=2,
         commission_type="none",
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
     with pytest.raises(UnsupportedRiskRuleError, match="max_intraday_loss"):
         BacktestEngine(cfg).run(UnsupportedIntradayRiskStrategy, bars=bars)

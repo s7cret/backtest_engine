@@ -9,7 +9,7 @@ def cfg(**kw):
         symbol="S", timeframe="1D", start_time=1, end_time=5, commission_type="none"
     )
     d.update(kw)
-    return BacktestConfig(**d)
+    return BacktestConfig(**d, finality_policy="ALLOW_OPEN")
 
 
 class TwoCompetingLimitEntries:

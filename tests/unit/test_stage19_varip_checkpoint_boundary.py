@@ -26,7 +26,8 @@ def test_realtime_execution_checkpoint_excludes_varip_from_runtime_snapshot() ->
             start_time=0,
             end_time=1,
             commission_type="none",
-        )
+        finality_policy="ALLOW_OPEN",
+         )
     )
     runtime = RuntimeWithVaripAwareExport()
 

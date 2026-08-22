@@ -210,7 +210,9 @@ class FakeEngineContext:
     def __init__(self) -> None:
         self.config = BacktestConfig(
             symbol="TEST", timeframe="1", start_time=0, end_time=1
-        )
+        ,
+         finality_policy="ALLOW_OPEN"
+         )
         self.state = FakeTradeState()
         self.calls: list[tuple[str, dict[str, Any]]] = []
 

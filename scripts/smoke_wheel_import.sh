@@ -3,6 +3,15 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON:-python}"
+CONTRACTS_WHEEL="${OPENPINE_CONTRACTS_WHEEL:-}"
+PINELIB_WHEEL="${OPENPINE_PINELIB_WHEEL:-}"
+MARKETDATA_WHEEL="${OPENPINE_MARKETDATA_WHEEL:-}"
+for value in "$CONTRACTS_WHEEL" "$PINELIB_WHEEL" "$MARKETDATA_WHEEL"; do
+    if [[ -z "$value" || ! -f "$value" ]]; then
+        echo "exact local Contracts/PineLib/Marketdata wheels are required" >&2
+        exit 1
+    fi
+done
 SMOKE_ROOT="$(mktemp -d)"
 VENV="$SMOKE_ROOT/venv"
 DIST_DIR="$SMOKE_ROOT/dist"
@@ -17,6 +26,7 @@ if (( ${#wheels[@]} != 1 )); then
 fi
 
 "$PYTHON" -m venv "$VENV"
-env -u PYTHONPATH "$VENV/bin/python" -m pip install "${wheels[0]}" --quiet
+env -u PYTHONPATH "$VENV/bin/python" -m pip install \
+    "$CONTRACTS_WHEEL" "$PINELIB_WHEEL" "$MARKETDATA_WHEEL" "${wheels[0]}" --quiet
 cd "$SMOKE_ROOT"
 "$VENV/bin/python" -I -c "import pathlib, backtest_engine; path = pathlib.Path(backtest_engine.__file__).resolve(); assert 'site-packages' in path.parts, path; print(path, backtest_engine.__version__)"

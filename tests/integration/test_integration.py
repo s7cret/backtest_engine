@@ -34,7 +34,9 @@ class Rev:
 def cfg():
     return BacktestConfig(
         symbol="S", timeframe="1D", start_time=1, end_time=4, commission_type="none"
-    )
+    ,
+     finality_policy="ALLOW_OPEN"
+     )
 
 
 def test_bracket_and_reversal_and_batch():

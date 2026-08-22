@@ -106,7 +106,8 @@ def score_config(score_start_ms: int, score_end_ms: int) -> BacktestConfig:
         commission_type="none",
         commission_value=0.0,
         slippage=0.0,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
 
 # ─── Test 1: default behavior unchanged ────────────────────────────────────────
@@ -125,7 +126,8 @@ def test_no_score_fields_phase_trades_is_none():
         initial_capital=10_000.0,
         commission_type="none",
         commission_value=0.0,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     engine = BacktestEngine(config)
     result = engine.run(PrehistoryTradeStrategy, bars=bars)
 
@@ -235,7 +237,8 @@ def test_no_score_config_bars_processed_equals_total():
         initial_capital=10_000.0,
         commission_type="none",
         commission_value=0.0,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     engine = BacktestEngine(config)
     result = engine.run(PrehistoryTradeStrategy, bars=bars)
 

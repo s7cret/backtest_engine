@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from openpine_contracts import Finality
 
 from backtest_engine import BacktestConfig, BacktestEngine, Bar
 from backtest_engine.core.warmup import (
@@ -25,6 +26,8 @@ POLICIES = ("CALC_ONLY", "TRADE_THROUGH_UNSCORED", "CALC_THEN_RESET_BROKER")
 
 class EnterLastWarmup:
     """Emit a long entry on the last warmup bar; keep a running calc value."""
+
+    required_runtime_capabilities: tuple[str, ...] = ()
 
     def __init__(self, params, runtime, ctx):
         self.ctx = ctx
@@ -46,6 +49,8 @@ class EnterLastWarmup:
 
 
 class ReadsBrokerProjection:
+    required_runtime_capabilities = ("broker_projection_reads",)
+
     def __init__(self, params, runtime, ctx):
         self.ctx = ctx
 
@@ -57,6 +62,8 @@ class ReadsBrokerProjection:
 
 
 class HoldThroughScore:
+    required_runtime_capabilities: tuple[str, ...] = ()
+
     def __init__(self, params, runtime, ctx):
         self.ctx = ctx
         self.params = params
@@ -68,7 +75,14 @@ class HoldThroughScore:
 
 def _bars(n: int = BAR_COUNT) -> list[Bar]:
     return [
-        Bar(time=1_000 + i, open=10.0 + i, high=11.0 + i, low=9.0 + i, close=10.5 + i)
+        Bar(
+            time=1_000 + i,
+            open=10.0 + i,
+            high=11.0 + i,
+            low=9.0 + i,
+            close=10.5 + i,
+            finality=Finality.FINAL,
+        )
         for i in range(n)
     ]
 
@@ -261,12 +275,37 @@ def test_strategy_reading_broker_projection_is_rejected_on_unsafe_mode() -> None
             bars=_bars(),
             effective_pre_bars=PRE_BARS,
         )
+
+    missing_metadata = type("MissingCapabilityMetadata", (), {})
+    with pytest.raises(WarmupAdmissionError, match="CAPABILITY_METADATA_REQUIRED"):
+        BacktestEngine(_cfg("CALC_ONLY")).run(
+            missing_metadata,
+            bars=_bars(),
+            effective_pre_bars=PRE_BARS,
+        )
     result = BacktestEngine(_cfg("TRADE_THROUGH_UNSCORED")).run(
         ReadsBrokerProjection,
         bars=_bars(),
         effective_pre_bars=PRE_BARS,
     )
     assert result.status == "completed"
+
+
+def test_warmup_capabilities_accept_support_profile_and_reject_invalid_shape() -> None:
+    profile_reader = type(
+        "ProfileReader", (), {"support_profile": {"broker_projection_reads": True}}
+    )
+    profile_plain = type(
+        "ProfilePlain",
+        (),
+        {"support_profile": {"required_runtime_capabilities": []}},
+    )
+    invalid = type("InvalidCapabilities", (), {"required_runtime_capabilities": "bad"})
+
+    assert strategy_reads_broker_projection(profile_reader) is True
+    assert strategy_reads_broker_projection(profile_plain) is False
+    with pytest.raises(WarmupAdmissionError, match="METADATA_INVALID"):
+        strategy_reads_broker_projection(invalid)
 
 
 def test_warmup_and_score_ledgers_use_different_phase_labels() -> None:

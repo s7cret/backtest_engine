@@ -12,7 +12,7 @@ def cfg(**kw):
         commission_type="none",
     )
     d.update(kw)
-    return BacktestConfig(**d)
+    return BacktestConfig(**d, finality_policy="ALLOW_OPEN")
 
 
 class TwoLotsThenExitMatrix:

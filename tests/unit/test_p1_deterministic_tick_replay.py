@@ -148,7 +148,7 @@ def _config(
         "content_hash_include_equity_curve": False,
     }
     values.update(kwargs)
-    return BacktestConfig(**values)  # type: ignore[arg-type]
+    return BacktestConfig(**values, finality_policy="ALLOW_OPEN")  # type: ignore[arg-type]
 
 
 def _legacy_config(bars: list[Bar]) -> BacktestConfig:
@@ -160,7 +160,8 @@ def _legacy_config(bars: list[Bar]) -> BacktestConfig:
         commission_type="none",
         runtime=SerializableBarRuntime(),
         export_resume_state=True,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
 
 def test_calc_on_every_tick_rolls_back_ordinary_state_and_preserves_varip() -> None:

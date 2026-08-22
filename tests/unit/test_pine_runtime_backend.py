@@ -59,7 +59,8 @@ def _config(bars: BarSeries) -> BacktestConfig:
         commission_value=0.0,
         default_qty_type="fixed",
         default_qty_value=1.0,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
 
 def test_backend_protocol_and_pine_runtime_import_cleanly() -> None:

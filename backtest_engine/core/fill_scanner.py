@@ -159,7 +159,12 @@ def _scan_orders_at_path_point(
             continue
         engine._fill(order, bar, bar_index, fill_price, point)
         filled = True
-        if engine.config.calc_on_order_fills and not current_bar_close_activation:
+        # A close-activated fill may trigger one same-close recalculation.  Do
+        # not recursively rescan further orders created by that recalculation
+        # as fresh close recalculations on the identical price point.
+        if engine.config.calc_on_order_fills and (
+            not current_bar_close_activation or recalc == 0
+        ):
             recalc = _recalculate_after_fill(
                 engine, strategy, ctx, bar, bar_index, fill_price, recalc
             )

@@ -96,7 +96,8 @@ def _engine() -> BacktestEngine:
             start_time=0,
             end_time=999,
             commission_type="none",
-        )
+        finality_policy="ALLOW_OPEN",
+         )
     )
 
 

@@ -23,7 +23,8 @@ def cfg(lower):
         use_bar_magnifier=True,
         bar_magnifier_lower_tf="15",
         bar_magnifier_bars={parent.time: lower},
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
 
 def run(lower):

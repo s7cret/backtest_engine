@@ -24,7 +24,7 @@ def _config(**kw) -> BacktestConfig:
         commission_type="none",
     )
     data.update(kw)
-    return BacktestConfig(**data)
+    return BacktestConfig(**data, finality_policy="ALLOW_OPEN")
 
 
 def test_stage7i_boundary_trace_can_drive_guarded_skeleton_but_run_remains_fail_closed() -> (

@@ -134,7 +134,7 @@ def config(**kwargs: object) -> BacktestConfig:
         "mintick": 1.0,
     }
     values.update(kwargs)
-    return BacktestConfig(**values)  # type: ignore[arg-type]
+    return BacktestConfig(**values, finality_policy="ALLOW_OPEN")  # type: ignore[arg-type]
 
 
 def test_tick_source_validation_provider_edges() -> None:

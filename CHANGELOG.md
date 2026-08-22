@@ -1,5 +1,10 @@
 # Changelog
 
+## 5.0.0rc3
+
+- Adds strict Intent v2.1 replay and detached broker/ledger callback projections.
+- Defaults simulation to explicit closed-bar finality and capability-based warmup admission.
+
 ## 4.0.2
 
 - Pinned the coordinated PineLib and MarketData Provider 4.0.2 releases.

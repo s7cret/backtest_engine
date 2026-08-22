@@ -11,7 +11,7 @@ def cfg(**kw):
         symbol="S", timeframe="1D", start_time=1, end_time=10, commission_type="none"
     )
     d.update(kw)
-    return BacktestConfig(**d)
+    return BacktestConfig(**d, finality_policy="ALLOW_OPEN")
 
 
 class BuyThenTrailing:
@@ -413,8 +413,8 @@ def test_cli_benchmark_and_batch(tmp_path: Path):
     bars.write_text(
         json.dumps(
             [
-                {"time": 1, "open": 10, "high": 10, "low": 10, "close": 10},
-                {"time": 2, "open": 11, "high": 11, "low": 11, "close": 11},
+                {"time": 1, "open": 10, "high": 10, "low": 10, "close": 10, "finality": "FINAL"},
+                {"time": 2, "open": 11, "high": 11, "low": 11, "close": 11, "finality": "FINAL"},
             ]
         )
     )
@@ -489,8 +489,8 @@ def test_cli_batch_process_backend_loads_strategy_module(tmp_path: Path):
     bars.write_text(
         json.dumps(
             [
-                {"time": 1, "open": 10, "high": 10, "low": 10, "close": 10},
-                {"time": 2, "open": 11, "high": 11, "low": 11, "close": 11},
+                {"time": 1, "open": 10, "high": 10, "low": 10, "close": 10, "finality": "FINAL"},
+                {"time": 2, "open": 11, "high": 11, "low": 11, "close": 11, "finality": "FINAL"},
             ]
         )
     )

@@ -59,7 +59,8 @@ def score_config(score_start_ms: int, score_end_ms: int, **kwargs):
         score_start_time=score_start_ms,
         score_end_time=score_end_ms,
         **kwargs,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
 
 
 class TestWarmupQuality:
@@ -73,7 +74,8 @@ class TestWarmupQuality:
             timeframe="15m",
             start_time=bars.time[0],
             end_time=bars.time[-1],
-        )
+        finality_policy="ALLOW_OPEN",
+         )
         engine = BacktestEngine(config)
         result = engine.run(NoopStrategy, bars=bars)
 
@@ -166,7 +168,8 @@ class TestBarsOnlyBoundary:
             timeframe="15m",
             start_time=bars.time[0],
             end_time=bars.time[-1],
-        )
+        finality_policy="ALLOW_OPEN",
+         )
 
         engine = BacktestEngine(config)
         with pytest.raises(ProviderError, match="No bars supplied"):
@@ -179,7 +182,8 @@ class TestBarsOnlyBoundary:
             timeframe="15m",
             start_time=bars.time[0],
             end_time=bars.time[-1],
-        )
+        finality_policy="ALLOW_OPEN",
+         )
 
         result = BacktestEngine(config).run(NoopStrategy, bars=bars)
 

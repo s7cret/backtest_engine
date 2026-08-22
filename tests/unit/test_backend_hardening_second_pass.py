@@ -73,7 +73,8 @@ def test_pine_runtime_backend_indicator_path(monkeypatch: pytest.MonkeyPatch) ->
             start_time=0,
             end_time=1,
             parity_mode="strict",
-        ),
+        finality_policy="ALLOW_OPEN",
+         ),
         execution_window=None,
         effective_pre_bars=0,
         runtime_kwargs={
@@ -110,7 +111,9 @@ def test_pine_runtime_backend_typeerror_fallback_and_strategy_fail_closed(
             [_series().get_bar(0)],
             config=BacktestConfig(
                 symbol="BTCUSDT", timeframe="1", start_time=0, end_time=1
-            ),
+            ,
+             finality_policy="ALLOW_OPEN"
+             ),
             execution_window=None,
             is_indicator=False,
         )
@@ -129,7 +132,8 @@ def test_sync_strategy_context_from_config_updates_context_and_declaration() -> 
         initial_capital=1234.0,
         pyramiding=2,
         qty_step=0.25,
-    )
+    finality_policy="ALLOW_OPEN",
+     )
     _sync_strategy_context_from_config(strategy_ctx, config)
     assert strategy_ctx.initial_capital == 1234.0
     assert strategy_ctx.pyramiding == 2
@@ -316,7 +320,7 @@ def test_apply_backend_result_mutates_engine_summary() -> None:
     adapter.apply_backend_result(
         engine,
         result,
-        BacktestConfig(symbol="BTCUSDT", timeframe="1", start_time=0, end_time=1),
+        BacktestConfig(symbol="BTCUSDT", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN"),
     )
     assert engine.equity == 110.0
     assert engine.cash == 105.0

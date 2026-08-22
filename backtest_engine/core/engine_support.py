@@ -107,6 +107,8 @@ class EngineSupportMixin:
 
     def _cb(self, name: str, *args: Any) -> None:
         fn = getattr(self.callbacks, name, None)
+        if fn is None and self.callbacks.extra is not None:
+            fn = self.callbacks.extra.get(name)
         if fn and not self._callbacks_disabled:
             try:
                 fn(*args)

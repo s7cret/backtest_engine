@@ -37,7 +37,8 @@ def test_backtest_engine_is_the_authoritative_fill_and_trade_ledger() -> None:
             initial_capital=100_000.0,
             commission_type="percent",
             commission_value=0.0,
-        )
+        finality_policy="ALLOW_OPEN",
+         )
     ).run(MarketEntryCloseAll, bars=BARS)
 
     assert result.closed_trades is not None

@@ -11,7 +11,7 @@ def cfg(**kw):
         initial_capital=1000,
     )
     d.update(kw)
-    return BacktestConfig(**d)
+    return BacktestConfig(**d, finality_policy="ALLOW_OPEN")
 
 
 class LongMarketableLimitExit:

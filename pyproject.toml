@@ -4,14 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "backtest-engine"
-version = "4.0.2"
+version = "5.0.0rc3"
 description = "Independent deterministic bar-by-bar strategy backtest engine."
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = "MIT"
 authors = [{name = "MoltBot"}]
 dependencies = [
-  "openpine-contracts @ git+https://github.com/s7cret/openpine-contracts.git@af9ecbc455e9af83cdc609f6b6ff85c40fb6c8bb",
+  "openpine-contracts==5.0.0rc3",
+  "pinelib==5.0.0rc3",
+  "marketdata-provider==5.0.0rc3",
 ]
 
 [project.urls]
@@ -26,19 +28,17 @@ dev = [
   "ruff>=0.5",
   "mypy>=1.10",
   "build>=1.2",
-  "pinelib @ git+https://github.com/s7cret/pinelib.git@801b908e0ba53d1387cfd032cb6d29aa53ba0ca0",
-  "marketdata-provider @ git+https://github.com/s7cret/marketdata-provider.git@4710da99d0320e6fd1ddba6e4ae64b6d7ba68848",
+
 ]
 
 [project.scripts]
 backtest = "backtest_engine.cli.main:main"
 
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+filterwarnings = ["error::RuntimeWarning"]
 
 [tool.ruff]
 line-length = 100
