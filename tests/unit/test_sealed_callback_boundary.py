@@ -544,3 +544,28 @@ def test_protocol_projection_and_no_callback_edge_branches() -> None:
         emit_protocol_bar_commit(
             missing, StatefulEnter, _engine_bars(_bar_envelopes())[0], 0
         )
+
+
+def test_protocol_uses_sealed_close_time_when_compatibility_bar_omits_it() -> None:
+    context = _execution_context()
+    envelopes = _bar_envelopes()
+    bars = _engine_bars(envelopes)
+    bars[0] = Bar(
+        time=bars[0].time,
+        open=bars[0].open,
+        high=bars[0].high,
+        low=bars[0].low,
+        close=bars[0].close,
+        volume=bars[0].volume,
+        time_close=None,
+        finality=bars[0].finality,
+    )
+    events: list[dict[str, Any]] = []
+    BacktestEngine(_config()).run(
+        StatefulEnter,
+        bars=bars,
+        callbacks=BacktestCallbacks(on_protocol_callback=events.append),
+        execution_context=context,
+        bar_envelopes=envelopes,
+    )
+    assert events[0]["bar"] is envelopes[0]

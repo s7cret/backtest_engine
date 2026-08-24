@@ -81,8 +81,10 @@ def validate_protocol_inputs(
             raise ValueError(f"bar envelope {index} identity mismatch")
         values_match = (
             int(envelope["open_time_utc_ms"]) == int(bar.time)
-            and int(envelope["close_time_utc_ms"])
-            == int(bar.time_close if bar.time_close is not None else -1)
+            and (
+                bar.time_close is None
+                or int(envelope["close_time_utc_ms"]) == int(bar.time_close)
+            )
             and Decimal(str(envelope["open"])) == Decimal(str(bar.open))
             and Decimal(str(envelope["high"])) == Decimal(str(bar.high))
             and Decimal(str(envelope["low"])) == Decimal(str(bar.low))
