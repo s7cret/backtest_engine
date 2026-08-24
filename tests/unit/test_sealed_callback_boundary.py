@@ -386,7 +386,7 @@ def test_bar_commit_carries_exact_sealed_state_bytes_and_final_projection() -> N
     message = seal_content_hash(
         {
             "schema_id": "openpine.worker.protocol.v2",
-            "schema_version": "2.2.0",
+            "schema_version": "2.3.0",
             "producer": "backtest_engine",
             "producer_version": first_commit["broker_projection"]["producer_version"],
             "producer_commit": first_commit["broker_projection"]["producer_commit"],
@@ -569,3 +569,27 @@ def test_protocol_uses_sealed_close_time_when_compatibility_bar_omits_it() -> No
         bar_envelopes=envelopes,
     )
     assert events[0]["bar"] is envelopes[0]
+
+
+def test_calc_on_order_fills_emits_sealed_recalc_projection_and_broker_events() -> None:
+    context = _execution_context()
+    envelopes = _bar_envelopes()
+    events: list[dict[str, Any]] = []
+    config = _config()
+    config.calc_on_order_fills = True
+    BacktestEngine(config).run(
+        StatefulEnter,
+        bars=_engine_bars(envelopes),
+        callbacks=BacktestCallbacks(on_protocol_callback=events.append),
+        execution_context=context,
+        bar_envelopes=envelopes,
+    )
+
+    recalc = next(event for event in events if event["kind"] == "RECALC_REQUEST")
+    assert recalc["recalc_iteration"] == 1
+    assert recalc["broker_events"]
+    assert recalc["broker_event_batch_hash"].startswith("sha256:")
+    projection = recalc["broker_projection"]
+    validate_payload("openpine.broker_projection.v1", projection)
+    assert verify_content_hash(projection, schema_id="openpine.broker_projection.v1")
+    assert recalc["broker_projection_hash"] == projection["content_hash"]

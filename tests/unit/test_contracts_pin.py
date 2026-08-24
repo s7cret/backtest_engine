@@ -9,8 +9,8 @@ def test_contracts_pin_and_catalog() -> None:
     assert "git+" not in text
     assert "openpine.intent.v2" in list_schema_ids()
     for commit in (
-        "bb1a56181e37c6f0ff7a60366d9a550103fcb8df",
+        "a91c0ce0d36d60e8dc5cb43e7aa92ab59c2eaa6c",
         "e098947dfd30444273090e521e5c749673909c37",
-        "e5c69acaca70613734985f84a9ef9d28c1a12b79",
+        "9fcbac5fa3d81d3b1c966693c0d3614a558c3637",
     ):
         assert f"ref: {commit}" in workflow

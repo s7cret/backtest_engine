@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from openpine_contracts import (
+    aggregate_batch_hash,
     canonical_dumps,
     decimal_string,
     seal_content_hash,
@@ -336,6 +337,41 @@ def prepare_protocol_run(
     )
     engine._protocol_execution_context = dict(context)
     engine._protocol_bar_envelopes = list(envelopes)
+    engine._protocol_fill_cursor = 0
+
+
+def _broker_events_since_callback(
+    engine: Any, context: Mapping[str, Any], bar: Bar
+) -> list[dict[str, Any]]:
+    version, commit = _engine_identity(context)
+    start = int(getattr(engine, "_protocol_fill_cursor", 0))
+    events: list[dict[str, Any]] = []
+    for fill in engine.fills[start:]:
+        payload = seal_content_hash(
+            {
+                "schema_id": "openpine.broker.v2",
+                "schema_version": "2.2.0",
+                "producer": "backtest_engine",
+                "producer_version": version,
+                "producer_commit": commit,
+                "stack_id": context["stack_manifest_hash"],
+                "created_at_utc_ms": int(bar.time),
+                "serializer_id": "openpine.canonical.json.v1",
+                "content_hash_alg": "sha256",
+                "kind": "event",
+                "body": {
+                    "event_kind": "fill",
+                    "order_id": str(fill.order_id),
+                    "qty": _decimal(fill.qty),
+                    "price": _decimal(fill.price),
+                },
+            },
+            schema_id="openpine.broker.v2",
+        )
+        validate_payload("openpine.broker.v2", payload)
+        events.append(payload)
+    engine._protocol_fill_cursor = len(engine.fills)
+    return events
 
 
 def emit_protocol_bar_begin(engine: Any, bar: Bar, bar_index: int) -> None:
@@ -345,6 +381,34 @@ def emit_protocol_bar_begin(engine: Any, bar: Bar, bar_index: int) -> None:
     envelopes = engine._protocol_bar_envelopes
     if context is None or envelopes is None:
         raise ValueError("protocol callback identity is not initialized")
+    if engine._strategy_callback_recalc_iteration > 0:
+        broker_events = _broker_events_since_callback(engine, context, bar)
+        projection = sealed_broker_projection(
+            engine,
+            context,
+            bar=bar,
+            bar_index=bar_index,
+            recalc_iteration=engine._strategy_callback_recalc_iteration,
+        )
+        engine._cb(
+            "on_protocol_callback",
+            {
+                "kind": "RECALC_REQUEST",
+                "run_id": context["run_id"],
+                "bar_index": bar_index,
+                "bar_open_time_utc_ms": int(bar.time),
+                "recalc_iteration": engine._strategy_callback_recalc_iteration,
+                "broker_events": broker_events,
+                "broker_event_batch_hash": aggregate_batch_hash(
+                    broker_events,
+                    batch_kind="BROKER_EVENT_BATCH",
+                    item_schema_id="openpine.broker.v2",
+                ),
+                "broker_projection": projection,
+                "broker_projection_hash": projection["content_hash"],
+            },
+        )
+        return
     envelope = envelopes[bar_index]
     projection = sealed_broker_projection(
         engine,
