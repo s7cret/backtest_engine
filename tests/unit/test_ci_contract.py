@@ -33,3 +33,12 @@ def test_ci_uses_authoritative_release_gate_without_duplicate_weaker_checks() ->
     assert workflow.count("bash scripts/release_gate.sh") == 1
     assert "python -m mypy backtest_engine" not in workflow
     assert "Wheel import smoke" not in workflow
+
+
+def test_ci_runs_feature_branches_once_via_pull_request_with_concurrency() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "push:\n    branches: [main]" in workflow
+    assert "pull_request:\n    branches: [main]" in workflow
+    assert "group: ci-${{ github.event.pull_request.number || github.ref }}" in workflow
+    assert "cancel-in-progress: true" in workflow
