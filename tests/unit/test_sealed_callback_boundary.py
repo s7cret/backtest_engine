@@ -334,7 +334,26 @@ def test_broker_projection_is_schema_valid_sealed_decimal_and_deterministic() ->
         )
         assert isinstance(projection["cash"], str)
         assert isinstance(projection["equity"], str)
+        assert isinstance(projection["max_drawdown"], str)
+        assert isinstance(projection["max_runup"], str)
         assert isinstance(projection["position"]["qty"], str)
+
+
+def test_projection_preserves_engine_drawdown_and_runup() -> None:
+    engine = BacktestEngine(_config())
+    engine.state.max_drawdown = 42.5
+    engine.state.max_runup = 17.25
+    projection = sealed_broker_projection(
+        engine,
+        _execution_context(),
+        bar=_engine_bars(_bar_envelopes())[0],
+        bar_index=0,
+        recalc_iteration=0,
+    )
+
+    assert projection["max_drawdown"] == "42.5"
+    assert projection["max_runup"] == "17.25"
+    validate_payload("openpine.broker_projection.v1", projection)
 
 
 def test_bar_commit_carries_exact_sealed_state_bytes_and_final_projection() -> None:

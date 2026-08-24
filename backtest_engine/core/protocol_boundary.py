@@ -251,6 +251,8 @@ def sealed_broker_projection(
         "unrealized_pnl": _decimal(engine.state.open_profit),
         "gross_profit": _decimal(engine.state.gross_profit),
         "gross_loss": _decimal(engine.state.gross_loss),
+        "max_drawdown": _decimal(engine.state.max_drawdown),
+        "max_runup": _decimal(engine.state.max_runup),
         "commission": _decimal(commissions),
         "winning_trades": int(engine.state.win_trades),
         "losing_trades": int(engine.state.loss_trades),
