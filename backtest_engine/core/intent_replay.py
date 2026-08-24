@@ -319,6 +319,7 @@ def _apply_risk_intent(ctx: Any, event: Mapping[str, Any]) -> None:
 def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
     kind = str(event["kind"])
     command_id = str(event["command_id"])
+    order_id = str(event["order_id"]) if "order_id" in event else command_id
     qty = decimal_to_engine_number(event.get("qty"), field="qty", ctx=ctx)
     qty_percent = decimal_to_engine_number(
         event.get("qty_percent"), field="qty_percent", ctx=ctx
@@ -328,7 +329,7 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
 
     if kind in {"entry", "order"}:
         getattr(ctx, kind)(
-            command_id,
+            order_id,
             _normalize_direction(event["direction"]),
             qty=qty,
             limit=limit,
@@ -340,7 +341,7 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
         return
     if kind == "exit":
         ctx.exit(
-            command_id,
+            order_id,
             from_entry=event["from_entry"],
             qty=qty,
             qty_percent=qty_percent,
@@ -349,6 +350,17 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
             oca_name=event.get("oca_name"),
             oca_type=event.get("oca_type"),
             comment=event.get("comment"),
+            profit=decimal_to_engine_number(event.get("profit"), field="profit", ctx=ctx),
+            loss=decimal_to_engine_number(event.get("loss"), field="loss", ctx=ctx),
+            trail_price=decimal_to_engine_number(
+                event.get("trail_price"), field="trail_price", ctx=ctx
+            ),
+            trail_points=decimal_to_engine_number(
+                event.get("trail_points"), field="trail_points", ctx=ctx
+            ),
+            trail_offset=decimal_to_engine_number(
+                event.get("trail_offset"), field="trail_offset", ctx=ctx
+            ),
         )
         return
     if kind == "close":
@@ -367,7 +379,7 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
         )
         return
     if kind == "cancel":
-        ctx.cancel(command_id)
+        ctx.cancel(order_id)
         return
     if kind == "cancel_all":
         ctx.cancel_all()

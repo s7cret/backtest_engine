@@ -80,9 +80,9 @@ def test_allow_open_can_trade_open_bar() -> None:
     assert result.open_trades or result.closed_trades
 
 
-def test_contracts_dependency_is_exact_rc3_wheel() -> None:
+def test_contracts_dependency_is_exact_rc4_wheel() -> None:
     text = Path("pyproject.toml").read_text(encoding="utf-8")
-    assert '"openpine-contracts==5.0.0rc3"' in text
+    assert '"openpine-contracts==5.0.0rc4"' in text
     assert "openpine-contracts @ git+" not in text
 
 

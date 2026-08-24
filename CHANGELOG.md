@@ -1,5 +1,11 @@
 # Changelog
 
+## 5.0.0rc4
+
+- Replays canonical Intent v2.2 order identities and exit/trailing decimals without lossy field substitution.
+- Exports early-stop results and resume checkpoints from the exact processed bar prefix.
+- Defaults standalone execution to `strict_5x` and pins Contracts, Marketdata, and PineLib RC.4 SHAs.
+
 ## 5.0.0rc3
 
 - Adds strict Intent v2.1 replay and detached broker/ledger callback projections.

@@ -4,16 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "backtest-engine"
-version = "5.0.0rc3"
+version = "5.0.0rc4"
 description = "Independent deterministic bar-by-bar strategy backtest engine."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{name = "MoltBot"}]
 dependencies = [
-  "openpine-contracts==5.0.0rc3",
-  "pinelib==5.0.0rc3",
-  "marketdata-provider==5.0.0rc3",
+  "openpine-contracts==5.0.0rc4",
+  "pinelib==5.0.0rc4",
+  "marketdata-provider==5.0.0rc4",
 ]
 
 [project.urls]

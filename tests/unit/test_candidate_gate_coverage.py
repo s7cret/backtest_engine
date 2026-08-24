@@ -55,11 +55,11 @@ class _Context:
 def _event(kind: str, **overrides: object) -> dict[str, object]:
     event: dict[str, object] = {
         "schema_id": "openpine.intent.v2",
-        "schema_version": "2.1.0",
+        "schema_version": "2.2.0",
         "producer": "pinelib",
-        "producer_version": "5.0.0-rc.3",
+        "producer_version": "5.0.0-rc.4",
         "producer_commit": "801b908e0ba53d1387cfd032cb6d29aa53ba0ca0",
-        "stack_id": "stack-5",
+        "stack_id": "sha256:" + ("d" * 64),
         "created_at_utc_ms": 0,
         "serializer_id": "openpine.canonical.json.v1",
         "content_hash_alg": "sha256",
@@ -78,6 +78,8 @@ def _event(kind: str, **overrides: object) -> dict[str, object]:
         "recalc_iteration": 0,
         "semantic_profile": "strict_5x",
         "source_span": {
+            "known": True,
+            "source_hash": "sha256:" + ("c" * 64),
             "start_offset": 0,
             "end_offset": 1,
             "start_line": 1,
@@ -88,7 +90,7 @@ def _event(kind: str, **overrides: object) -> dict[str, object]:
         "idempotency_key": "delivery-0",
     }
     if kind in {"entry", "order"}:
-        event.update(order_id="command", direction="long", qty="1.25", stop="100.5")
+        event.update(order_id="command", direction="LONG", qty="1.25", stop="100.5")
     elif kind == "exit":
         event.update(order_id="X", from_entry="L")
     elif kind == "close":
@@ -103,7 +105,7 @@ def _event(kind: str, **overrides: object) -> dict[str, object]:
             risk_scope="entries",
         )
     event.update(overrides)
-    return seal_content_hash(event)
+    return seal_content_hash(event, schema_id="openpine.intent.v2")
 
 
 def test_intent_replay_covers_all_commands_and_fail_closed_edges() -> None:

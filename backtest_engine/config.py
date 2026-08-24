@@ -117,7 +117,7 @@ class BacktestConfig:
     finality_policy: Literal["CLOSED_BAR_ONLY", "ALLOW_OPEN"] = "CLOSED_BAR_ONLY"
     warmup_policy: str | None = None
     score_end_policy: str = "LEAVE_OPEN"
-    semantic_profile: str = "legacy_4x"
+    semantic_profile: str = "strict_5x"
 
     def __post_init__(self) -> None:
         if self.bar_magnifier_missing_policy != "error":

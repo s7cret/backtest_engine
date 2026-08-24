@@ -52,6 +52,7 @@ class NativeRunEngine(Protocol):
     warmup_boundary_buffer_len_before: int | None
     warmup_boundary_buffer_len_after: int | None
     _current_phase: str | None
+    _last_processed_bar_index: int
 
     def _want(self, name: str) -> bool: ...
     def _restore_resume_state(
@@ -186,6 +187,7 @@ def run_native_strategy(
         )
     status: BacktestStatus = "completed"
     early_reason: str | None = None
+    last_processed_index = start_index - 1
     for i in range(start_index, len(series)):
         bar = series.get_bar(i)
         decision = None
@@ -274,6 +276,7 @@ def run_native_strategy(
         stop_now, status, early_reason = _early_stop_state(engine, i, extremes)
         runtime.end_bar()
         engine._cb("on_bar_end", bar, i, engine.state)
+        last_processed_index = i
         if stop_now:
             break
         if machine is not None:
@@ -297,6 +300,7 @@ def run_native_strategy(
     ):
         engine._force_close(series.get_bar(len(series) - 1), len(series) - 1)
     setattr(engine, "_resume_equity_curve_history", clone_state(equity_curve or []))
+    engine._last_processed_bar_index = last_processed_index
     if machine is not None:
         machine.finalize()
         engine.warmup_phase = machine.phase

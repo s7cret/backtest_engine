@@ -23,7 +23,7 @@ from backtest_engine.core.intent_replay import (
 IDENTITY = IntentReplayIdentity(
     run_id="run",
     strategy_id="strategy",
-    stack_id="stack-5",
+    stack_id="sha256:" + ("d" * 64),
     semantic_profile="strict_5x",
     series_id="series",
     instrument_id="S",
@@ -43,9 +43,9 @@ def _event(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_id": "openpine.intent.v2",
-        "schema_version": "2.1.0",
+        "schema_version": "2.2.0",
         "producer": "pinelib",
-        "producer_version": "5.0.0-rc.3",
+        "producer_version": "5.0.0-rc.4",
         "producer_commit": "801b908e0ba53d1387cfd032cb6d29aa53ba0ca0",
         "stack_id": IDENTITY.stack_id,
         "created_at_utc_ms": bar_time,
@@ -66,6 +66,8 @@ def _event(
         "recalc_iteration": recalc_iteration,
         "semantic_profile": IDENTITY.semantic_profile,
         "source_span": {
+            "known": True,
+            "source_hash": "sha256:" + ("c" * 64),
             "start_offset": 0,
             "end_offset": 1,
             "start_line": 1,
@@ -74,7 +76,7 @@ def _event(
             "end_col": 1,
         },
         "idempotency_key": f"misleading:key:{sequence}",
-        "origin_command_kind": "entry.short",
+
     }
     if kind in {"entry", "order"}:
         payload.update(order_id=command_id, direction="LONG", qty="1")
@@ -92,7 +94,7 @@ def _event(
             risk_scope="entries",
         )
     payload.update(updates)
-    return seal_content_hash(payload)
+    return seal_content_hash(payload, schema_id="openpine.intent.v2")
 
 
 class RecordingContext:
@@ -231,8 +233,12 @@ def test_event_id_conflict_is_fail_closed() -> None:
 )
 def test_run_strategy_stack_profile_and_series_identity_are_checked(field: str) -> None:
     event = _event(0)
-    event[field] = "legacy_4x" if field == "semantic_profile" else "drift"
-    event = seal_content_hash(event)
+    event[field] = (
+        "legacy_4x"
+        if field == "semantic_profile"
+        else ("sha256:" + ("e" * 64) if field == "stack_id" else "drift")
+    )
+    event = seal_content_hash(event, schema_id="openpine.intent.v2")
     with pytest.raises(IntentIdentityError, match=field):
         validate_intent_tape([event], expected_identity=IDENTITY)
 

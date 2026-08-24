@@ -91,6 +91,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         self._max_drawdown_stop_cash: float | None = None
         self._max_bars_without_trade = self.config.max_bars_without_trade
         self._max_position_size = self.config.max_position_size
+        self._last_processed_bar_index = -1
         self.orders: list[Order] = []
         self.fills: list[Fill] = []
         self.closed_trades: list[Trade] = []

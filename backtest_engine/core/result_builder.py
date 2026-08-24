@@ -31,6 +31,11 @@ def build_backtest_result(
     strategy: Any | None = None,
     runtime: Any | None = None,
 ) -> BacktestResult:
+    last_processed_index = int(getattr(engine, "_last_processed_bar_index", len(series) - 1))
+    processed_bars = max(0, last_processed_index + 1)
+    processed_series = BarSeries.from_bars(
+        series.get_bar(index) for index in range(processed_bars)
+    )
     profits = [trade.profit for trade in engine.closed_trades]
     stats = summarize(profits, engine.config.initial_capital, engine.equity)
     config_snapshot = engine.config.snapshot()
@@ -61,7 +66,7 @@ def build_backtest_result(
         available_outputs=set(),
         initial_capital=engine.config.initial_capital,
         final_equity=engine.equity,
-        bars_processed=len(series),
+        bars_processed=processed_bars,
         execution_time_ms=execution_time_ms,
         status=status,
         early_stop_reason=reason,
@@ -73,7 +78,7 @@ def build_backtest_result(
             if engine.config.collect_events or engine._want("order_events")
             else None
         ),
-        data_fingerprint=_result_data_fingerprint(engine, series),
+        data_fingerprint=_result_data_fingerprint(engine, processed_series),
         strategy_fingerprint=engine.config.strategy_fingerprint,
         runtime_fingerprint=engine.config.runtime_fingerprint,
     )
@@ -121,7 +126,7 @@ def build_backtest_result(
     mark_available_outputs(result)
     if engine.config.export_resume_state:
         result.resume_state = engine._export_resume_state(
-            len(series) - 1, strategy, runtime, series
+            last_processed_index, strategy, runtime, processed_series
         )
     if engine.config.content_hash_enabled:
         result.content_hash_value = result.content_hash(

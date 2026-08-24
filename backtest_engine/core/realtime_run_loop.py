@@ -75,6 +75,7 @@ def run_realtime_strategy(
     )
     status: BacktestStatus = "completed"
     early_reason: str | None = None
+    last_processed_index = start_index - 1
     engine._realtime_tick_execution = True
     try:
         for tick_slice in schedule[start_index:]:
@@ -160,6 +161,7 @@ def run_realtime_strategy(
             script_runtime.end_bar()
             engine._cb("on_bar_end", parent, i, engine.state)
             engine._end_realtime_script_bar()
+            last_processed_index = i
             if stop_now:
                 break
     finally:
@@ -176,6 +178,7 @@ def run_realtime_strategy(
     ):
         engine._force_close(series.get_bar(len(series) - 1), len(series) - 1)
     engine._resume_equity_curve_history = clone_state(equity_curve or [])
+    engine._last_processed_bar_index = last_processed_index
     return engine._result(
         series,
         equity_curve,
