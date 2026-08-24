@@ -11,6 +11,6 @@ def test_contracts_pin_and_catalog() -> None:
     for commit in (
         "a91c0ce0d36d60e8dc5cb43e7aa92ab59c2eaa6c",
         "e098947dfd30444273090e521e5c749673909c37",
-        "9fcbac5fa3d81d3b1c966693c0d3614a558c3637",
+        "20513db9ea8dbfed8a5abe6dd07ac06107e0a357",
     ):
         assert f"ref: {commit}" in workflow
