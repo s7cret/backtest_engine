@@ -15,6 +15,7 @@ from backtest_engine.core.resume_state import (
     prevalidate_strict_resume_before_external_state,
 )
 from backtest_engine.core.state_snapshot import clone_state
+from backtest_engine.core.protocol_boundary import emit_protocol_bar_commit
 from backtest_engine.errors import TickReplayStateError
 from backtest_engine.models import (
     BacktestResumeState,
@@ -159,6 +160,7 @@ def run_realtime_strategy(
                 engine._cb("on_equity", point)
             stop_now, status, early_reason = _early_stop_state(engine, i, extremes)
             script_runtime.end_bar()
+            emit_protocol_bar_commit(engine, strategy, parent, i)
             engine._cb("on_bar_end", parent, i, engine.state)
             engine._end_realtime_script_bar()
             last_processed_index = i

@@ -17,6 +17,7 @@ from backtest_engine.models import (
     Position,
 )
 from backtest_engine.core.state_snapshot import clone_state
+from backtest_engine.core.protocol_boundary import emit_protocol_bar_commit
 from backtest_engine.results import BacktestResult, EquityExtremes
 
 BacktestStatus = Literal["completed", "failed", "early_stopped"]
@@ -89,6 +90,7 @@ class NativeRunEngine(Protocol):
     def _update_open_profit(self, price: float) -> None: ...
     def _update_state(self) -> None: ...
     def _call_strategy(self, strategy: Any, bar: Bar, i: int) -> None: ...
+
     def _flush(
         self,
         ctx: StrategyContext,
@@ -275,6 +277,7 @@ def run_native_strategy(
             engine._cb("on_equity", point)
         stop_now, status, early_reason = _early_stop_state(engine, i, extremes)
         runtime.end_bar()
+        emit_protocol_bar_commit(engine, strategy, bar, i)
         engine._cb("on_bar_end", bar, i, engine.state)
         last_processed_index = i
         if stop_now:

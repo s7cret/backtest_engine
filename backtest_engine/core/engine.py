@@ -45,6 +45,10 @@ from backtest_engine.core.strategy_projection import (
     compact_broker_projection,
     compact_ledger_projection,
 )
+from backtest_engine.core.protocol_boundary import (
+    emit_protocol_bar_begin,
+    prepare_protocol_run,
+)
 from backtest_engine.core.oca import apply_oca
 from backtest_engine.core.margin_call import maybe_margin_call
 from backtest_engine.core.finality import admit_bars
@@ -141,6 +145,8 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         effective_pre_bars: int | None = None,
         execution_backend: Any | None = None,
         runtime_kwargs: dict[str, Any] | None = None,
+        execution_context: dict[str, Any] | None = None,
+        bar_envelopes: list[dict[str, Any]] | None = None,
     ) -> BacktestResult:
         t0 = time.perf_counter()
         params = params or {}
@@ -154,6 +160,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         series = self._resolve_bars(bars)
         self._effective_mintick = self.config.mintick or infer_price_tick(series)
         series = self._slice_range(series)
+        prepare_protocol_run(self, execution_context, bar_envelopes, series)
 
         plan = build_score_window_plan(
             series_len=len(series),
@@ -276,6 +283,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             self._strategy_callback_recalc_iteration = 0
         else:
             self._strategy_callback_recalc_iteration += 1
+        emit_protocol_bar_begin(self, bar, i)
         projection = self.export_strategy_ledger_projection()
         self._cb(
             "on_strategy_callback",

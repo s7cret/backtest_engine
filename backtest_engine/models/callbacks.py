@@ -23,5 +23,6 @@ class BacktestCallbacks:
     on_equity: Callable[[EquityPoint], None] | None = None
     on_diagnostic: Callable[[Diagnostic], None] | None = None
     on_strategy_callback: Callable[[dict[str, Any]], None] | None = None
+    on_protocol_callback: Callable[[dict[str, Any]], None] | None = None
     # Reserved extension point for external collectors without changing constructor compatibility.
     extra: dict[str, Callable[..., Any]] | None = None
