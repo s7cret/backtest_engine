@@ -1,5 +1,10 @@
 # Changelog
 
+## 5.0.0rc5
+
+- Advances the deterministic engine package and protocol producer identity to RC.5.
+- Pins RC.5 Contracts, Marketdata, and PineLib without changing broker semantics.
+
 ## 5.0.0rc4
 
 - Replays canonical Intent v2.2 order identities and exit/trailing decimals without lossy field substitution.

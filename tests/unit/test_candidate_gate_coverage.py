@@ -57,7 +57,7 @@ def _event(kind: str, **overrides: object) -> dict[str, object]:
         "schema_id": "openpine.intent.v2",
         "schema_version": "2.2.0",
         "producer": "pinelib",
-        "producer_version": "5.0.0-rc.4",
+        "producer_version": "5.0.0-rc.5",
         "producer_commit": "801b908e0ba53d1387cfd032cb6d29aa53ba0ca0",
         "stack_id": "sha256:" + ("d" * 64),
         "created_at_utc_ms": 0,

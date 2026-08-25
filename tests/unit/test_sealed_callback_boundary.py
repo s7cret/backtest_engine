@@ -78,7 +78,7 @@ def _execution_context() -> dict[str, Any]:
         "schema_id": "openpine.execution_context.v1",
         "schema_version": "1.0.0",
         "producer": "openpine",
-        "producer_version": "5.0.0-rc.4",
+        "producer_version": "5.0.0-rc.5",
         "producer_commit": "1" * 40,
         "stack_id": STACK_ID,
         "created_at_utc_ms": 0,
@@ -89,7 +89,7 @@ def _execution_context() -> dict[str, Any]:
         "session_id": "session-rc4",
         "stack_manifest_hash": STACK_ID,
         "wheel_identities": [
-            {"name": name, "version": "5.0.0rc4", "content_hash": HASH_A}
+            {"name": name, "version": "5.0.0rc5", "content_hash": HASH_A}
             for name in STACK_COMPONENTS
         ],
         "schema_hashes": {
@@ -461,7 +461,7 @@ def test_bar_commit_fails_closed_without_strategy_state_export() -> None:
 
 
 def test_protocol_boundary_negative_branches_are_fail_closed() -> None:
-    assert _semver("5.0.0-rc.4") == "5.0.0-rc.4"
+    assert _semver("5.0.0-rc.5") == "5.0.0-rc.5"
     with pytest.raises(ValueError, match="execution identity"):
         _engine_identity({})
 

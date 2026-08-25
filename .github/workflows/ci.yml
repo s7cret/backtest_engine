@@ -24,17 +24,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: s7cret/openpine-contracts
-          ref: 9362f0abe1c4b0924f5f348141826e005cd880ba
+          ref: 6b5e67445e2772057cd877e158c7aa0c58bdfe37
           path: stack/openpine-contracts
       - uses: actions/checkout@v4
         with:
           repository: s7cret/marketdata-provider
-          ref: e098947dfd30444273090e521e5c749673909c37
+          ref: de1cb68be33a9b51ee6ddf2513932c90af721874
           path: stack/marketdata-provider
       - uses: actions/checkout@v4
         with:
           repository: s7cret/pinelib
-          ref: a0ea8e7177e73217c595f978c76ad34bb47d6bec
+          ref: 1204d02ed5cea1a3be8b5e8252bc4d881c539a25
           path: stack/pinelib
       - uses: actions/setup-python@v5
         with:

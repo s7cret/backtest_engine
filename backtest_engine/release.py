@@ -10,7 +10,7 @@ from backtest_engine.distribution import distribution_manifest
 from backtest_engine.quality import architecture_report, duplicate_report
 from backtest_engine.support_profile import verify_realtime_replay_support_profile
 
-EXPECTED_VERSION = "5.0.0rc4"
+EXPECTED_VERSION = "5.0.0rc5"
 
 
 @dataclass(frozen=True)

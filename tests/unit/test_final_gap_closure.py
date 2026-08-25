@@ -1065,7 +1065,7 @@ def test_release_suite_has_no_skip_xfail_or_importorskip_and_declares_siblings()
 
     config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = config["project"]["dependencies"]
-    assert "pinelib==5.0.0rc4" in dependencies
-    assert "marketdata-provider==5.0.0rc4" in dependencies
-    assert "openpine-contracts==5.0.0rc4" in dependencies
+    assert "pinelib==5.0.0rc5" in dependencies
+    assert "marketdata-provider==5.0.0rc5" in dependencies
+    assert "openpine-contracts==5.0.0rc5" in dependencies
     assert not any("git+" in str(item) for item in dependencies)
