@@ -10,10 +10,6 @@ from typing import Any, cast
 import pytest
 
 from backtest_engine import BacktestConfig, BacktestEngine
-from backtest_engine.adapters.generated_strategy import (
-    GeneratedStrategyAdapterOptions,
-    make_generated_strategy_adapter,
-)
 from backtest_engine.context import StrategyContext
 from backtest_engine.core.engine_realtime import RealtimeExecutionCheckpoint
 from backtest_engine.core.fill_scanner import _fill_price_for_order, process_bar_fills
@@ -479,22 +475,7 @@ def test_result_builder_plot_recorders_and_metric_errors() -> None:
     assert result2.plots == [{"raw": True}]
 
 
-def test_generated_strategy_config_mismatch_line_and_cli_main_module(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class Generated:
-        def __init__(
-            self, params: dict[str, Any] | None = None, runtime: Any | None = None
-        ) -> None:
-            self.declaration = types.SimpleNamespace(initial_capital=123.0)
-
-    cls = make_generated_strategy_adapter(Generated)
-    opts = GeneratedStrategyAdapterOptions(fail_on_config_mismatch=True)
-    with pytest.raises(Exception, match="mismatch"):
-        cls._validate_generated_declaration(
-            Generated(), opts, BacktestConfig("BTC", "1", 0, 1, finality_policy="ALLOW_OPEN")
-        )
-
+def test_cli_main_module(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["backtest-engine"])
     with pytest.raises(SystemExit) as exc:
         _run_module_as_main("backtest_engine.cli.main")
@@ -607,7 +588,7 @@ def test_tick_schedule_and_plain_dataclass_edges() -> None:
     )
 
 
-def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_second_gap_engine_and_helper_edges() -> None:
     from backtest_engine.context.command_buffer import EntryOrderPayload
     from backtest_engine.core.strategy_command_processor import (
         _apply_entry_or_order_command,
@@ -618,10 +599,7 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
         _close_target_trades,
         apply_position,
     )
-    from backtest_engine.execution_backends.pine_runtime import (
-        PineRuntimeBackend,
-        UnsupportedPineRuntimeBackendMode,
-    )
+
     from backtest_engine.core.realtime import (
         RealtimeOrderFillOracleStatus,
         validate_realtime_order_fill_oracle_proof,
@@ -849,41 +827,6 @@ def test_second_gap_engine_and_helper_edges(monkeypatch: pytest.MonkeyPatch) -> 
     )
     assert pending_close_engine.orders[-1].position_effect == "open"
 
-    # Pine runtime backend legacy strategy signature fallback and unsupported strategy mode branch.
-    fake_pinelib = types.ModuleType("pinelib")
-    fake_core = types.ModuleType("pinelib.core")
-    fake_bar_mod = types.ModuleType("pinelib.core.bar")
-    fake_types_mod = types.ModuleType("pinelib.core.types")
-    fake_core.PineRuntime = lambda **kwargs: types.SimpleNamespace(
-        plot_recorder=types.SimpleNamespace(set_time_window=lambda *a: None),
-        request_data_end_ms=None,
-    )
-    fake_bar_mod.Bar = lambda **kwargs: types.SimpleNamespace(**kwargs)
-    fake_types_mod.RuntimeConfig = lambda **kwargs: types.SimpleNamespace(**kwargs)
-    fake_types_mod.SymbolInfo = lambda **kwargs: types.SimpleNamespace(**kwargs)
-    fake_types_mod.TimeframeInfo = types.SimpleNamespace(
-        from_string=lambda value: types.SimpleNamespace(interval_ms=60_000)
-    )
-    monkeypatch.setitem(sys.modules, "pinelib", fake_pinelib)
-    monkeypatch.setitem(sys.modules, "pinelib.core", fake_core)
-    monkeypatch.setitem(sys.modules, "pinelib.core.bar", fake_bar_mod)
-    monkeypatch.setitem(sys.modules, "pinelib.core.types", fake_types_mod)
-
-    class LegacyRuntimeStrategy:
-        is_indicator = False
-
-        def __init__(self, params: dict[str, Any], runtime: Any, /) -> None:
-            self.params = params
-            self.runtime = runtime
-
-    with pytest.raises(UnsupportedPineRuntimeBackendMode):
-        PineRuntimeBackend().execute(
-            LegacyRuntimeStrategy,
-            [_bar(0)],
-            params={},
-            config=BacktestConfig("BTC", "1", 0, 1, finality_policy="ALLOW_OPEN"),
-            execution_window=None,
-        )
 
     # validate_bars sorted branch and comparison missing-field branch.
     with pytest.raises(BarValidationError, match="not sorted"):
@@ -925,13 +868,7 @@ def test_last_tiny_gap_branches(
     assert not mismatch_report.matched and mismatch_report.first_mismatch_index == 0
 
 
-def test_phase0_release_gate_remaining_branches(monkeypatch: pytest.MonkeyPatch) -> None:
-    import builtins
-
-    from backtest_engine.adapters.generated_strategy_context import _direction, _is_pine_na
-    from backtest_engine.adapters.generated_strategy_errors import (
-        UnsupportedGeneratedStrategySemantics,
-    )
+def test_phase0_release_gate_remaining_branches() -> None:
     from backtest_engine.context.command_buffer import EntryOrderPayload
     from backtest_engine.core.fill_execution import (
         _consume_opposite_reverse_close_component,
@@ -942,23 +879,9 @@ def test_phase0_release_gate_remaining_branches(monkeypatch: pytest.MonkeyPatch)
     from backtest_engine.core.strategy_command_processor import _apply_entry_or_order_command
     from backtest_engine.models.timeframe import infer_close_from_timeframe
 
-    original_import = builtins.__import__
-
-    def fail_optional_import(name: str, *args: Any, **kwargs: Any) -> Any:
-        if name in {"pinelib.core.na", "marketdata_provider.contracts"}:
-            raise ImportError(name)
-        return original_import(name, *args, **kwargs)
-
-    with monkeypatch.context() as scoped:
-        scoped.setattr(builtins, "__import__", fail_optional_import)
-        assert _is_pine_na(object()) is False
-        assert _is_pine_na(float("nan")) is True
-        assert infer_close_from_timeframe(1_000, "1") == 61_000
-        with pytest.raises(BarValidationError, match="duration is unknown"):
-            infer_close_from_timeframe(1_000, "1M")
-
-    with pytest.raises(UnsupportedGeneratedStrategySemantics, match="direction"):
-        _direction("flat")
+    assert infer_close_from_timeframe(1_000, "1") == 61_000
+    with pytest.raises(BarValidationError, match="duration is unknown"):
+        infer_close_from_timeframe(1_000, "1M")
 
     engine = BacktestEngine(BacktestConfig("BTC", "1", 0, 1, pyramiding=10, finality_policy="ALLOW_OPEN"))
     bar = _bar(0)
@@ -1065,7 +988,7 @@ def test_release_suite_has_no_skip_xfail_or_importorskip_and_declares_siblings()
 
     config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = config["project"]["dependencies"]
-    assert "pinelib==5.0.0rc5" in dependencies
-    assert "marketdata-provider==5.0.0rc5" in dependencies
-    assert "openpine-contracts==5.0.0rc5" in dependencies
+    assert "pinelib==5.0.0rc6" in dependencies
+    assert "marketdata-provider==5.0.0rc6" in dependencies
+    assert "openpine-contracts==5.0.0rc6" in dependencies
     assert not any("git+" in str(item) for item in dependencies)

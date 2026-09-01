@@ -2,19 +2,12 @@ from __future__ import annotations
 
 import json
 import types
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 import pytest
 
 from backtest_engine import BacktestConfig, BacktestEngine
-from backtest_engine.adapters.generated_strategy import (
-    GeneratedStrategyAdapterOptions,
-    GeneratedStrategyBridgeError,
-    UnsupportedGeneratedStrategySemantics,
-    _declaration_config_diff,
-    make_generated_strategy_adapter,
-)
-from backtest_engine.adapters.generated_strategy_context import _is_pine_na
+
 from backtest_engine.batch.shared_data import SharedBarCache
 from backtest_engine.context import CommandBuffer, StrategyContext
 from backtest_engine.context.strategy_context import RiskRule
@@ -50,10 +43,7 @@ from backtest_engine.errors import (
     ResumeUnsupportedError,
     UnsupportedRiskRuleError,
 )
-from backtest_engine.execution_backends.pine_runtime import (
-    _bar_to_pinelib,
-    _sync_strategy_context_from_config,
-)
+
 from backtest_engine.models import (
     BacktestResumeState,
     Bar,
@@ -253,62 +243,6 @@ def test_window_dataclass_validation_and_unknown_warmup_classification() -> None
     assert quality.warmup_confidence == "unknown"
 
 
-def test_generated_strategy_bridge_declaration_validation_edges() -> None:
-    cls = make_generated_strategy_adapter(
-        type(
-            "Generated", (), {"__init__": lambda self, params=None, runtime=None: None}
-        )
-    )
-    with pytest.raises(
-        GeneratedStrategyBridgeError, match="StrategyContext is required"
-    ):
-        cls()
-
-    @dataclass
-    class Decl:
-        calc_on_every_tick: bool = False
-        calc_on_order_fills: bool = False
-        use_bar_magnifier: bool = False
-        margin_long: float = 100.0
-        margin_short: float = 100.0
-        initial_capital: float = 10000.0
-        commission_type: str = "cash_per_order"
-
-    opts = GeneratedStrategyAdapterOptions(fail_on_config_mismatch=False)
-    config = BacktestConfig(
-        symbol="S",
-        timeframe="1",
-        start_time=0,
-        end_time=1,
-        commission_type="fixed_per_order",
-    finality_policy="ALLOW_OPEN",
-     )
-    cls._validate_generated_declaration(
-        types.SimpleNamespace(declaration=None), opts, config
-    )
-    with pytest.raises(
-        UnsupportedGeneratedStrategySemantics, match="calc_on_every_tick"
-    ):
-        cls._validate_generated_declaration(
-            types.SimpleNamespace(declaration=Decl(calc_on_every_tick=True)),
-            opts,
-            config,
-        )
-    with pytest.raises(UnsupportedGeneratedStrategySemantics, match="bar_magnifier"):
-        cls._validate_generated_declaration(
-            types.SimpleNamespace(declaration=Decl(use_bar_magnifier=True)),
-            opts,
-            config,
-        )
-    with pytest.raises(UnsupportedGeneratedStrategySemantics, match="non-standard"):
-        cls._validate_generated_declaration(
-            types.SimpleNamespace(declaration=Decl(margin_long=50)), opts, config
-        )
-    diff = _declaration_config_diff(Decl(initial_capital=123), config)
-    assert diff["initial_capital"]["declaration"] == 123
-    assert "commission_type" not in _declaration_config_diff(Decl(), config)
-
-
 def test_validation_mutates_config_for_required_outputs_and_metrics() -> None:
     cfg = BacktestConfig(
         symbol="S",
@@ -330,9 +264,7 @@ def test_validation_mutates_config_for_required_outputs_and_metrics() -> None:
     assert cfg.collect_trade_details is True
 
 
-def test_clock_resume_snapshot_and_pinelib_helpers_without_optional_dependency() -> (
-    None
-):
+def test_clock_and_resume_snapshot_helpers() -> None:
     clock = BacktestClock()
     clock.advance(_bar(10), 3)
     with pytest.raises(ValueError, match="backwards"):
@@ -351,36 +283,6 @@ def test_clock_resume_snapshot_and_pinelib_helpers_without_optional_dependency()
             object(),
             StrategyContext(engine.config),
         )
-
-    class Ctx:
-        initial_capital = None
-        declaration = types.SimpleNamespace(initial_capital=None)
-
-    ctx = Ctx()
-    _sync_strategy_context_from_config(
-        ctx,
-        BacktestConfig(
-            symbol="S", timeframe="1", start_time=0, end_time=1, initial_capital=42
-        ,
-         finality_policy="ALLOW_OPEN"
-         ),
-    )
-    assert ctx.initial_capital == 42 and ctx.declaration.initial_capital == 42
-
-    class PineBar:
-        def __init__(self, **kwargs: object) -> None:
-            self.__dict__.update(kwargs)
-
-    converted = _bar_to_pinelib(
-        _bar(0), PineBar, fixed_timeframe_ms=60_000, normalize_time_close_exclusive=True
-    )
-    assert converted.time_close == 60_000
-    assert converted.volume == 1.0
-    # Pine v5/v6 semantics: `na` is the canonical NaN, so any NaN
-    # value (including float('nan')) is recognized as a Pine `na`.
-    # Pre-4.0 the helper treated NaN as a regular float; the 4.0 line
-    # aligns with `math.isnan` and Pine Script's `na` sentinel.
-    assert _is_pine_na(float("nan")) is True
 
 
 def test_price_path_bar_magnifier_edges_and_margin_oca_helpers() -> None:
@@ -887,78 +789,6 @@ def test_fill_scanner_remaining_price_and_recalc_branches() -> None:
     assert _stop_fill_price(stop_price_policy, stop, 9.0, True, 0) == 8.0
     stop_price_policy.config.stop_gap_fill_policy = "open_price"
     assert _stop_fill_price(stop_price_policy, stop, 9.0, False, 1) == 8.0
-
-
-def test_generated_adapter_runtime_provider_branches_and_bar_index_mismatch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class PlotRecorder:
-        def __init__(self) -> None:
-            self.windows: list[tuple[object, object]] = []
-
-        def set_time_window(self, a: object, b: object) -> None:
-            self.windows.append((a, b))
-
-    @dataclass(frozen=True)
-    class BarState:
-        islast: bool = False
-        ishistory: bool = True
-        isrealtime: bool = False
-        isnew: bool = True
-        isconfirmed: bool = True
-
-    class Runtime:
-        def __init__(self) -> None:
-            self.config = types.SimpleNamespace(extra={})
-            self.timeframe = types.SimpleNamespace(interval_ms=60_000)
-            self.plot_recorder = PlotRecorder()
-            self.request_data_end_ms = None
-            self.bar_index = 0
-            self.barstate = BarState()
-
-        def begin_bar(self, bar: object) -> None:
-            self.bar = bar
-
-        def end_bar(self) -> None:
-            self.ended = True
-
-    runtime = Runtime()
-    monkeypatch.setattr(
-        "backtest_engine.adapters.generated_strategy._make_pine_runtime",
-        lambda options: runtime,
-    )
-    monkeypatch.setattr(
-        "backtest_engine.adapters.generated_strategy._to_pine_bar",
-        lambda bar, fixed_timeframe_ms=None: types.SimpleNamespace(
-            time=bar.time, time_close=bar.time_close
-        ),
-    )
-
-    class Generated:
-        def __init__(self, params=None, runtime=None):
-            self.ctx = None
-
-        def _process_bar(self, bar):
-            return None
-
-    adapter_cls = make_generated_strategy_adapter(
-        Generated,
-        options=GeneratedStrategyAdapterOptions(
-            data_provider="dp", intrabar_provider="ip"
-        ),
-    )
-    adapter_cls.runtime_capture_plots = False
-    adapter = adapter_cls(
-        ctx=StrategyContext(
-            BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN"),
-            state=StrategyStateView(position_avg_price=0.0),
-        )
-    )
-    assert runtime.data_provider == "dp"
-    assert runtime.intrabar_provider == "ip"
-    assert runtime.plot_recorder.windows == [(1, 0)]
-    with pytest.raises(GeneratedStrategyBridgeError, match="bar index mismatch"):
-        adapter._process_bar(_bar(0), 2)
 
 
 def test_strategy_command_processor_nan_and_close_percent_branches() -> None:

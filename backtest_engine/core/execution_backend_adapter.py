@@ -19,11 +19,7 @@ def resolve_execution_backend(
     execution_backend: ExecutionBackend | str,
 ) -> ExecutionBackend:
     if isinstance(execution_backend, str):
-        if execution_backend != "pine_runtime":
-            raise ConfigError(f"unknown execution backend: {execution_backend}")
-        from backtest_engine.execution_backends import PineRuntimeBackend
-
-        return PineRuntimeBackend()
+        raise ConfigError(f"unknown execution backend: {execution_backend}")
     return execution_backend
 
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 5.0.0rc6
+
+- Moves delegated strategy intent ownership into backtest-engine via the native RC6 PineLib transaction channel.
+- Pins the local runtime siblings to their exact 5.0.0rc6 wheels.
+
 ## 5.0.0rc5
 
 - Advances the deterministic engine package and protocol producer identity to RC.5.

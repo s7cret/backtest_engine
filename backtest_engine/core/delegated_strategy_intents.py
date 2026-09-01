@@ -1,0 +1,359 @@
+"""Backtest-engine-owned conversion of delegated Pine strategy calls."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
+from typing import Any
+
+from openpine_contracts import (
+    content_hash,
+    decimal_string,
+    seal_content_hash,
+    validate_payload,
+    verify_content_hash,
+)
+from pinelib import DelegatedCapabilityDispatcher, DelegatedInvocation, is_na
+
+from backtest_engine.core.intent_replay import IntentReplayIdentity
+
+OWNER = "backtest-engine"
+SCHEMA_ID = "openpine.intent.v2"
+CAPABILITY_ID = "strategy.orders.v1"
+DELEGATION_SCHEMA_ID = "openpine.backtest.engine.v1"
+ENTRY_CAPABILITY_ID = "strategy.entry"
+CLOSE_CAPABILITY_ID = "strategy.close"
+DRAFT_SCHEMA_ID = "backtest_engine.strategy_intent_draft.v1"
+PRODUCER = "backtest_engine"
+PRODUCER_VERSION = "5.0.0-rc.6"
+
+_ENTRY_SYMBOL = "pine:function:strategy.entry"
+_ENTRY_OVERLOAD = f"{_ENTRY_SYMBOL}#canonical"
+_CLOSE_SYMBOL = "pine:function:strategy.close"
+_CLOSE_OVERLOAD = f"{_CLOSE_SYMBOL}#canonical"
+_ENTRY_PARAMETERS = (
+    "id",
+    "direction",
+    "qty",
+    "limit",
+    "stop",
+    "oca_name",
+    "oca_type",
+    "comment",
+    "alert_message",
+    "disable_alert",
+)
+_CLOSE_PARAMETERS = (
+    "id",
+    "comment",
+    "qty",
+    "qty_percent",
+    "alert_message",
+    "immediately",
+    "disable_alert",
+)
+_SYMBOLS = {
+    (_ENTRY_SYMBOL, _ENTRY_OVERLOAD): ("entry", _ENTRY_PARAMETERS),
+    (_CLOSE_SYMBOL, _CLOSE_OVERLOAD): ("close", _CLOSE_PARAMETERS),
+}
+_DELEGATED_STRATEGY_VALUES = frozenset(
+    {
+        "strategy.cash",
+        "strategy.commission.cash_per_contract",
+        "strategy.commission.cash_per_order",
+        "strategy.commission.percent",
+        "strategy.direction.all",
+        "strategy.direction.long",
+        "strategy.direction.short",
+        "strategy.fixed",
+        "strategy.long",
+        "strategy.oca.cancel",
+        "strategy.oca.none",
+        "strategy.oca.reduce",
+        "strategy.percent_of_equity",
+        "strategy.short",
+    }
+)
+_DELEGATED_STRATEGY_STATE_VALUES = frozenset(
+    {
+        "strategy.position_avg_price",
+        "strategy.position_entry_name",
+        "strategy.position_size",
+    }
+)
+
+
+def build_delegated_strategy_dispatcher(
+    handler: "DelegatedStrategyIntentHandler",
+    *,
+    strategy_values: Mapping[str, object] | None = None,
+) -> DelegatedCapabilityDispatcher:
+    if not isinstance(handler, DelegatedStrategyIntentHandler):
+        raise TypeError("handler must be DelegatedStrategyIntentHandler")
+    supplied_values = dict(strategy_values or {})
+    unknown_values = set(supplied_values).difference(_DELEGATED_STRATEGY_STATE_VALUES)
+    if unknown_values:
+        raise ValueError("delegated strategy value target is unsupported")
+    values = {
+        (OWNER, DELEGATION_SCHEMA_ID, capability_id): capability_id
+        for capability_id in _DELEGATED_STRATEGY_VALUES
+    }
+    values.update(
+        {
+            (OWNER, DELEGATION_SCHEMA_ID, capability_id): value
+            for capability_id, value in supplied_values.items()
+        }
+    )
+    return DelegatedCapabilityDispatcher(
+        {
+            (OWNER, DELEGATION_SCHEMA_ID, ENTRY_CAPABILITY_ID): handler,
+            (OWNER, DELEGATION_SCHEMA_ID, CLOSE_CAPABILITY_ID): handler,
+        },
+        values=values,
+    )
+
+
+def _nonempty_string(value: object, field: str) -> str:
+    if type(value) is not str or not value.strip():
+        raise ValueError(f"strategy intent {field} must be a nonempty string")
+    return value
+
+
+def _optional(value: object) -> object | None:
+    return None if value is None or is_na(value) else value
+
+
+def _decimal(value: object, field: str) -> str:
+    value = _optional(value)
+    if value is None or isinstance(value, bool):
+        raise ValueError(f"strategy intent {field} must be numeric")
+    try:
+        if isinstance(value, float):
+            number = Decimal(repr(value))
+        else:
+            number = Decimal(str(value))
+        converted = decimal_string(number)
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise ValueError(f"strategy intent {field} must be a finite decimal") from error
+    return converted
+
+
+def _optional_string(value: object, field: str) -> str | None:
+    value = _optional(value)
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise ValueError(f"strategy intent {field} must be a string or na")
+    return value
+
+
+def _direction(value: object) -> str:
+    value = _optional(value)
+    if type(value) is not str:
+        raise ValueError("strategy intent direction must be LONG or SHORT")
+    normalized = value.removeprefix("strategy.").strip().upper()
+    if normalized not in {"LONG", "SHORT"}:
+        raise ValueError("strategy intent direction must be LONG or SHORT")
+    return normalized
+
+
+def _bind_arguments(arguments: object, parameters: tuple[str, ...]) -> dict[str, object]:
+    if not isinstance(arguments, Mapping) or set(arguments) != {"positional", "named"}:
+        raise ValueError("delegated strategy arguments must contain positional and named")
+    positional = arguments["positional"]
+    named = arguments["named"]
+    if not isinstance(positional, (list, tuple)) or not isinstance(named, Mapping):
+        raise ValueError("delegated strategy positional/named arguments are malformed")
+    if len(positional) > len(parameters):
+        raise ValueError("delegated strategy invocation has too many positional arguments")
+    if any(type(key) is not str or key not in parameters for key in named):
+        raise ValueError("delegated strategy invocation has an unknown named argument")
+    bound = dict(zip(parameters, positional, strict=False))
+    duplicate = set(bound).intersection(named)
+    if duplicate:
+        raise ValueError("delegated strategy invocation repeats an argument")
+    bound.update(named)
+    return bound
+
+
+def _source_span(invocation: DelegatedInvocation) -> dict[str, object]:
+    span = invocation.source_span
+    return {
+        "known": True,
+        "source_hash": span.source_hash,
+        # Runtime SourceSpan has line/column identity but no source offsets. Zero
+        # is the only non-invented contract offset and the invocation id retains
+        # the complete host source identity, including file_id.
+        "start_offset": 0,
+        "end_offset": 0,
+        "start_line": span.start_line,
+        "start_col": span.start_column,
+        "end_line": span.end_line,
+        "end_col": span.end_column,
+    }
+
+
+class DelegatedStrategyIntentHandler:
+    """Prepare delegated strategy calls and seal only committed Intent v2 events."""
+
+    def __init__(
+        self,
+        *,
+        identity: IntentReplayIdentity,
+        producer_commit: str,
+        bar_open_time_utc_ms: Mapping[int, int],
+        default_qty_value: object = 1,
+    ) -> None:
+        if not isinstance(identity, IntentReplayIdentity):
+            raise TypeError("identity must be IntentReplayIdentity")
+        if (
+            type(producer_commit) is not str
+            or len(producer_commit) != 40
+            or any(char not in "0123456789abcdef" for char in producer_commit)
+        ):
+            raise ValueError("producer_commit must be a lowercase git sha")
+        copied_times = dict(bar_open_time_utc_ms)
+        if any(
+            type(index) is not int
+            or index < 0
+            or type(value) is not int
+            or value < 0
+            for index, value in copied_times.items()
+        ):
+            raise ValueError("bar_open_time_utc_ms must map nonnegative integers")
+        self.identity = identity
+        self.producer_commit = producer_commit
+        self.bar_open_time_utc_ms = MappingProxyType(copied_times)
+        self.default_qty_value = _decimal(default_qty_value, "default_qty_value")
+
+    def __call__(self, invocation: DelegatedInvocation) -> Mapping[str, object]:
+        target = _SYMBOLS.get((invocation.symbol_id, invocation.overload_id))
+        if target is None:
+            raise ValueError("unsupported delegated strategy symbol or overload")
+        kind, parameters = target
+        arguments = _bind_arguments(invocation.arguments, parameters)
+        if "id" not in arguments:
+            raise ValueError(f"strategy.{kind} requires id")
+        if kind == "entry" and "direction" not in arguments:
+            raise ValueError("strategy.entry requires direction")
+        bar_time = self.bar_open_time_utc_ms.get(invocation.bar_index)
+        if bar_time is None:
+            raise ValueError("delegated strategy bar identity is unavailable")
+
+        from_entry = _nonempty_string(arguments["id"], "id")
+        command_id = from_entry if kind == "entry" else f"close:{from_entry}"
+        payload: dict[str, Any] = {
+            "schema_id": SCHEMA_ID,
+            "schema_version": "2.2.0",
+            "producer": PRODUCER,
+            "producer_version": PRODUCER_VERSION,
+            "producer_commit": self.producer_commit,
+            "stack_id": self.identity.stack_id,
+            "created_at_utc_ms": bar_time,
+            "serializer_id": "openpine.canonical.json.v1",
+            "content_hash_alg": "sha256",
+            "command_id": command_id,
+            "kind": kind,
+            "run_id": self.identity.run_id,
+            "strategy_id": self.identity.strategy_id,
+            "series_id": self.identity.series_id,
+            "instrument_id": self.identity.instrument_id,
+            "timeframe": self.identity.timeframe,
+            "bar_index": invocation.bar_index,
+            "bar_open_time_utc_ms": bar_time,
+            "phase": invocation.phase,
+            "recalc_iteration": invocation.tick_index,
+            "semantic_profile": self.identity.semantic_profile,
+            "source_span": MappingProxyType(_source_span(invocation)),
+            "idempotency_key": f"intent-delivery:{invocation.invocation_id}",
+        }
+        if kind == "entry":
+            payload.update(
+                {
+                    "order_id": command_id,
+                    "direction": _direction(arguments["direction"]),
+                    "qty": (
+                        self.default_qty_value
+                        if _optional(arguments.get("qty")) is None
+                        else _decimal(arguments["qty"], "qty")
+                    ),
+                    "stop": (
+                        None
+                        if _optional(arguments.get("stop")) is None
+                        else _decimal(arguments["stop"], "stop")
+                    ),
+                    "limit": (
+                        None
+                        if _optional(arguments.get("limit")) is None
+                        else _decimal(arguments["limit"], "limit")
+                    ),
+                    "oca_name": _optional_string(arguments.get("oca_name"), "oca_name"),
+                    "oca_type": _optional_string(arguments.get("oca_type"), "oca_type"),
+                    "comment": _optional_string(arguments.get("comment"), "comment"),
+                }
+            )
+        else:
+            immediate = _optional(arguments.get("immediately"))
+            if immediate is not None and type(immediate) is not bool:
+                raise ValueError("strategy intent immediately must be a bool")
+            payload.update(
+                {
+                    "from_entry": from_entry,
+                    "comment": _optional_string(arguments.get("comment"), "comment"),
+                    "immediately": False if immediate is None else immediate,
+                }
+            )
+            for field in ("qty", "qty_percent"):
+                value = _optional(arguments.get(field))
+                if value is not None:
+                    payload[field] = _decimal(value, field)
+        if _optional(arguments.get("alert_message")) is not None:
+            payload["alert_message"] = _optional_string(
+                arguments["alert_message"], "alert_message"
+            )
+        if _optional(arguments.get("disable_alert")) is not None:
+            if type(arguments["disable_alert"]) is not bool:
+                raise ValueError("strategy intent disable_alert must be a bool")
+            payload["disable_alert"] = arguments["disable_alert"]
+        return MappingProxyType(
+            {
+                "draft_schema_id": DRAFT_SCHEMA_ID,
+                "payload": MappingProxyType(payload),
+            }
+        )
+
+    def seal_committed(
+        self,
+        drafts: Iterable[object],
+        *,
+        start_sequence: int = 0,
+    ) -> tuple[dict[str, Any], ...]:
+        """Seal committed drafts with caller-owned contiguous intent sequencing."""
+
+        if type(start_sequence) is not int or start_sequence < 0:
+            raise ValueError("start_sequence must be a nonnegative integer")
+        sealed_intents: list[dict[str, Any]] = []
+        for offset, draft in enumerate(drafts):
+            if (
+                not isinstance(draft, Mapping)
+                or set(draft) != {"draft_schema_id", "payload"}
+                or draft.get("draft_schema_id") != DRAFT_SCHEMA_ID
+                or not isinstance(draft.get("payload"), Mapping)
+            ):
+                raise ValueError("committed delegated strategy draft is invalid")
+            payload = dict(draft["payload"])
+            source_span = payload.get("source_span")
+            if not isinstance(source_span, Mapping):
+                raise ValueError("committed delegated strategy source span is invalid")
+            payload["source_span"] = dict(source_span)
+            payload["sequence"] = start_sequence + offset
+            payload["event_id"] = (
+                f"intent-event:{content_hash(payload, schema_id=SCHEMA_ID)}"
+            )
+            sealed = seal_content_hash(payload, schema_id=SCHEMA_ID)
+            validate_payload(SCHEMA_ID, sealed)
+            if not verify_content_hash(sealed, schema_id=SCHEMA_ID):
+                raise ValueError("sealed strategy intent content hash is invalid")
+            sealed_intents.append(sealed)
+        return tuple(sealed_intents)

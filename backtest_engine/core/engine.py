@@ -299,7 +299,11 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             },
         )
         try:
-            strategy._process_bar(bar, i)
+            run_bar = getattr(strategy, "run_bar", None)
+            if callable(run_bar):
+                run_bar(bar, i)
+            else:
+                strategy._process_bar(bar, i)
         except BacktestEngineError:
             raise
         except Exception as e:

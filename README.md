@@ -1,8 +1,8 @@
-# Backtest Engine 5.0.0rc5
+# Backtest Engine 5.0.0rc6
 
 > Independent deterministic bar-by-bar strategy backtest engine for OpenPine-generated strategies and Python strategy classes.
 
-[![Version](https://img.shields.io/badge/version-5.0.0rc5-blue)](https://github.com/s7cret/backtest_engine) [![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)](https://github.com/s7cret/backtest_engine) [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/s7cret/backtest_engine)
+[![Version](https://img.shields.io/badge/version-5.0.0rc6-blue)](https://github.com/s7cret/backtest_engine) [![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)](https://github.com/s7cret/backtest_engine) [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/s7cret/backtest_engine)
 
 
 **GitHub description:** Backtest Engine is the deterministic broker, order, fill, position, trade, equity, and reporting authority for OpenPine backtests.

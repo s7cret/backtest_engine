@@ -13,132 +13,7 @@ from backtest_engine.execution_backends.base import (
     BackendBarResult,
     BackendExecutionResult,
 )
-from backtest_engine.execution_backends.pine_runtime import (
-    PineRuntimeBackend,
-    _sync_strategy_context_from_config,
-)
-from backtest_engine.models import BarSeries, Trade
-from tests.unit.test_generated_strategy_bridge_standalone import install_fake_pinelib
-
-
-class RuntimeStrategy:
-    seen: list[int] = []
-
-    def __init__(
-        self, params: dict[str, Any] | None = None, runtime: Any | None = None
-    ) -> None:
-        self.params = params or {}
-        self.runtime = runtime
-
-    def _process_bar(self, bar: Any) -> None:
-        self.seen.append(bar.time)
-
-
-class PositionalRuntimeStrategy(RuntimeStrategy):
-    def __init__(self, params: dict[str, Any] | None, runtime: Any) -> None:
-        super().__init__(params=params, runtime=runtime)
-
-
-class TypeErrorFirstStrategy(RuntimeStrategy):
-    def __init__(
-        self, params: dict[str, Any] | None = None, runtime: Any | None = None
-    ) -> None:
-        if runtime is not None:
-            raise TypeError("keyword runtime unsupported")
-        super().__init__(params=params, runtime=runtime)
-
-
-def _series() -> BarSeries:
-    return BarSeries(
-        time=[1000, 61_000],
-        open=[1.0, 2.0],
-        high=[2.0, 3.0],
-        low=[0.5, 1.5],
-        close=[1.5, 2.5],
-        volume=[None, 10.0],
-        time_close=[60_999, 120_999],
-    )
-
-
-def test_pine_runtime_backend_indicator_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    install_fake_pinelib(monkeypatch)
-    RuntimeStrategy.seen = []
-    backend = PineRuntimeBackend()
-    result = backend.execute(
-        RuntimeStrategy,
-        [_series().get_bar(0), _series().get_bar(1)],
-        config=BacktestConfig(
-            symbol="BTCUSDT",
-            timeframe="1",
-            start_time=0,
-            end_time=1,
-            parity_mode="strict",
-        finality_policy="ALLOW_OPEN",
-         ),
-        execution_window=None,
-        effective_pre_bars=0,
-        runtime_kwargs={
-            "plot_from_ms": 0,
-            "plot_to_ms": 61_000,
-            "tv_export_barstate": True,
-            "normalize_time_close_exclusive": True,
-            "progress_callback": lambda done, total: progress.append((done, total)),
-            "symbol": "ETHUSDT",
-            "timeframe": "1",
-        },
-        params={"x": 1},
-        is_indicator=True,
-    )
-    assert result.diagnostics["backend"] == "pine_runtime"
-    assert result.trades == []
-    assert result.bar_results == []
-    assert RuntimeStrategy.seen == [1000, 61_000]
-    assert progress == [(1, 2), (2, 2)]
-    assert result.plots is not None
-
-
-progress: list[tuple[int, int]] = []
-
-
-def test_pine_runtime_backend_typeerror_fallback_and_strategy_fail_closed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    install_fake_pinelib(monkeypatch)
-    backend = PineRuntimeBackend()
-    with pytest.raises(Exception, match="make_generated_strategy_adapter"):
-        backend.execute(
-            PositionalRuntimeStrategy,
-            [_series().get_bar(0)],
-            config=BacktestConfig(
-                symbol="BTCUSDT", timeframe="1", start_time=0, end_time=1
-            ,
-             finality_policy="ALLOW_OPEN"
-             ),
-            execution_window=None,
-            is_indicator=False,
-        )
-
-
-def test_sync_strategy_context_from_config_updates_context_and_declaration() -> None:
-    declaration = types.SimpleNamespace(initial_capital=0.0, pyramiding=0, qty_step=0.0)
-    strategy_ctx = types.SimpleNamespace(
-        declaration=declaration, initial_capital=0.0, pyramiding=0
-    )
-    config = BacktestConfig(
-        symbol="BTCUSDT",
-        timeframe="1",
-        start_time=0,
-        end_time=1,
-        initial_capital=1234.0,
-        pyramiding=2,
-        qty_step=0.25,
-    finality_policy="ALLOW_OPEN",
-     )
-    _sync_strategy_context_from_config(strategy_ctx, config)
-    assert strategy_ctx.initial_capital == 1234.0
-    assert strategy_ctx.pyramiding == 2
-    assert declaration.initial_capital == 1234.0
-    assert declaration.qty_step == 0.25
+from backtest_engine.models import Trade
 
 
 def test_strategy_state_view_all_accessors_and_defaults() -> None:
@@ -219,9 +94,8 @@ def test_strategy_state_view_all_accessors_and_defaults() -> None:
 
 
 def test_backend_adapter_helpers_and_error_paths() -> None:
-    assert isinstance(
-        adapter.resolve_execution_backend("pine_runtime"), PineRuntimeBackend
-    )
+    with pytest.raises(ConfigError, match="unknown execution backend"):
+        adapter.resolve_execution_backend("pine_runtime")
     with pytest.raises(ConfigError, match="unknown execution backend"):
         adapter.resolve_execution_backend("missing")
     with pytest.raises(ConfigError, match="must provide execute"):

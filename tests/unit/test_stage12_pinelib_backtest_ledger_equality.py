@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import pinelib
-import pytest
-from pinelib.errors import PineStrategyError
+from pinelib import CallbackFrame, RuntimeLanguageContext, RuntimeSession
+from pinelib.events import SourceSpan
 
 from backtest_engine import BacktestConfig, BacktestEngine, Bar
+from backtest_engine.core.delegated_strategy_intents import (
+    DELEGATION_SCHEMA_ID,
+    ENTRY_CAPABILITY_ID,
+    OWNER,
+    DelegatedStrategyIntentHandler,
+    build_delegated_strategy_dispatcher,
+)
+from backtest_engine.core.intent_replay import IntentReplayIdentity
 
 BARS = [
     Bar(1, 10, 10, 10, 10, time_close=2),
@@ -51,20 +59,67 @@ def test_backtest_engine_is_the_authoritative_fill_and_trade_ledger() -> None:
     assert result.final_equity == 100_006
 
 
-def test_pinelib_records_intents_but_refuses_to_create_a_second_fill_ledger() -> None:
-    strategy = pinelib.StrategyContext()
-    runtime = pinelib.PineRuntime(
-        pinelib.SymbolInfo("S", mintick=0.01),
-        pinelib.TimeframeInfo.from_string("D"),
-        config=pinelib.RuntimeConfig(),
+def test_pinelib_records_delegated_intents_without_creating_a_fill_ledger() -> None:
+    handler = DelegatedStrategyIntentHandler(
+        identity=IntentReplayIdentity(
+            run_id="run-ledger-boundary",
+            strategy_id="strategy-ledger-boundary",
+            stack_id="sha256:" + "a" * 64,
+            semantic_profile="strict_5x",
+            series_id="series-ledger-boundary",
+            instrument_id="S",
+            timeframe="1D",
+        ),
+        producer_commit="b" * 40,
+        bar_open_time_utc_ms={0: 1},
     )
-    strategy.attach_runtime(runtime)
-    bar = pinelib.Bar(1, 10, 10, 10, 10, volume=0.0, time_close=2)
-    runtime.begin_bar(bar)
-    strategy.entry("L", "long", qty=2)
+    runtime = RuntimeSession(
+        RuntimeLanguageContext(
+            6,
+            "2026-09-01",
+            "pine-v6",
+            "sha256:" + "c" * 64,
+            "compiler_annotation",
+        ),
+        delegated_dispatcher=build_delegated_strategy_dispatcher(handler),
+    )
+    transaction = runtime.begin(CallbackFrame("HISTORICAL_EVAL", 0, bar_index=0))
+    direction = transaction.resolve_delegated_value(
+        owner=OWNER,
+        schema_id=DELEGATION_SCHEMA_ID,
+        capability_id="strategy.long",
+    )
+    transaction.dispatch_delegated(
+        owner=OWNER,
+        schema_id=DELEGATION_SCHEMA_ID,
+        capability_id=ENTRY_CAPABILITY_ID,
+        symbol_id="pine:function:strategy.entry",
+        overload_id="pine:function:strategy.entry#canonical",
+        arguments={"positional": ["L", direction], "named": {"qty": 2}},
+        call_site_id="main.pine:1:1",
+        source_span=SourceSpan(
+            "sha256:" + "d" * 64,
+            "main.pine",
+            1,
+            1,
+            1,
+            40,
+        ),
+    )
 
-    with pytest.raises(PineStrategyError, match="records order intents only"):
-        strategy.process_orders_for_bar(runtime=runtime, bar=bar)
+    committed = transaction.commit()
+    intents = handler.seal_committed(
+        [output.value for output in committed.delegated_outputs]
+    )
 
-    assert len(strategy.pending_orders) == 1
-    assert strategy.pending_orders[0].id == "L"
+    assert len(intents) == 1
+    assert intents[0]["kind"] == "entry"
+    assert intents[0]["order_id"] == "L"
+    assert intents[0]["qty"] == "2"
+    assert {
+        "fill_price",
+        "trade_id",
+        "position_size",
+        "realized_pnl",
+        "equity",
+    }.isdisjoint(intents[0])

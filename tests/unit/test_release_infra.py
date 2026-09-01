@@ -23,7 +23,7 @@ from backtest_engine.results.tv_stream_compare import StreamingTradeComparator
 
 
 def test_release_manifest_and_distribution_are_green(tmp_path: Path, capsys) -> None:
-    assert __version__ == "5.0.0rc5"
+    assert __version__ == "5.0.0rc6"
     report = release_report(Path.cwd())
     assert report.ok, report
     assert distribution_manifest(Path.cwd()).forbidden_count == 0
@@ -39,11 +39,11 @@ def test_release_manifest_and_distribution_are_green(tmp_path: Path, capsys) -> 
 
 
 def test_distribution_zip_builder_and_hygiene(tmp_path: Path) -> None:
-    output = tmp_path / "backtest-engine-5.0.0rc5.zip"
-    build_zip(Path.cwd(), output, archive_root="backtest-engine-5.0.0rc5")
+    output = tmp_path / "backtest-engine-5.0.0rc6.zip"
+    build_zip(Path.cwd(), output, archive_root="backtest-engine-5.0.0rc6")
     with zipfile.ZipFile(output) as zf:
         names = zf.namelist()
-    assert "backtest-engine-5.0.0rc5/pyproject.toml" in names
+    assert "backtest-engine-5.0.0rc6/pyproject.toml" in names
     assert not any("__pycache__" in name or name.endswith(".pyc") for name in names)
 
 
