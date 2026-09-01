@@ -354,6 +354,16 @@ def test_require_live_tape_rejects_empty_and_returns_validated_copy() -> None:
     assert validated.events[0]["qty"] == "1"
 
 
+def test_require_live_tape_can_validate_a_suffix_from_sequence_origin() -> None:
+    first = _event(0)
+    later = _event(1)
+    require_live_tape([first, later], expected_identity=IDENTITY)
+    suffix = require_live_tape(
+        [later], expected_identity=IDENTITY, sequence_origin=1
+    )
+    assert suffix.events[0]["sequence"] == 1
+
+
 def test_replay_validation_and_decimal_defensive_edges() -> None:
     with pytest.raises(IntentTapeValidationError, match="not a mapping"):
         validate_intent_tape([object()])  # type: ignore[list-item]

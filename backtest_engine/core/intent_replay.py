@@ -154,6 +154,7 @@ def validate_intent_tape(
     events: Sequence[Mapping[str, Any]],
     *,
     expected_identity: IntentReplayIdentity | None = None,
+    sequence_origin: int = 0,
 ) -> ValidatedIntentTape:
     """Validate schema, seals, identity, and total ordering before any replay."""
 
@@ -171,9 +172,9 @@ def validate_intent_tape(
     for index, raw in enumerate(rows):
         event = _schema_validate(raw, index)
         sequence = int(event["sequence"])
-        if sequence != index:
+        if sequence != index + sequence_origin:
             raise IntentTapeValidationError(
-                f"intent sequence must be contiguous from zero: expected {index}, got {sequence}",
+                f"intent sequence must be contiguous from zero: expected {index + sequence_origin}, got {sequence}",
                 details={"index": index, "sequence": sequence},
             )
 
@@ -230,10 +231,15 @@ def require_live_tape(
     events: Sequence[Mapping[str, Any]],
     *,
     expected_identity: IntentReplayIdentity | None = None,
+    sequence_origin: int = 0,
 ) -> ValidatedIntentTape:
     """Return an immutable replay unit only after strict contract validation."""
 
-    return validate_intent_tape(events, expected_identity=expected_identity)
+    return validate_intent_tape(
+        events,
+        expected_identity=expected_identity,
+        sequence_origin=sequence_origin,
+    )
 
 
 def _normalize_direction(value: object) -> str:
