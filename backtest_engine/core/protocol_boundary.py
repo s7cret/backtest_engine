@@ -141,9 +141,9 @@ def _trade_for_fill(engine: Any, order_id: str) -> str | None:
     return None
 
 
-def _fill_rows(engine: Any) -> list[dict[str, Any]]:
+def _fill_rows(engine: Any, start: int = 0) -> list[dict[str, Any]]:
     rows = []
-    for index, fill in enumerate(engine.fills):
+    for index, fill in enumerate(engine.fills[start:], start=start):
         rows.append(
             {
                 "fill_id": f"{fill.order_id}:{fill.bar_index}:{index}",
@@ -176,9 +176,9 @@ def _open_trade_rows(engine: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _closed_trade_rows(engine: Any) -> list[dict[str, Any]]:
+def _closed_trade_rows(engine: Any, start: int = 0) -> list[dict[str, Any]]:
     rows = []
-    for trade in engine.closed_trades:
+    for trade in engine.closed_trades[start:]:
         if (
             trade.exit_price is None
             or trade.exit_bar_index is None
@@ -217,6 +217,8 @@ def sealed_broker_projection(
     if direction not in {"FLAT", "LONG", "SHORT"}:
         raise ValueError("broker position direction is invalid")
     commissions = sum(float(fill.commission) for fill in engine.fills)
+    closed_start = int(getattr(engine, "_protocol_projection_closed_cursor", 0))
+    fill_start = int(getattr(engine, "_protocol_projection_fill_cursor", 0))
     payload = {
         "schema_id": "openpine.broker_projection.v1",
         "schema_version": "1.0.0",
@@ -244,9 +246,9 @@ def sealed_broker_projection(
             ),
         },
         "orders": _order_rows(engine, bar_index),
-        "fills": _fill_rows(engine),
+        "fills": _fill_rows(engine, fill_start),
         "open_trades": _open_trade_rows(engine),
-        "closed_trades": _closed_trade_rows(engine),
+        "closed_trades": _closed_trade_rows(engine, closed_start),
         "realized_pnl": _decimal(engine.state.net_profit),
         "unrealized_pnl": _decimal(engine.state.open_profit),
         "gross_profit": _decimal(engine.state.gross_profit),
@@ -263,6 +265,8 @@ def sealed_broker_projection(
     }
     sealed = seal_content_hash(payload, schema_id="openpine.broker_projection.v1")
     validate_payload("openpine.broker_projection.v1", sealed)
+    engine._protocol_projection_closed_cursor = len(engine.closed_trades)
+    engine._protocol_projection_fill_cursor = len(engine.fills)
     return sealed
 
 
@@ -340,6 +344,8 @@ def prepare_protocol_run(
     engine._protocol_execution_context = dict(context)
     engine._protocol_bar_envelopes = list(envelopes)
     engine._protocol_fill_cursor = 0
+    engine._protocol_projection_closed_cursor = 0
+    engine._protocol_projection_fill_cursor = 0
 
 
 def _broker_events_since_callback(

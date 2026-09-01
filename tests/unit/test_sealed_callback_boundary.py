@@ -612,3 +612,63 @@ def test_calc_on_order_fills_emits_sealed_recalc_projection_and_broker_events() 
     validate_payload("openpine.broker_projection.v1", projection)
     assert verify_content_hash(projection, schema_id="openpine.broker_projection.v1")
     assert recalc["broker_projection_hash"] == projection["content_hash"]
+
+
+class EnterCloseEveryOther:
+    required_runtime_capabilities: tuple[str, ...] = ()
+
+    def __init__(self, params: dict[str, Any], runtime: object, ctx: object) -> None:
+        del params, runtime
+        self.ctx = ctx
+
+    def _process_bar(self, bar: Bar, bar_index: int) -> None:
+        del bar
+        if bar_index % 2 == 0:
+            self.ctx.entry("L", "long", qty=1)
+        else:
+            self.ctx.close("L")
+
+    def export_state(self) -> dict[str, str]:
+        return {"kind": "flip"}
+
+
+def test_broker_projection_emits_closed_trade_deltas_not_full_history() -> None:
+    context = _execution_context()
+    envelopes = [
+        make_canonical_bar(
+            instrument_id="binance:spot:BTCUSDT",
+            timeframe="1m",
+            open_time_utc_ms=index * 60_000,
+            open=str(100 + index),
+            high=str(102 + index),
+            low=str(99 + index),
+            close=str(101 + index),
+            volume=str(10 + index),
+            snapshot_id="snapshot-rc4",
+            provider="binance",
+            provider_revision={"known": True, "revision": "binance-rc4"},
+            producer_commit=MARKETDATA_COMMIT,
+            stack_id=STACK_ID,
+            finality="FINAL",
+            created_at_utc_ms=0,
+        )
+        for index in range(4)
+    ]
+    events: list[dict[str, Any]] = []
+    config = _config()
+    config.end_time = 180_000
+    BacktestEngine(config).run(
+        EnterCloseEveryOther,
+        bars=_engine_bars(envelopes),
+        callbacks=BacktestCallbacks(on_protocol_callback=events.append),
+        execution_context=context,
+        bar_envelopes=envelopes,
+    )
+    closed_batches = [
+        list(event["broker_projection"]["closed_trades"])
+        for event in events
+        if "broker_projection" in event
+    ]
+    emitted = sum(len(batch) for batch in closed_batches)
+    assert emitted == 2
+    assert max(len(batch) for batch in closed_batches) == 1
