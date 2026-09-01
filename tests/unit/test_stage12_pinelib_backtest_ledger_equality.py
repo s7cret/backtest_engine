@@ -72,6 +72,7 @@ def test_pinelib_records_delegated_intents_without_creating_a_fill_ledger() -> N
         ),
         producer_commit="b" * 40,
         bar_open_time_utc_ms={0: 1},
+        config=BacktestConfig(symbol="S", timeframe="1D", start_time=0, end_time=0),
     )
     runtime = RuntimeSession(
         RuntimeLanguageContext(

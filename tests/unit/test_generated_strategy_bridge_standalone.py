@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from backtest_engine import BacktestConfig
 from backtest_engine.core.delegated_strategy_intents import (
     DELEGATION_SCHEMA_ID,
     OWNER,
@@ -24,6 +25,7 @@ def test_rc6_strategy_state_values_are_host_supplied() -> None:
             identity=identity,
             producer_commit="c" * 40,
             bar_open_time_utc_ms={0: 1_000},
+            config=BacktestConfig(symbol="S", timeframe="1m", start_time=0, end_time=0),
         ),
         strategy_values={
             "strategy.position_size": 2.0,

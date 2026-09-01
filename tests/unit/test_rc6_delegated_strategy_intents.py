@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -13,6 +13,7 @@ from pinelib import (
 )
 from pinelib.events import SourceSpan
 
+from backtest_engine import BacktestConfig
 from backtest_engine.core.delegated_strategy_intents import (
     CLOSE_CAPABILITY_ID,
     DELEGATION_SCHEMA_ID,
@@ -64,7 +65,13 @@ def _handler() -> DelegatedStrategyIntentHandler:
         identity=_identity(),
         producer_commit=PRODUCER_COMMIT,
         bar_open_time_utc_ms={4: 1_725_145_600_000},
-        default_qty_value=1.5,
+        config=BacktestConfig(
+            symbol="BINANCE:BTCUSDT",
+            timeframe="1m",
+            start_time=0,
+            end_time=0,
+            default_qty_value=1.5,
+        ),
     )
 
 
@@ -231,6 +238,204 @@ def test_strategy_entry_converts_to_sealed_intents_committed_in_invocation_order
         assert verify_content_hash(intent, schema_id="openpine.intent.v2")
 
 
+@pytest.mark.parametrize(
+    (
+        "default_qty_type",
+        "default_qty_value",
+        "bar_close",
+        "bar_equity",
+        "commission_type",
+        "commission_value",
+        "expected_qty",
+    ),
+    [
+        ("cash", 100, 25, None, "none", 0, "4"),
+        ("percent_of_equity", 10, 25, 2_000, "percent", 25, "6.4"),
+    ],
+)
+def test_missing_entry_qty_preserves_backtest_config_default_qty_semantics(
+    default_qty_type: Literal["fixed", "percent_of_equity", "cash"],
+    default_qty_value: float,
+    bar_close: float,
+    bar_equity: float | None,
+    commission_type: Literal["percent", "fixed_per_order", "fixed_per_contract", "none"],
+    commission_value: float,
+    expected_qty: str,
+) -> None:
+    handler = DelegatedStrategyIntentHandler(
+        identity=_identity(),
+        producer_commit=PRODUCER_COMMIT,
+        bar_open_time_utc_ms={4: 1_725_145_600_000},
+        config=BacktestConfig(
+            symbol="BINANCE:BTCUSDT",
+            timeframe="1m",
+            start_time=0,
+            end_time=0,
+            default_qty_type=default_qty_type,
+            default_qty_value=default_qty_value,
+            commission_type=commission_type,
+            commission_value=commission_value,
+        ),
+        bar_close={4: bar_close},
+        bar_equity={} if bar_equity is None else {4: bar_equity},
+    )
+    tx = _runtime(handler).begin(CallbackFrame("HISTORICAL_EVAL", 0, bar_index=4))
+
+    _dispatch(
+        tx,
+        symbol_id=ENTRY_SYMBOL,
+        overload_id=ENTRY_OVERLOAD,
+        arguments={"positional": ["L", "strategy.long"], "named": {}},
+        line=5,
+    )
+
+    assert _seal_committed(handler, tx.commit())[0]["qty"] == expected_qty
+
+
+@pytest.mark.parametrize(
+    ("default_qty_type", "bar_close", "bar_equity", "message"),
+    [
+        ("cash", {}, {}, "positive bar_close"),
+        ("percent_of_equity", {4: 25}, {}, "requires bar_equity"),
+    ],
+)
+def test_missing_default_quantity_inputs_fail_closed(
+    default_qty_type: Literal["cash", "percent_of_equity"],
+    bar_close: dict[int, float],
+    bar_equity: dict[int, float],
+    message: str,
+) -> None:
+    handler = DelegatedStrategyIntentHandler(
+        identity=_identity(),
+        producer_commit=PRODUCER_COMMIT,
+        bar_open_time_utc_ms={4: 1_725_145_600_000},
+        config=BacktestConfig(
+            symbol="BINANCE:BTCUSDT",
+            timeframe="1m",
+            start_time=0,
+            end_time=0,
+            default_qty_type=default_qty_type,
+        ),
+        bar_close=bar_close,
+        bar_equity=bar_equity,
+    )
+    tx = _runtime(handler).begin(CallbackFrame("HISTORICAL_EVAL", 0, bar_index=4))
+    _dispatch(
+        tx,
+        symbol_id=ENTRY_SYMBOL,
+        overload_id=ENTRY_OVERLOAD,
+        arguments={"positional": ["L", "strategy.long"], "named": {}},
+        line=6,
+    )
+
+    with pytest.raises(PineRuntimeError) as error_info:
+        tx.commit()
+
+    assert error_info.value.code == PL_DELEGATED_HANDLER_FAILURE
+    assert message in str(error_info.value.__cause__)
+
+
+def test_handler_configuration_is_validated_and_detached() -> None:
+    kwargs = {
+        "identity": _identity(),
+        "producer_commit": PRODUCER_COMMIT,
+        "bar_open_time_utc_ms": {4: 1_725_145_600_000},
+    }
+    with pytest.raises(TypeError, match="config must be BacktestConfig"):
+        DelegatedStrategyIntentHandler(**kwargs, config=object())  # type: ignore[arg-type]
+
+    config = BacktestConfig(symbol="S", timeframe="1m", start_time=0, end_time=0)
+    config.default_qty_type = "unsupported"  # type: ignore[assignment]
+    with pytest.raises(ValueError, match="default_qty_type is unsupported"):
+        DelegatedStrategyIntentHandler(**kwargs, config=config)
+
+    with pytest.raises(ValueError, match="map nonnegative integers"):
+        DelegatedStrategyIntentHandler(
+            **kwargs,
+            config=BacktestConfig(symbol="S", timeframe="1m", start_time=0, end_time=0),
+            bar_close={-1: 1},
+        )
+
+
+def test_strategy_oca_enums_are_normalized_for_the_broker() -> None:
+    handler = _handler()
+    tx = _runtime(handler).begin(CallbackFrame("HISTORICAL_EVAL", 0, bar_index=4))
+    for line, oca_type in enumerate(
+        ("strategy.oca.cancel", "strategy.oca.reduce", "strategy.oca.none"), start=20
+    ):
+        _dispatch(
+            tx,
+            symbol_id=ENTRY_SYMBOL,
+            overload_id=ENTRY_OVERLOAD,
+            arguments={
+                "positional": [f"L{line}", "strategy.long"],
+                "named": {"qty": 1, "oca_name": "group", "oca_type": oca_type},
+            },
+            line=line,
+        )
+
+    assert [
+        intent["oca_type"] for intent in _seal_committed(handler, tx.commit())
+    ] == ["cancel", "reduce", "none"]
+
+
+def test_unknown_strategy_oca_enum_fails_closed() -> None:
+    handler = _handler()
+    tx = _runtime(handler).begin(CallbackFrame("HISTORICAL_EVAL", 0, bar_index=4))
+    _dispatch(
+        tx,
+        symbol_id=ENTRY_SYMBOL,
+        overload_id=ENTRY_OVERLOAD,
+        arguments={
+            "positional": ["L", "strategy.long"],
+            "named": {"qty": 1, "oca_type": "strategy.oca.unknown"},
+        },
+        line=29,
+    )
+
+    with pytest.raises(PineRuntimeError) as error_info:
+        tx.commit()
+
+    assert error_info.value.code == PL_DELEGATED_HANDLER_FAILURE
+    assert "oca_type must be cancel, reduce, none, or na" in str(error_info.value.__cause__)
+
+
+@pytest.mark.parametrize(
+    ("capability_id", "symbol_id", "overload_id"),
+    [
+        (ENTRY_CAPABILITY_ID, CLOSE_SYMBOL, CLOSE_OVERLOAD),
+        (CLOSE_CAPABILITY_ID, ENTRY_SYMBOL, ENTRY_OVERLOAD),
+    ],
+)
+def test_delegated_capability_must_match_symbol_and_overload(
+    capability_id: str, symbol_id: str, overload_id: str
+) -> None:
+    handler = _handler()
+    tx = _runtime(handler).begin(CallbackFrame("HISTORICAL_EVAL", 0, bar_index=4))
+    arguments = (
+        {"positional": ["L"], "named": {}}
+        if symbol_id == CLOSE_SYMBOL
+        else {"positional": ["L", "strategy.long"], "named": {"qty": 1}}
+    )
+    tx.dispatch_delegated(
+        owner=OWNER,
+        schema_id=DELEGATION_SCHEMA_ID,
+        capability_id=capability_id,
+        symbol_id=symbol_id,
+        overload_id=overload_id,
+        arguments=arguments,
+        call_site_id="main.pine:30:2",
+        source_span=_span(30),
+    )
+
+    with pytest.raises(PineRuntimeError) as error_info:
+        tx.commit()
+
+    assert error_info.value.code == PL_DELEGATED_HANDLER_FAILURE
+    assert isinstance(error_info.value.__cause__, ValueError)
+    assert "capability, symbol, or overload" in str(error_info.value.__cause__)
+
+
 def test_strategy_close_converts_to_a_sealed_intent() -> None:
     handler = _handler()
     tx = _runtime(handler).begin(
@@ -350,4 +555,4 @@ def test_invalid_delegated_strategy_invocation_fails_without_output(
     assert error_info.value.code == PL_DELEGATED_HANDLER_FAILURE
     assert isinstance(error_info.value.__cause__, ValueError)
     assert message in str(error_info.value.__cause__)
-    assert runtime.transcript.entries[-1]["committed"] is False
+    assert runtime.transcript.entries == []

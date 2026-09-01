@@ -11,17 +11,6 @@ class RealtimeTickProvider(Protocol):
     ) -> Sequence[Tick]: ...
 
 
-class PineRuntime(Protocol):
-    def begin_bar(self, bar: Bar, bar_index: int) -> None: ...
-    def end_bar(self) -> None: ...
-
-
-class GeneratedStrategy(Protocol):
-    ctx: object
-
-    def _process_bar(self, bar: Bar, bar_index: int) -> None: ...
-
-
 class ResultWriter(Protocol):
     def write(self, result: object, path: str) -> None: ...
 

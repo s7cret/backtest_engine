@@ -16,6 +16,7 @@ from openpine_contracts import (
 )
 from pinelib import DelegatedCapabilityDispatcher, DelegatedInvocation, is_na
 
+from backtest_engine.config import BacktestConfig
 from backtest_engine.core.intent_replay import IntentReplayIdentity
 
 OWNER = "backtest-engine"
@@ -54,8 +55,16 @@ _CLOSE_PARAMETERS = (
     "disable_alert",
 )
 _SYMBOLS = {
-    (_ENTRY_SYMBOL, _ENTRY_OVERLOAD): ("entry", _ENTRY_PARAMETERS),
-    (_CLOSE_SYMBOL, _CLOSE_OVERLOAD): ("close", _CLOSE_PARAMETERS),
+    (ENTRY_CAPABILITY_ID, _ENTRY_SYMBOL, _ENTRY_OVERLOAD): ("entry", _ENTRY_PARAMETERS),
+    (CLOSE_CAPABILITY_ID, _CLOSE_SYMBOL, _CLOSE_OVERLOAD): ("close", _CLOSE_PARAMETERS),
+}
+_OCA_TYPES = {
+    "cancel": "cancel",
+    "reduce": "reduce",
+    "none": "none",
+    "strategy.oca.cancel": "cancel",
+    "strategy.oca.reduce": "reduce",
+    "strategy.oca.none": "none",
 }
 _DELEGATED_STRATEGY_VALUES = frozenset(
     {
@@ -148,6 +157,15 @@ def _optional_string(value: object, field: str) -> str | None:
     return value
 
 
+def _oca_type(value: object) -> str | None:
+    value = _optional(value)
+    if value is None:
+        return None
+    if type(value) is not str or value not in _OCA_TYPES:
+        raise ValueError("strategy intent oca_type must be cancel, reduce, none, or na")
+    return _OCA_TYPES[value]
+
+
 def _direction(value: object) -> str:
     value = _optional(value)
     if type(value) is not str:
@@ -203,7 +221,9 @@ class DelegatedStrategyIntentHandler:
         identity: IntentReplayIdentity,
         producer_commit: str,
         bar_open_time_utc_ms: Mapping[int, int],
-        default_qty_value: object = 1,
+        config: BacktestConfig,
+        bar_close: Mapping[int, object] | None = None,
+        bar_equity: Mapping[int, object] | None = None,
     ) -> None:
         if not isinstance(identity, IntentReplayIdentity):
             raise TypeError("identity must be IntentReplayIdentity")
@@ -222,15 +242,55 @@ class DelegatedStrategyIntentHandler:
             for index, value in copied_times.items()
         ):
             raise ValueError("bar_open_time_utc_ms must map nonnegative integers")
+        if not isinstance(config, BacktestConfig):
+            raise TypeError("config must be BacktestConfig")
+        if config.default_qty_type not in {"fixed", "cash", "percent_of_equity"}:
+            raise ValueError("config default_qty_type is unsupported")
+        copied_close = {
+            index: _decimal(value, "bar_close") for index, value in dict(bar_close or {}).items()
+        }
+        copied_equity = {
+            index: _decimal(value, "bar_equity")
+            for index, value in dict(bar_equity or {}).items()
+        }
+        if any(type(index) is not int or index < 0 for index in copied_close | copied_equity):
+            raise ValueError("bar_close and bar_equity must map nonnegative integers")
         self.identity = identity
         self.producer_commit = producer_commit
         self.bar_open_time_utc_ms = MappingProxyType(copied_times)
-        self.default_qty_value = _decimal(default_qty_value, "default_qty_value")
+        self.default_qty_type = config.default_qty_type
+        self.default_qty_value = _decimal(config.default_qty_value, "default_qty_value")
+        self.commission_type = config.commission_type
+        self.commission_value = _decimal(config.commission_value, "commission_value")
+        self.bar_close = MappingProxyType(copied_close)
+        self.bar_equity = MappingProxyType(copied_equity)
+
+    def _default_qty(self, bar_index: int) -> str:
+        value = Decimal(self.default_qty_value)
+        if self.default_qty_type == "fixed":
+            return self.default_qty_value
+        close_text = self.bar_close.get(bar_index)
+        if close_text is None or Decimal(close_text) <= 0:
+            raise ValueError("delegated strategy default quantity requires positive bar_close")
+        denominator = Decimal(close_text)
+        if self.default_qty_type == "cash":
+            return decimal_string(value / denominator)
+        equity_text = self.bar_equity.get(bar_index)
+        if equity_text is None:
+            raise ValueError("delegated percent_of_equity quantity requires bar_equity")
+        if self.commission_type == "percent":
+            denominator *= Decimal(1) + Decimal(self.commission_value) / Decimal(100)
+        return decimal_string(Decimal(equity_text) * value / Decimal(100) / denominator)
 
     def __call__(self, invocation: DelegatedInvocation) -> Mapping[str, object]:
-        target = _SYMBOLS.get((invocation.symbol_id, invocation.overload_id))
+        target = _SYMBOLS.get(
+            (invocation.capability_id, invocation.symbol_id, invocation.overload_id)
+        )
         if target is None:
-            raise ValueError("unsupported delegated strategy symbol or overload")
+            raise ValueError(
+                "unsupported delegated strategy symbol or overload; "
+                "capability, symbol, or overload binding mismatch"
+            )
         kind, parameters = target
         arguments = _bind_arguments(invocation.arguments, parameters)
         if "id" not in arguments:
@@ -274,7 +334,7 @@ class DelegatedStrategyIntentHandler:
                     "order_id": command_id,
                     "direction": _direction(arguments["direction"]),
                     "qty": (
-                        self.default_qty_value
+                        self._default_qty(invocation.bar_index)
                         if _optional(arguments.get("qty")) is None
                         else _decimal(arguments["qty"], "qty")
                     ),
@@ -289,7 +349,7 @@ class DelegatedStrategyIntentHandler:
                         else _decimal(arguments["limit"], "limit")
                     ),
                     "oca_name": _optional_string(arguments.get("oca_name"), "oca_name"),
-                    "oca_type": _optional_string(arguments.get("oca_type"), "oca_type"),
+                    "oca_type": _oca_type(arguments.get("oca_type")),
                     "comment": _optional_string(arguments.get("comment"), "comment"),
                 }
             )

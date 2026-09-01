@@ -39,7 +39,7 @@ The package is intentionally runtime-focused. It does not parse Pine, download m
 | Strategy lifecycle over bars | Pine AST lowering/code generation |
 | Result models and exports | Exchange data fetching |
 | Batch/benchmark/compare helpers | Parameter search orchestration |
-| Optional generated-strategy bridge | Live trading order routing |
+| Generated `run_bar` strategy execution | Live trading order routing |
 
 ## Install
 
@@ -72,7 +72,7 @@ class BuyOnce:
     def __init__(self, params, runtime, ctx):
         self.ctx = ctx
 
-    def _process_bar(self, bar, bar_index):
+    def run_bar(self, bar, bar_index):
         if bar_index == 0:
             self.ctx.entry("L", "long", qty=1)
 
@@ -114,7 +114,7 @@ backtest_engine/
   results/                result models and writers
   batch/                  batch runner and job model
   cli/                    run/compare/export/benchmark/batch commands
-  adapters/               optional generated-strategy/runtime adapters
+  adapters/               boundary data adapters
   tests/                  unit, integration, contract, and release-gate tests
 ```
 
