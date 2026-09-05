@@ -49,7 +49,7 @@ def flush_strategy_commands(
         if kind == "cancel":
             assert isinstance(payload, CancelPayload)
             for order in engine.orders:
-                if order.id == payload.id and order.status in ("pending", "active"):
+                if (order.id == payload.id or order.parent_exit_id == payload.id) and order.status in ("pending", "active"):
                     order.status = "cancelled"
                     engine._cb("on_order_cancelled", order)
                     engine._event(
