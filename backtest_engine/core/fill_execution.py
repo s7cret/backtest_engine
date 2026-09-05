@@ -21,6 +21,14 @@ class FillPricing:
 def execute_fill(
     engine, order: Order, bar: Bar, bar_index: int, price: float, point: str
 ) -> None:
+    if order.kind == "close":
+        available = sum(trade.qty for trade in engine._matching_open_trades(order.from_entry))
+        if available <= 0 or engine.position.direction != order.position_direction:
+            order.status = "cancelled"
+            engine._cb("on_order_cancelled", order)
+            engine._event("ORDER_CANCELLED", "close no longer has a matching position", bar_index, bar.time, order.id)
+            return
+        order.qty = min(order.qty, available)
     if order.kind == "exit":
         available = engine._available_exit_qty(order.from_entry, exclude_order=order)
         if available <= 0:

@@ -125,26 +125,20 @@ def _apply_close_command(
     if engine.position.direction == "flat":
         return
     from_entry = payload.id if kind == "close" else None
-    if kind == "close_all":
-        qty = abs(engine.position.size)
-    elif payload.qty is None and payload.qty_percent is None and from_entry:
-        qty = sum(trade.qty for trade in engine._matching_open_trades(from_entry))
-        if qty <= 0:
-            engine._diag(
-                "ORDER_REJECTED_NO_MATCHING_ENTRY",
-                "close has no matching entry id",
-                "warning",
-                bar_index,
-                bar.time,
-                from_entry,
-            )
-            return
+    available = sum(trade.qty for trade in engine._matching_open_trades(from_entry))
+    if available <= 0:
+        engine._diag(
+            "ORDER_REJECTED_NO_MATCHING_ENTRY", "close has no matching entry id", "warning",
+            bar_index, bar.time, from_entry,
+        )
+        return
+    if kind == "close_all" or (payload.qty is None and payload.qty_percent is None):
+        qty = available
     else:
         qty = engine._qty_from_args(
-            _qty_args(payload.qty, payload.qty_percent),
-            engine.position.size,
-            bar.close,
+            _qty_args(payload.qty, payload.qty_percent), available, bar.close,
         )
+    qty = min(qty, available)
     engine._add_order(
         Order(
             id=payload.id or "close_all",
