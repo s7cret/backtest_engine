@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from backtest_engine.broker.fill_simulator import limit_reached, stop_reached
 from backtest_engine.context import StrategyContext
+from backtest_engine.errors import StrategyRuntimeError
 from backtest_engine.models import Bar, Order
 
 
@@ -158,6 +159,8 @@ def _scan_orders_at_path_point(
         if fill_price is None:
             continue
         engine._fill(order, bar, bar_index, fill_price, point)
+        if order.status != "filled":
+            continue
         filled = True
         # A close-activated fill may trigger one same-close recalculation.  Do
         # not recursively rescan further orders created by that recalculation
@@ -302,18 +305,21 @@ def _recalculate_after_fill(
     engine._update_open_profit(price)
     engine._update_state()
     recalc += 1
-    if recalc > engine.config.max_recalc_depth:
+    if getattr(engine, "_recalc_budget_bar", None) != bar_index:
+        engine._recalc_budget_bar, engine._recalc_budget_used = bar_index, 0
+    engine._recalc_budget_used += 1
+    if engine._recalc_budget_used > engine.config.max_recalc_depth:
         engine._diag(
             "MAX_RECALC_DEPTH_REACHED",
-            "max recalc depth reached",
-            "warning",
+            "max recalculation budget reached for the chart bar",
+            "error",
             bar_index,
             bar.time,
         )
-        return recalc
+        raise StrategyRuntimeError("MAX_RECALC_DEPTH_REACHED: required fill recalculation was not executed")
     prepare = getattr(engine, "_prepare_realtime_strategy_invocation", None)
     if getattr(engine, "_realtime_tick_execution", False) and callable(prepare):
         bar = prepare(strategy)
-    engine._call_strategy(strategy, bar, bar_index)
+    engine._call_strategy(strategy, bar, bar_index, fill_cause=True)
     engine._flush(ctx, bar, bar_index, recalc_after_fill=True)
     return recalc

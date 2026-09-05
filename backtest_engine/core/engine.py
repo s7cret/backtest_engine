@@ -1,58 +1,23 @@
 from __future__ import annotations
+
 import time
 from typing import Any, Literal, cast
+
+from backtest_engine.broker.commission import calculate_commission
+from backtest_engine.broker.rounding import round_to_step
 from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext, StrategyStateView
-from backtest_engine.errors import (
-    BacktestEngineError,
-    BarMagnifierUnavailableError,
-    ProviderError,
-    StrategyRuntimeError,
-)
-from backtest_engine.models import (
-    Bar,
-    BarSeries,
-    Order,
-    Fill,
-    Position,
-    Trade,
-    EquityPoint,
-    Diagnostic,
-    BacktestCallbacks,
-    BacktestResumeState,
-    InstrumentModel,
-)
-from backtest_engine.broker.rounding import round_to_step
-from backtest_engine.broker.commission import calculate_commission
+from backtest_engine.core.engine_realtime import EngineRealtimeMixin
+from backtest_engine.core.engine_support import EngineSupportMixin
+from backtest_engine.core.engine_validation import validate_backtest_config
 from backtest_engine.core.execution_backend_adapter import run_execution_backend
 from backtest_engine.core.fill_execution import execute_fill
 from backtest_engine.core.fill_scanner import process_bar_fills, update_trailing_order
-from backtest_engine.core.risk_rules import (
-    apply_risk_rules,
-    max_position_size_allows,
-    pending_entry_position_delta,
-)
-from backtest_engine.core.strategy_command_processor import flush_strategy_commands
-from backtest_engine.core.score_window import (
-    build_score_window_plan,
-)
-from backtest_engine.core.validation import infer_price_tick, validate_bars
-from backtest_engine.core.engine_validation import validate_backtest_config
-from backtest_engine.core.engine_realtime import EngineRealtimeMixin
-from backtest_engine.core.engine_support import EngineSupportMixin
-from backtest_engine.core.strategy_projection import (
-    build_strategy_ledger_projection,
-    compact_broker_projection,
-    compact_ledger_projection,
-)
-from backtest_engine.core.protocol_boundary import (
-    emit_protocol_bar_begin,
-    prepare_protocol_run,
-)
-from backtest_engine.core.oca import apply_oca
-from backtest_engine.core.margin_call import maybe_margin_call
 from backtest_engine.core.finality import admit_bars
+from backtest_engine.core.margin_call import maybe_margin_call
 from backtest_engine.core.native_run_loop import run_native_strategy
+from backtest_engine.core.oca import apply_oca
+from backtest_engine.core.position_accounting import apply_position
 from backtest_engine.core.price_path import (
     infer_parent_close,
     limit_fill_price,
@@ -60,8 +25,42 @@ from backtest_engine.core.price_path import (
     validate_lower_timeframe_bars,
     validate_supplied_bar_magnifier_bars,
 )
-from backtest_engine.core.position_accounting import apply_position
+from backtest_engine.core.protocol_boundary import (
+    prepare_protocol_run,
+)
+from backtest_engine.core.risk_rules import (
+    apply_risk_rules,
+    max_position_size_allows,
+    pending_entry_position_delta,
+)
+from backtest_engine.core.score_window import (
+    build_score_window_plan,
+)
+from backtest_engine.core.strategy_command_processor import flush_strategy_commands
+from backtest_engine.core.strategy_projection import (
+    build_strategy_ledger_projection,
+    compact_broker_projection,
+    compact_ledger_projection,
+)
+from backtest_engine.core.validation import infer_price_tick, validate_bars
+from backtest_engine.errors import (
+    BarMagnifierUnavailableError,
+    ProviderError,
+)
 from backtest_engine.ledger.runup_drawdown import trade_excursion_values
+from backtest_engine.models import (
+    BacktestCallbacks,
+    BacktestResumeState,
+    Bar,
+    BarSeries,
+    Diagnostic,
+    EquityPoint,
+    Fill,
+    InstrumentModel,
+    Order,
+    Position,
+    Trade,
+)
 from backtest_engine.results import (
     BacktestResult,
     equity_move_from_baseline,
@@ -133,6 +132,11 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         self._warmup_machine: Any = None
         self._strategy_callback_bar_index: int | None = None
         self._strategy_callback_recalc_iteration = -1
+        self._recalc_budget_bar = None
+        self._recalc_budget_used = 0
+        self._execution_callback_sequence = -1
+        self._execution_last_bar_index = -1
+        self._execution_event = None
 
     def run(
         self,
@@ -176,6 +180,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
 
         if self.config.validate_bars:
             series, _ = validate_bars(series, self.config.duplicate_bar_policy)
+        self._execution_last_bar_index = len(series) - 1
         if self.config.use_bar_magnifier and (
             not self.config.bar_magnifier_lower_tf
             or self.config.bar_magnifier_bars is None
@@ -276,41 +281,10 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             return admitted
         return BarSeries.from_bars(admitted)
 
-    def _call_strategy(self, strategy: Any, bar: Bar, i: int) -> None:
-        if self._strategy_callback_bar_index != i:
-            self._strategy_callback_bar_index = i
-            self._strategy_callback_recalc_iteration = 0
-        else:
-            self._strategy_callback_recalc_iteration += 1
-        emit_protocol_bar_begin(self, bar, i)
-        callback = getattr(self.callbacks, "on_strategy_callback", None)
-        if callback is None and self.callbacks.extra is not None:
-            callback = self.callbacks.extra.get("on_strategy_callback")
-        if callback:
-            projection = self.export_strategy_ledger_projection()
-            self._cb(
-                "on_strategy_callback",
-                {
-                    "callback": "strategy",
-                    "bar_index": i,
-                    "bar_open_time_utc_ms": int(bar.time),
-                    "phase": self._current_phase,
-                    "recalc_iteration": self._strategy_callback_recalc_iteration,
-                    "projection": projection,
-                    "broker": compact_broker_projection(projection),
-                    "ledger": compact_ledger_projection(projection),
-                },
-            )
-        try:
-            run_bar = getattr(strategy, "run_bar", None)
-            if callable(run_bar):
-                run_bar(bar, i)
-            else:
-                strategy._process_bar(bar, i)
-        except BacktestEngineError:
-            raise
-        except Exception as e:
-            raise StrategyRuntimeError(str(e)) from e
+    def _call_strategy(self, strategy: Any, bar: Bar, i: int, *, fill_cause: bool = False) -> None:
+        from backtest_engine.core.strategy_callback import call_strategy
+
+        call_strategy(self, strategy, bar, i, fill_cause=fill_cause)
 
     def _run_execution_backend(
         self,

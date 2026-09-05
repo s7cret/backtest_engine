@@ -7,6 +7,7 @@ import time
 from typing import Any, Literal
 
 from backtest_engine.context import StrategyContext
+from backtest_engine.core.protocol_boundary import emit_protocol_bar_commit
 from backtest_engine.core.realtime import (
     realtime_tick_schedule_fingerprint,
     resolve_realtime_tick_schedule,
@@ -15,7 +16,6 @@ from backtest_engine.core.resume_state import (
     prevalidate_strict_resume_before_external_state,
 )
 from backtest_engine.core.state_snapshot import clone_state
-from backtest_engine.core.protocol_boundary import emit_protocol_bar_commit
 from backtest_engine.errors import TickReplayStateError
 from backtest_engine.models import (
     BacktestResumeState,
@@ -97,6 +97,8 @@ def run_realtime_strategy(
             engine._begin_realtime_script_bar(strategy, script_runtime)
 
             for tick_index, tick in enumerate(tick_slice.ticks):
+                engine._execution_tick_index = tick_index
+                engine._execution_final_tick = tick_index == len(tick_slice.ticks) - 1
                 tick_phase: Literal["non_final", "final"] = (
                     "final" if tick_index == len(tick_slice.ticks) - 1 else "non_final"
                 )

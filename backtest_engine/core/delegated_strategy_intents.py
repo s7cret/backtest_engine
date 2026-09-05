@@ -224,7 +224,11 @@ class DelegatedStrategyIntentHandler:
         config: BacktestConfig,
         bar_close: Mapping[int, object] | None = None,
         bar_equity: Mapping[int, object] | None = None,
+        recalc_iteration: int | None = None,
     ) -> None:
+        if recalc_iteration is not None and (type(recalc_iteration) is not int or recalc_iteration < 0):
+            raise ValueError("recalc iteration must be a nonnegative integer")
+        self.recalc_iteration = recalc_iteration
         if not isinstance(identity, IntentReplayIdentity):
             raise TypeError("identity must be IntentReplayIdentity")
         if (
@@ -323,7 +327,7 @@ class DelegatedStrategyIntentHandler:
             "bar_index": invocation.bar_index,
             "bar_open_time_utc_ms": bar_time,
             "phase": invocation.phase,
-            "recalc_iteration": invocation.tick_index,
+            "recalc_iteration": invocation.tick_index if self.recalc_iteration is None else self.recalc_iteration,
             "semantic_profile": self.identity.semantic_profile,
             "source_span": MappingProxyType(_source_span(invocation)),
             "idempotency_key": f"intent-delivery:{invocation.invocation_id}",

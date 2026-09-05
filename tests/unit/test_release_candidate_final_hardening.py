@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from backtest_engine.errors import StrategyRuntimeError
+
 import json
 import types
 from dataclasses import replace
@@ -728,16 +730,18 @@ def test_fill_scanner_remaining_price_and_recalc_branches() -> None:
     engine.orders = [_order(str(i), status="filled") for i in range(33)] + [
         _order("market")
     ]
-    process_bar_fills(
-        engine, object(), StrategyContext(engine.config), _bar(), 1, open_only=True
-    )
+    with pytest.raises(StrategyRuntimeError, match="MAX_RECALC_DEPTH_REACHED"):
+        process_bar_fills(
+            engine, object(), StrategyContext(engine.config), _bar(), 1, open_only=True
+        )
     assert len(engine.orders) == 1
     assert engine.diags == ["MAX_RECALC_DEPTH_REACHED"]
 
     engine2 = _FillEngine()
     engine2.margin_calls_remaining = 1
     engine2.orders = []
-    process_bar_fills(engine2, object(), StrategyContext(engine2.config), _bar(), 1)
+    with pytest.raises(StrategyRuntimeError, match="MAX_RECALC_DEPTH_REACHED"):
+        process_bar_fills(engine2, object(), StrategyContext(engine2.config), _bar(), 1)
     assert engine2.diags == ["MAX_RECALC_DEPTH_REACHED"]
 
     engine3 = _FillEngine()

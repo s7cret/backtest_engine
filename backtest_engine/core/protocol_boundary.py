@@ -402,6 +402,7 @@ def emit_protocol_bar_begin(engine: Any, bar: Bar, bar_index: int) -> None:
             "on_protocol_callback",
             {
                 "kind": "RECALC_REQUEST",
+                "execution_event": engine._execution_event.to_dict(),
                 "run_id": context["run_id"],
                 "bar_index": bar_index,
                 "bar_open_time_utc_ms": int(bar.time),
@@ -429,6 +430,7 @@ def emit_protocol_bar_begin(engine: Any, bar: Bar, bar_index: int) -> None:
         "on_protocol_callback",
         {
             "kind": "BAR_BEGIN",
+            "execution_event": engine._execution_event.to_dict(),
             "run_id": context["run_id"],
             "strategy_id": context["strategy_id"],
             "series_id": context["series_id"],

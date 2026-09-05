@@ -10,6 +10,8 @@ from backtest_engine.errors import ConfigError
 
 def validate_backtest_config(config: BacktestConfig) -> None:
     """Validate BacktestConfig before a run; raise ConfigError on problems."""
+    if type(config.max_recalc_depth) is not int or config.max_recalc_depth < 0:
+        raise ConfigError("max_recalc_depth must be a nonnegative integer")
     for name in (
         "margin_long",
         "margin_short",
