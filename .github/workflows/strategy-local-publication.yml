@@ -1,0 +1,90 @@
+name: Verify and publish exact local strategy commits
+'on':
+  push:
+    branches: ['ops/rc6-strategy-publish-20260905']
+permissions:
+  contents: read
+concurrency:
+  group: strategy-local-publication
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Restore exact source commits with SHA checks
+        run: |
+          cp .github/strategy-publish/restore.py "$RUNNER_TEMP/restore.py"
+          python "$RUNNER_TEMP/restore.py" restore .github/strategy-publish/manifest.json "$RUNNER_TEMP/evidence"
+          cp "$RUNNER_TEMP/restore.py" "$RUNNER_TEMP/evidence/restore.py"
+      - name: Install pinned dependencies and reviewed engine
+        run: |
+          python -m pip install setuptools==84.0.0 wheel==0.48.0 hatchling==1.32.0 build==1.6.0
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'stack'
+          root.mkdir()
+          pins = {'openpine-contracts':'d1382d1c0a1f867cc184016d8ac670a9264a7938', 'pinelib':'6637c18eeb2130690ae8c9388a2173afc534f215', 'marketdata-provider':'dcc2ceeb4e917173345227f670dd71e006084d48'}
+          paths = []
+          for repo, sha in pins.items():
+              path = root / repo
+              subprocess.run(['git','clone','--quiet','https://github.com/s7cret/'+repo+'.git',str(path)],check=True)
+              subprocess.run(['git','-C',str(path),'checkout','--detach',sha],check=True)
+              if subprocess.check_output(['git','-C',str(path),'rev-parse','HEAD'],text=True).strip() != sha:
+                  raise SystemExit('Source identity mismatch')
+              paths.append(str(path))
+          subprocess.run(['python','-m','pip','install',*paths,'.[dev]'],check=True)
+          (root.parent/'evidence/source-pins.json').write_text(json.dumps(pins,indent=2)+'\n')
+          PY
+      - name: Full broker functional suite
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: python -m pytest -q --junitxml="$RUNNER_TEMP/evidence/backtest_engine.xml"
+      - name: Lint changed files and build distributions
+        run: |
+          python -m ruff check backtest_engine/core/delegated_strategy_intents.py backtest_engine/core/strategy_capabilities.py backtest_engine/core/strategy_command_processor.py tests/unit/test_cancel_exit_parent.py tests/unit/test_strategy_host_surface.py
+          python -m compileall -q backtest_engine
+          mkdir -p "$RUNNER_TEMP/build-source"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/build-source"
+          python -m build --no-isolation --outdir "$RUNNER_TEMP/evidence/dist" "$RUNNER_TEMP/build-source"
+          python -m pip freeze > "$RUNNER_TEMP/evidence/environment.txt"
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: strategy-engine-${{ matrix.python }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence/
+          retention-days: 30
+          if-no-files-found: error
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: strategy-engine-3.13-${{ github.run_id }}
+          path: evidence
+      - name: Fast-forward reviewed RC6 and archive temporary branch
+        run: python evidence/restore.py publish evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: strategy-engine-publication-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
