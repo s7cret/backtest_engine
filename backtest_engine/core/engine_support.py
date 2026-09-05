@@ -15,7 +15,7 @@ from backtest_engine.models import (
     Position,
     Trade,
 )
-from backtest_engine.results import BacktestResult
+from backtest_engine.results import BacktestResult, update_equity_extremes
 
 
 class EngineSupportMixin:
@@ -23,6 +23,8 @@ class EngineSupportMixin:
     callbacks: BacktestCallbacks
     position: Position
     state: StrategyStateView
+    peak_equity: float
+    trough_equity: float
     cash: float
     equity: float
     max_drawdown: float
@@ -158,3 +160,21 @@ class EngineSupportMixin:
             strategy,
             runtime,
         )
+
+    def _update_equity_extremes(self, equity: float):
+        extremes = update_equity_extremes(
+            equity=equity,
+            peak_equity=self.peak_equity,
+            trough_equity=self.trough_equity,
+            max_drawdown=self.max_drawdown,
+            max_drawdown_percent=self.max_drawdown_percent,
+            max_runup=self.max_runup,
+            max_runup_percent=self.max_runup_percent,
+        )
+        self.peak_equity = extremes.peak_equity
+        self.trough_equity = extremes.trough_equity
+        self.max_drawdown = extremes.max_drawdown
+        self.max_drawdown_percent = extremes.max_drawdown_percent
+        self.max_runup = extremes.max_runup
+        self.max_runup_percent = extremes.max_runup_percent
+        return extremes
