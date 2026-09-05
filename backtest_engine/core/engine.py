@@ -284,20 +284,24 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         else:
             self._strategy_callback_recalc_iteration += 1
         emit_protocol_bar_begin(self, bar, i)
-        projection = self.export_strategy_ledger_projection()
-        self._cb(
-            "on_strategy_callback",
-            {
-                "callback": "strategy",
-                "bar_index": i,
-                "bar_open_time_utc_ms": int(bar.time),
-                "phase": self._current_phase,
-                "recalc_iteration": self._strategy_callback_recalc_iteration,
-                "projection": projection,
-                "broker": compact_broker_projection(projection),
-                "ledger": compact_ledger_projection(projection),
-            },
-        )
+        callback = getattr(self.callbacks, "on_strategy_callback", None)
+        if callback is None and self.callbacks.extra is not None:
+            callback = self.callbacks.extra.get("on_strategy_callback")
+        if callback:
+            projection = self.export_strategy_ledger_projection()
+            self._cb(
+                "on_strategy_callback",
+                {
+                    "callback": "strategy",
+                    "bar_index": i,
+                    "bar_open_time_utc_ms": int(bar.time),
+                    "phase": self._current_phase,
+                    "recalc_iteration": self._strategy_callback_recalc_iteration,
+                    "projection": projection,
+                    "broker": compact_broker_projection(projection),
+                    "ledger": compact_ledger_projection(projection),
+                },
+            )
         try:
             run_bar = getattr(strategy, "run_bar", None)
             if callable(run_bar):

@@ -155,6 +155,7 @@ def validate_intent_tape(
     *,
     expected_identity: IntentReplayIdentity | None = None,
     sequence_origin: int = 0,
+    schema_validate: bool = True,
 ) -> ValidatedIntentTape:
     """Validate schema, seals, identity, and total ordering before any replay."""
 
@@ -170,7 +171,14 @@ def validate_intent_tape(
     bar_times: dict[int, int] = {}
 
     for index, raw in enumerate(rows):
-        event = _schema_validate(raw, index)
+        if schema_validate:
+            event = _schema_validate(raw, index)
+        else:
+            if not isinstance(raw, Mapping):
+                raise IntentTapeValidationError(
+                    f"intent at index {index} is not a mapping", details={"index": index}
+                )
+            event = dict(raw)
         sequence = int(event["sequence"])
         if sequence != index + sequence_origin:
             raise IntentTapeValidationError(
@@ -239,6 +247,22 @@ def require_live_tape(
         events,
         expected_identity=expected_identity,
         sequence_origin=sequence_origin,
+    )
+
+
+def admit_sealed_intent_tape(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    expected_identity: IntentReplayIdentity | None = None,
+    sequence_origin: int = 0,
+) -> ValidatedIntentTape:
+    """Admit already-sealed intents without repeating JSON Schema walks."""
+
+    return validate_intent_tape(
+        events,
+        expected_identity=expected_identity,
+        sequence_origin=sequence_origin,
+        schema_validate=False,
     )
 
 

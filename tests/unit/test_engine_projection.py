@@ -238,6 +238,22 @@ def test_callback_projection_is_refreshed_after_each_broker_transition() -> None
     assert callbacks_seen[2]["projection"]["closed_trade_log"][0]["exit_id"] == "L"
 
 
+def test_run_without_strategy_callback_does_not_build_ledger_projection(monkeypatch) -> None:
+    calls = {"n": 0}
+    real = BacktestEngine.export_strategy_ledger_projection
+
+    def wrapped(self):
+        calls["n"] += 1
+        return real(self)
+
+    monkeypatch.setattr(BacktestEngine, "export_strategy_ledger_projection", wrapped)
+    result = BacktestEngine(_plain_config()).run(EnterThenClose, bars=_bars())
+
+    assert calls["n"] == 0
+    assert result.closed_trades is not None
+    assert len(result.closed_trades) == 1
+
+
 def test_first_score_bar_callback_sees_post_reset_projection() -> None:
     primitives: list[dict[str, Any]] = []
     callbacks = BacktestCallbacks(

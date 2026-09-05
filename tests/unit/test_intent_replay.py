@@ -364,6 +364,40 @@ def test_require_live_tape_can_validate_a_suffix_from_sequence_origin() -> None:
     assert suffix.events[0]["sequence"] == 1
 
 
+def test_admit_sealed_intent_tape_skips_jsonschema_but_keeps_identity(monkeypatch) -> None:
+    admit_sealed_intent_tape = getattr(replay_module, "admit_sealed_intent_tape", None)
+    assert admit_sealed_intent_tape is not None
+
+    calls = {"n": 0}
+    real = replay_module.validate_payload
+
+    def counting(schema_id, payload):
+        calls["n"] += 1
+        return real(schema_id, payload)
+
+    monkeypatch.setattr(replay_module, "validate_payload", counting)
+    event = _event(0)
+    calls["n"] = 0
+    admitted = admit_sealed_intent_tape([event], expected_identity=IDENTITY)
+    assert calls["n"] == 0
+    assert admitted.identity == IDENTITY
+    assert admitted.events[0]["sequence"] == 0
+
+    with pytest.raises(replay_module.IntentIdentityError):
+        admit_sealed_intent_tape(
+            [event],
+            expected_identity=IntentReplayIdentity(
+                run_id="other",
+                strategy_id=IDENTITY.strategy_id,
+                stack_id=IDENTITY.stack_id,
+                semantic_profile=IDENTITY.semantic_profile,
+                series_id=IDENTITY.series_id,
+                instrument_id=IDENTITY.instrument_id,
+                timeframe=IDENTITY.timeframe,
+            ),
+        )
+
+
 def test_replay_validation_and_decimal_defensive_edges() -> None:
     with pytest.raises(IntentTapeValidationError, match="not a mapping"):
         validate_intent_tape([object()])  # type: ignore[list-item]
