@@ -318,7 +318,7 @@ def test_validation_early_stop_execution_mode_and_lifecycle() -> None:
     with pytest.raises(ConfigError, match="margin"):
         validate_backtest_config(
             BacktestConfig(
-                symbol="BTC", timeframe="1", start_time=0, end_time=1, margin_long=0
+                symbol="BTC", timeframe="1", start_time=0, end_time=1, margin_long=-1
             ,
              finality_policy="ALLOW_OPEN"
              )
