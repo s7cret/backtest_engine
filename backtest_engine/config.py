@@ -37,7 +37,7 @@ class BacktestConfig:
     qty_step: float | None = None
     min_qty: float | None = None
     price_rounding: Literal["nearest", "floor", "ceil"] = "nearest"
-    qty_rounding: Literal["nearest", "floor", "ceil"] = "floor"
+    qty_rounding: Literal["nearest", "floor", "ceil", "truncate", "none"] = "floor"
     fill_model: Literal["tradingview_ohlc", "next_bar_open", "close_only"] = (
         "tradingview_ohlc"
     )

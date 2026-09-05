@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, ROUND_DOWN
 from typing import Any, Mapping, Sequence
 
 from openpine_contracts import validate_payload, verify_content_hash
@@ -275,7 +275,7 @@ def _normalize_direction(value: object) -> str:
 
 def _rounding_mode(name: object) -> str:
     mode = str(name)
-    if mode not in {"nearest", "floor", "ceil"}:
+    if mode not in {"nearest", "floor", "ceil", "none", "truncate"}:
         raise IntentDecimalConversionError(f"unsupported engine rounding mode {mode!r}")
     return mode
 
@@ -290,7 +290,7 @@ def _step_for_field(ctx: Any, field: str) -> tuple[Decimal | None, str]:
         mode = _rounding_mode(getattr(config, "price_rounding", "nearest"))
     else:
         return None, "nearest"
-    if raw_step is None:
+    if raw_step is None or mode == "none":
         return None, mode
     try:
         step = Decimal(str(raw_step))
@@ -321,6 +321,7 @@ def decimal_to_engine_number(value: object, *, field: str, ctx: Any) -> float | 
             "nearest": ROUND_HALF_UP,
             "floor": ROUND_FLOOR,
             "ceil": ROUND_CEILING,
+            "truncate": ROUND_DOWN,
         }[mode]
         number = (number / step).to_integral_value(rounding=rounding) * step
     result = float(number)
@@ -351,9 +352,7 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
     command_id = str(event["command_id"])
     order_id = str(event["order_id"]) if "order_id" in event else command_id
     qty = decimal_to_engine_number(event.get("qty"), field="qty", ctx=ctx)
-    qty_percent = decimal_to_engine_number(
-        event.get("qty_percent"), field="qty_percent", ctx=ctx
-    )
+    qty_percent = decimal_to_engine_number(event.get("qty_percent"), field="qty_percent", ctx=ctx)
     limit = decimal_to_engine_number(event.get("limit"), field="limit", ctx=ctx)
     stop = decimal_to_engine_number(event.get("stop"), field="stop", ctx=ctx)
 
@@ -450,8 +449,7 @@ def apply_intents_for_bar(
             actual = int(event["bar_open_time_utc_ms"])
             if actual != bar_open_time_utc_ms:
                 raise IntentIdentityError(
-                    "bar_open_time_utc_ms mismatch: "
-                    f"expected {bar_open_time_utc_ms}, got {actual}",
+                    f"bar_open_time_utc_ms mismatch: expected {bar_open_time_utc_ms}, got {actual}",
                     details={"bar_index": bar_index, "event_id": event["event_id"]},
                 )
     for event in selected:
