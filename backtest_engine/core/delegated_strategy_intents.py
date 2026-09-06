@@ -372,9 +372,9 @@ class DelegatedStrategyIntentHandler:
                         for name in EXIT_METADATA_FIELDS
                         if _optional(arguments.get(name)) is not None}
             if metadata:
-                payload.update(exit_semantics_version=payload["schema_version"],
-                               schema_version="2.6.0",
-                               exit_metadata=MappingProxyType(metadata))
+                payload.update(schema_version="2.6.0",
+                               price_pair_policy="first_trigger" if self.pine_version == 6 else "absolute_first",
+                               **metadata)
         return MappingProxyType(
             {
                 "draft_schema_id": DRAFT_SCHEMA_ID,
@@ -408,8 +408,6 @@ class DelegatedStrategyIntentHandler:
             if not isinstance(source_span, Mapping):
                 raise ValueError("committed delegated strategy source span is invalid")
             payload["source_span"] = dict(source_span)
-            if "exit_metadata" in payload:
-                payload["exit_metadata"] = dict(payload["exit_metadata"])
             payload["sequence"] = start_sequence + len(sealed_intents)
             payload["event_id"] = f"intent-event:{content_hash(payload, schema_id=SCHEMA_ID)}"
             sealed = seal_content_hash(payload, schema_id=SCHEMA_ID)

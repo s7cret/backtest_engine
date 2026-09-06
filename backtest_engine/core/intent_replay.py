@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from backtest_engine.core.order_metadata import EXIT_METADATA_FIELDS
+
 import math
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, ROUND_DOWN
@@ -111,7 +113,6 @@ def _schema_validate(event: Mapping[str, Any], index: int) -> dict[str, Any]:
         raise IntentTapeValidationError(
             f"intent content hash mismatch at index {index}", details={"index": index}
         )
-    _validate_supported_semantics(detached, index)
     return detached
 
 
@@ -119,6 +120,13 @@ def _validate_supported_semantics(event: Mapping[str, Any], index: int) -> None:
     kind = str(event["kind"])
     if kind in {"entry", "order"}:
         _normalize_direction(event["direction"])
+    if (kind == "exit" and event.get("schema_version") == "2.6.0"
+            and any(event.get(name) is not None for name in ("trail_price", "trail_points", "trail_offset"))
+            and any(event.get(name) is not None for name in ("stop", "loss"))):
+        raise UnsupportedIntentError(
+            "fixed stop plus trailing arbitration is not implemented by this reader",
+            details={"index": index, "kind": kind},
+        )
     if kind != "risk":
         return
     rule = str(event["risk_rule"])
@@ -179,6 +187,7 @@ def validate_intent_tape(
                     f"intent at index {index} is not a mapping", details={"index": index}
                 )
             event = dict(raw)
+        _validate_supported_semantics(event, index)
         sequence = int(event["sequence"])
         if sequence != index + sequence_origin:
             raise IntentTapeValidationError(
@@ -373,7 +382,7 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
     if kind == "exit":
         ctx.exit(
             order_id,
-            **dict(event.get("exit_metadata", {})),
+            **{name: event[name] for name in EXIT_METADATA_FIELDS if name in event},
             **({"price_pair_policy": event["price_pair_policy"]} if "price_pair_policy" in event else {}),
             from_entry=(None if event.get("exit_scope") == "all_entries" else event["from_entry"]),
             qty=qty,
