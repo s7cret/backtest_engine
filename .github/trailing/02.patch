@@ -75,3 +75,4 @@ index f9cefeb0e3ebaed39e353f601978cd8c8e165e46..deec8210c9b99324eeef472ff74c34e0
 +        ({"trail_price": 101}, "requires trail_offset"),
          ({"comment_profit": "TP"}, "unsupported host parameters"),
          ({}, "active price leg"),
+     ],
