@@ -1,0 +1,319 @@
+--- a/backtest_engine/core/resume_state.py
++++ b/backtest_engine/core/resume_state.py
+@@ -434,16 +434,18 @@ def restore_resume_state(
+     engine.max_runup = broker.max_runup
+     engine.max_runup_percent = broker.max_runup_percent
+     engine.position = broker.position
++    engine._all_entry_exits = broker.all_entry_exits
+     engine.orders = broker.orders
+     engine.fills = broker.fills
+     engine.closed_trades = broker.closed_trades
+     engine.open_trades = broker.open_trades
+     engine._filled_exit_entry_keys = {
+         (
+-            trade.exit_id.split(":", 1)[0],
++            trade.exit_parent_id or trade.exit_id.split(":", 1)[0],
+             trade.entry_id,
+             trade.entry_time,
+             trade.entry_bar_index,
++            trade.entry_fill_index,
+         )
+         for trade in engine.closed_trades
+         if trade.exit_id is not None
+@@ -524,6 +526,7 @@ def export_resume_state(
+         engine.closed_trades,
+         engine.open_trades,
+         engine.last_trade_bar,
++        engine._all_entry_exits,
+     )
+     metadata: dict[str, Any] = {"resume_contract": "engine-broker-snapshot-v1"}
+     if series is not None:
+diff --git a/backtest_engine/core/state_snapshot.py b/backtest_engine/core/state_snapshot.py
+index 874bc65536fb33107033ddfde5d7ff20b2ed197b..83f5033829ce18b48aa85e0d35afe06ef255f79f 100644
+--- a/backtest_engine/core/state_snapshot.py
++++ b/backtest_engine/core/state_snapshot.py
+@@ -82,6 +82,7 @@ class BrokerSnapshot:
+     closed_trades: list[Trade] = field(default_factory=list)
+     open_trades: list[Trade] = field(default_factory=list)
+     last_trade_bar: int | None = None
++    all_entry_exits: dict[str, dict] = field(default_factory=dict)
+ 
+ 
+ @dataclass(frozen=True)
+diff --git a/backtest_engine/core/strategy_capabilities.py b/backtest_engine/core/strategy_capabilities.py
+index 3d25d35124f729470c8e96237a77d6dca4afee74..cdfa3c7a4e908fd12b6136f0c3039075c396714e 100644
+--- a/backtest_engine/core/strategy_capabilities.py
++++ b/backtest_engine/core/strategy_capabilities.py
+@@ -115,11 +115,12 @@ _COMMANDS = (
+     StrategyCommandSpec("strategy.cancel", ("id",), ("id",)),
+     StrategyCommandSpec("strategy.cancel_all", (), ()),
+     # The broker admits exits for open trades and pending price/market entries.
+-    # A concrete entry ID is required; trailing/per-leg metadata remain unsupported.
++    # Omitted/empty from_entry uses the versioned all-entry scope. Trailing and
++    # per-leg metadata remain unsupported by this host surface.
+     StrategyCommandSpec(
+         "strategy.exit",
+         _EXIT,
+-        ("id", "from_entry"),
++        ("id",),
+         frozenset(
+             {
+                 "trail_price",
+diff --git a/backtest_engine/core/strategy_command_processor.py b/backtest_engine/core/strategy_command_processor.py
+index 2e199479da33d010f80218fb6f2a135e7ea6a1f5..023e48cef7e5772ac6b98d4f4c40c6c71846a7c0 100644
+--- a/backtest_engine/core/strategy_command_processor.py
++++ b/backtest_engine/core/strategy_command_processor.py
+@@ -11,7 +11,7 @@ from backtest_engine.context import (
+     ExitPayload,
+     StrategyContext,
+ )
+-from backtest_engine.models import Bar, Order
++from backtest_engine.models import Bar, Order, Trade
+ 
+ EntryCommandKind = Literal["entry", "order"]
+ OrderDirection = Literal["long", "short"]
+@@ -36,6 +36,7 @@ def flush_strategy_commands(
+         kind = command.name
+         payload = command.payload
+         if kind == "cancel_all":
++            engine._all_entry_exits.clear()
+             remove_deferred_exits(engine)
+             for order in engine.orders:
+                 if order.status in ("pending", "active"):
+@@ -51,6 +52,7 @@ def flush_strategy_commands(
+             continue
+         if kind == "cancel":
+             assert isinstance(payload, CancelPayload)
++            engine._all_entry_exits.pop(payload.id, None)
+             remove_deferred_exits(engine, payload.id)
+             for order in engine.orders:
+                 if (order.id == payload.id or order.parent_exit_id == payload.id) and order.status in ("pending", "active"):
+@@ -184,12 +186,21 @@ def _apply_exit_command(
+     stop: float | None,
+     *,
+     register_pending: bool = True,
++    target_trade: Trade | None = None,
+ ) -> None:
+     from backtest_engine.core.deferred_exits import defer_exit
+ 
++    from backtest_engine.core.exit_scope import apply_scoped_exit, matching_trades, reconcile_exit_scope
++
++    if register_pending:
++        reconcile_exit_scope(engine, payload, bar, bar_index)
++    if register_pending and payload.from_entry is not None:
++        engine._all_entry_exits.pop(payload.id, None)
+     waiting = defer_exit(engine, payload, bar, bar_index) if register_pending else False
++    if target_trade is None and (payload.from_entry is None or payload.profit is not None or payload.loss is not None):
++        apply_scoped_exit(engine, payload, bar, bar_index, recalc_after_fill, limit, stop)
++        return
+     if waiting and not engine._matching_open_trades(payload.from_entry):
+-        # A submitted entry activates its captured instruction only on its fill.
+         return
+     if engine.position.direction == "flat":
+         engine._diag(
+@@ -204,7 +215,8 @@ def _apply_exit_command(
+     direction = engine.position.direction
+     side: OrderSide = "sell" if direction == "long" else "buy"
+     from_entry = payload.from_entry
+-    if _exit_id_already_filled_for_open_entry(engine, payload.id, from_entry):
++    lot = None if target_trade is None else target_trade.entry_fill_index
++    if _exit_id_already_filled_for_open_entry(engine, payload.id, from_entry, lot):
+         return
+     existing_exit = next(
+         (
+@@ -213,10 +225,12 @@ def _apply_exit_command(
+             if order.kind == "exit"
+             and order.status in ("pending", "active")
+             and (order.parent_exit_id or order.id) == payload.id
++            and order.entry_fill_index == lot
+         ),
+         None,
+     )
+-    available = engine._available_exit_qty(from_entry, exclude_order=existing_exit)
++    available = engine._available_exit_qty(from_entry, exclude_order=existing_exit,
++        **({"entry_fill_index": lot} if lot is not None else {}))
+     if available <= 0:
+         engine._diag(
+             "ORDER_REJECTED_NO_AVAILABLE_POSITION_QTY",
+@@ -232,11 +246,22 @@ def _apply_exit_command(
+     else:
+         qty = engine._qty_from_args(
+             _qty_args(payload.qty, payload.qty_percent),
+-            sum(trade.entry_qty for trade in engine._matching_open_trades(from_entry)),
++            sum(trade.entry_qty for trade in matching_trades(engine, from_entry, lot)),
+             bar.close,
+         )
+     qty = min(qty, available)
+-    base = engine._exit_base_price(from_entry)
++    base = engine._exit_base_price(from_entry) if target_trade is None else target_trade.entry_price
++    # Stable labels keep the existing first bracket IDs. Additional simultaneous
++    # lots carry a suffix; the scope fields, not this label, control execution.
++    prefix = payload.id
++    if existing_exit is not None:
++        prefix = existing_exit.id.rsplit(":", 1)[0]
++    elif target_trade is not None and any(
++        o.kind == "exit" and o.status in {"pending", "active"}
++        and (o.parent_exit_id or o.id) == payload.id
++        for o in engine.orders
++    ):
++        prefix = f"{payload.id}:entry:{lot}"
+     tick = getattr(engine, "_effective_mintick", 1.0) or 1.0
+     if payload.profit is not None and limit is None:
+         profit_price = float(payload.profit) * tick
+@@ -264,7 +289,7 @@ def _apply_exit_command(
+         _add_or_modify_exit_order(
+             engine,
+             Order(
+-                id=payload.id + ":L",
++                id=prefix + ":L",
+                 kind="exit",
+                 direction=direction,
+                 side=side,
+@@ -282,6 +307,8 @@ def _apply_exit_command(
+                 oca_type="reduce",
+                 reserved_qty=qty,
+                 parent_exit_id=payload.id,
++                entry_fill_index=lot,
++                oca_explicit=payload.oca_name is not None,
+                 comment=payload.comment,
+             ),
+             bar,
+@@ -291,7 +318,7 @@ def _apply_exit_command(
+         _add_or_modify_exit_order(
+             engine,
+             Order(
+-                id=payload.id + ":S",
++                id=prefix + ":S",
+                 kind="exit",
+                 direction=direction,
+                 side=side,
+@@ -309,6 +336,8 @@ def _apply_exit_command(
+                 oca_type="reduce",
+                 reserved_qty=qty,
+                 parent_exit_id=payload.id,
++                entry_fill_index=lot,
++                oca_explicit=payload.oca_name is not None,
+                 comment=payload.comment,
+             ),
+             bar,
+@@ -333,7 +362,7 @@ def _apply_exit_command(
+         )
+         engine._add_order(
+             Order(
+-                id=payload.id + ":T",
++                id=prefix + ":T",
+                 kind="exit",
+                 direction=direction,
+                 side=side,
+@@ -351,6 +380,8 @@ def _apply_exit_command(
+                 oca_type="reduce",
+                 reserved_qty=qty,
+                 parent_exit_id=payload.id,
++                entry_fill_index=lot,
++                oca_explicit=payload.oca_name is not None,
+                 comment=payload.comment,
+                 trail_price=activation,
+                 trail_points=points_price,
+@@ -362,23 +393,25 @@ def _apply_exit_command(
+ 
+ 
+ def _exit_id_already_filled_for_open_entry(
+-    engine: Any, exit_id: str, from_entry: str | None
++    engine: Any, exit_id: str, from_entry: str | None, lot: int | None = None
+ ) -> bool:
+     cache = getattr(engine, "_filled_exit_entry_keys", None)
+     if cache is None:
+         cache = {
+             (
+-                trade.exit_id.split(":", 1)[0],
++                trade.exit_parent_id or trade.exit_id.split(":", 1)[0],
+                 trade.entry_id,
+                 trade.entry_time,
+                 trade.entry_bar_index,
++                trade.entry_fill_index,
+             )
+             for trade in engine.closed_trades
+             if trade.exit_id is not None
+         }
+         engine._filled_exit_entry_keys = cache
+-    for trade in engine._matching_open_trades(from_entry):
+-        if (exit_id, trade.entry_id, trade.entry_time, trade.entry_bar_index) in cache:
++    from backtest_engine.core.exit_scope import matching_trades
++    for trade in matching_trades(engine, from_entry, lot):
++        if (exit_id, trade.entry_id, trade.entry_time, trade.entry_bar_index, trade.entry_fill_index) in cache:
+             return True
+     return False
+ 
+@@ -391,6 +424,8 @@ def _add_or_modify_exit_order(
+             order
+             for order in engine.orders
+             if order.id == new.id
++            and (new.parent_exit_id is None or order.parent_exit_id == new.parent_exit_id)
++            and order.entry_fill_index == new.entry_fill_index
+             and order.kind == "exit"
+             and order.status in ("pending", "active")
+         ),
+@@ -424,6 +459,8 @@ def _add_or_modify_exit_order(
+     existing.position_direction = new.position_direction
+     existing.from_entry = new.from_entry
+     existing.oca_name = new.oca_name
++    existing.oca_explicit = new.oca_explicit
++    existing.entry_fill_index = new.entry_fill_index
+     existing.oca_type = new.oca_type
+     existing.parent_exit_id = new.parent_exit_id
+     existing.comment = new.comment
+diff --git a/backtest_engine/core/warmup.py b/backtest_engine/core/warmup.py
+index b7f064f8c98fb6b5469caddb0ce1b07f26a664ac..4bd879fdac8bf5d671d0c8fa65d83b2073889ff3 100644
+--- a/backtest_engine/core/warmup.py
++++ b/backtest_engine/core/warmup.py
+@@ -2,7 +2,8 @@
+ 
+ from __future__ import annotations
+ 
+-from dataclasses import dataclass
++from dataclasses import dataclass, field
++from copy import deepcopy
+ from enum import StrEnum
+ from typing import Any, Literal
+ 
+@@ -67,6 +68,7 @@ class BrokerState:
+     open_trades: tuple[object, ...]
+     closed_trades: tuple[object, ...]
+     last_trade_bar: int | None
++    all_entry_exits: dict[str, dict] = field(default_factory=dict)
+ 
+     @classmethod
+     def canonical_initial(cls, capital: float) -> BrokerState:
+@@ -103,6 +105,7 @@ class BrokerState:
+             open_trades=tuple(engine.open_trades),
+             closed_trades=tuple(engine.closed_trades),
+             last_trade_bar=engine.last_trade_bar,
++            all_entry_exits=deepcopy(engine._all_entry_exits),
+         )
+ 
+     def apply_to(self, engine: Any) -> None:
+@@ -125,6 +128,7 @@ class BrokerState:
+         engine.fills = list(self.fills)
+         engine.open_trades = list(self.open_trades)
+         engine.closed_trades = list(self.closed_trades)
++        engine._all_entry_exits = deepcopy(self.all_entry_exits)
+         engine.last_trade_bar = self.last_trade_bar
+         engine._filled_exit_entry_keys = set()
+         engine._closed_trade_stats_count = 0
+diff --git a/backtest_engine/models/order.py b/backtest_engine/models/order.py
+index 54527a80ed5a730e98be507c4e10e29510998fab..2a93697ec085735343d511fd4b1d98666c2f3d6a 100644
+--- a/backtest_engine/models/order.py
++++ b/backtest_engine/models/order.py
+@@ -37,3 +37,6 @@ class Order:
+     phase: str | None = None
+     # Plain data survives broker deepcopy/checkpoint and JSON result export.
+     pending_exits: dict[str, dict] = field(default_factory=dict)
++    # None retains an aggregate named-entry scope; an integer targets one lot.
++    entry_fill_index: int | None = None
++    oca_explicit: bool = False
+diff --git a/backtest_engine/models/trade.py b/backtest_engine/models/trade.py
+index a1e6e09aed18e16fd6bb68aea5965ccde08a1549..9929ccc2b866226d100156f0bd2cfeea3943240a 100644
+--- a/backtest_engine/models/trade.py
++++ b/backtest_engine/models/trade.py
+@@ -31,6 +31,9 @@ class Trade:
+     phase: str | None = None

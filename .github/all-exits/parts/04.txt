@@ -1,0 +1,380 @@
+     # Entry size is stable when qty becomes the remaining quantity after partial exits.
+     entry_qty: float | None = None
++    # Stable fill identity distinguishes pyramided lots, even on the same bar/ID.
++    entry_fill_index: int | None = None
++    exit_parent_id: str | None = None
+ 
+     def __post_init__(self) -> None:
+         if self.entry_qty is None:
+diff --git a/tests/unit/test_all_entry_exit_scope.py b/tests/unit/test_all_entry_exit_scope.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c4b98f3ceefda80992ce46aa6b9220a377ef81a2
+--- /dev/null
++++ b/tests/unit/test_all_entry_exit_scope.py
+@@ -0,0 +1,477 @@
++"""Position-scoped exit lifetimes and per-opening-fill relative brackets."""
++
++from dataclasses import replace
++
++import pytest
++
++from tests.unit.test_deferred_market_exits import candles, run
++
++
++def mirror(rows, direction):
++    if direction == "long":
++        return rows
++    return [
++        replace(b, open=200 - b.open, high=200 - b.low, low=200 - b.high, close=200 - b.close)
++        for b in rows
++    ]
++
++
++@pytest.mark.parametrize("direction", ["long", "short"])
++@pytest.mark.parametrize("relative", [False, True])
++@pytest.mark.parametrize("on_close", [False, True])
++@pytest.mark.parametrize("recalc", [False, True])
++def test_all_current_entries_close_independently(direction, relative, on_close, recalc):
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", direction, qty=2)
++            ctx.entry("B", direction, qty=3)
++            ctx.exit(
++                "X",
++                **(
++                    {"profit": 5, "loss": 20}
++                    if relative
++                    else {
++                        "limit": 105 if direction == "long" else 95,
++                        "stop": 80 if direction == "long" else 120,
++                    }
++                ),
++            )
++
++    rows = mirror(candles((100, 101, 99, 100), (100, 106, 99, 100), (100, 101, 99, 100)), direction)
++    e, result = run(
++        commands, rows, pyramiding=2, process_orders_on_close=on_close, calc_on_order_fills=recalc
++    )
++    assert result.status == "completed", result.errors
++    assert [(t.entry_id, t.qty, t.exit_price) for t in result.closed_trades] == [
++        ("A", 2, 105 if direction == "long" else 95),
++        ("B", 3, 105 if direction == "long" else 95),
++    ]
++    assert not result.open_trades and not e._all_entry_exits
++    assert len({t.entry_fill_index for t in result.closed_trades}) == 2
++
++
++@pytest.mark.parametrize("direction", ["long", "short"])
++@pytest.mark.parametrize("same_id", [False, True])
++def test_one_unqualified_exit_protects_subsequent_entries_until_flat(direction, same_id):
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", direction, qty=2)
++        if i == 1:
++            ctx.exit("X", profit=50, loss=70)
++        if i == 2:
++            ctx.entry("A" if same_id else "B", direction, qty=3)
++        if i == 5:
++            ctx.entry("new-position", direction, qty=1)
++
++    rows = mirror(
++        candles(
++            (100, 101, 99, 100),
++            (100, 101, 99, 100),
++            (110, 111, 109, 110),
++            (110, 151, 109, 110),
++            (110, 161, 109, 110),
++            (110, 111, 109, 110),
++            (110, 180, 109, 110),
++        ),
++        direction,
++    )
++    e, result = run(commands, rows, pyramiding=3)
++    assert result.status == "completed", result.errors
++    assert [(t.entry_price, t.exit_price, t.qty) for t in result.closed_trades] == [
++        (100, 150 if direction == "long" else 50, 2),
++        (110 if direction == "long" else 90, 160 if direction == "long" else 40, 3),
++    ]
++    assert [t.entry_id for t in result.open_trades] == ["new-position"]
++    assert not e._all_entry_exits
++
++
++@pytest.mark.parametrize("direction", ["long", "short"])
++@pytest.mark.parametrize("cancel", ["X", "all"])
++def test_cancel_removes_future_subscription_and_all_existing_children(direction, cancel):
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", direction, qty=1)
++        if i == 1:
++            ctx.exit("X", profit=20, loss=50)
++        if i == 2:
++            ctx.cancel_all() if cancel == "all" else ctx.cancel("X")
++            ctx.entry("B", direction, qty=2)
++
++    e, result = run(
++        commands,
++        mirror(
++            candles(
++                (100, 101, 99, 100), (100, 101, 99, 100), (100, 101, 99, 100), (100, 150, 99, 100)
++            ),
++            direction,
++        ),
++        pyramiding=2,
++    )
++    assert result.status == "completed", result.errors
++    assert not result.closed_trades and len(result.open_trades) == 2
++    assert not e._all_entry_exits
++    assert all(o.status == "cancelled" for o in e.orders if o.kind == "exit")
++
++
++@pytest.mark.parametrize("scope", ["all", "explicit"])
++@pytest.mark.parametrize("direction", ["long", "short"])
++def test_relative_repeated_ids_use_each_execution_price_and_quantity(scope, direction):
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", direction, qty=2)
++        if i == 1:
++            ctx.entry("A", direction, qty=6)
++        if i == 2:
++            ctx.exit(
++                "X", **({} if scope == "all" else {"from_entry": "A"}), profit=20, qty_percent=50
++            )
++
++    e, result = run(
++        commands,
++        mirror(
++            candles(
++                (100, 101, 99, 100),
++                (100, 101, 99, 100),
++                (110, 111, 109, 110),
++                (110, 125, 109, 110),
++                (110, 135, 109, 110),
++            ),
++            direction,
++        ),
++        pyramiding=2,
++    )
++    assert result.status == "completed", result.errors
++    assert [(t.entry_price, t.exit_price, t.qty) for t in result.closed_trades] == [
++        (100, 120 if direction == "long" else 80, 1),
++        (110 if direction == "long" else 90, 130 if direction == "long" else 70, 3),
++    ]
++    assert [t.qty for t in result.open_trades] == [1, 3]
++    assert sum(f.qty for f in e.fills if f.position_effect == "reduce") == 4
++
++
++def test_explicit_exit_does_not_subscribe_to_future_entries_with_same_id():
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", "long", qty=2)
++        if i == 1:
++            ctx.exit("X", "A", profit=20)
++        if i == 2:
++            ctx.entry("A", "long", qty=3)
++
++    _, result = run(
++        commands,
++        candles(
++            (100, 101, 99, 100),
++            (100, 101, 99, 100),
++            (110, 111, 109, 110),
++            (110, 125, 109, 110),
++            (110, 150, 109, 110),
++        ),
++        pyramiding=2,
++    )
++    assert result.status == "completed", result.errors
++    assert len(result.closed_trades) == 1 and result.closed_trades[0].qty == 2
++    assert len(result.open_trades) == 1 and result.open_trades[0].qty == 3
++
++
++def test_no_position_and_no_pending_entry_does_not_arm_future_positions():
++    def commands(ctx, i):
++        if i == 0:
++            ctx.exit("X", profit=2)
++        if i == 1:
++            ctx.entry("A", "long", qty=1)
++
++    e, result = run(
++        commands, candles((100, 101, 99, 100), (100, 101, 99, 100), (100, 150, 99, 100))
++    )
++    assert result.status == "completed", result.errors
++    assert not result.closed_trades and len(result.open_trades) == 1 and not e._all_entry_exits
++
++
++def test_partial_consumed_exit_does_not_rearm_old_lots_but_new_lot_is_protected():
++    def commands(ctx, i):
++        if i in (0, 2):
++            ctx.entry("A", "long", qty=2)
++        if i in (1, 3):
++            ctx.exit("X", profit=5, qty_percent=50)
++
++    _, result = run(
++        commands,
++        candles(
++            (100, 101, 99, 100),
++            (100, 101, 99, 100),
++            (100, 106, 99, 100),
++            (110, 111, 109, 110),
++            (110, 116, 109, 110),
++        ),
++        pyramiding=2,
++    )
++    assert result.status == "completed", result.errors
++    assert [(t.entry_price, t.qty, t.exit_price) for t in result.closed_trades] == [
++        (100, 1, 105),
++        (110, 1, 115),
++    ]
++    assert [t.qty for t in result.open_trades] == [1, 1]
++
++
++def test_scope_snapshot_roundtrip_keeps_future_entry_policy_and_is_detached():
++    from backtest_engine import BacktestConfig, BacktestEngine
++    from backtest_engine.core.state_snapshot import clone_state
++    from backtest_engine.context import StrategyContext
++
++    rows = candles((100, 101, 99, 100), (100, 101, 99, 100), (110, 111, 109, 110))
++    e = BacktestEngine(BacktestConfig("S", "1m", 0, 120000, mintick=1))
++    ctx = StrategyContext(e.config, e.state)
++    ctx.entry("A", "long", qty=1)
++    e._flush(ctx, rows[0], 0)
++    e.orders[0].status = "active"
++    e._fill(e.orders[0], rows[1], 1, 100, "open")
++    ctx.exit("X", profit=20)
++    e._flush(ctx, rows[1], 1)
++    snap = clone_state(e._export_realtime_broker_state())
++    e._all_entry_exits["X"]["payload"]["profit"] = 999
++    restored = BacktestEngine(e.config)
++    restored._restore_realtime_broker_state(snap)
++    assert restored._all_entry_exits["X"]["payload"]["profit"] == 20
++    ctx = StrategyContext(restored.config, restored.state)
++    ctx.order("B", "long", qty=1)
++    restored._flush(ctx, rows[1], 1)
++    entry = restored.orders[-1]
++    entry.status = "active"
++    restored._fill(entry, rows[2], 2, 110, "open")
++    assert sorted(o.limit_price for o in restored.orders if o.kind == "exit") == [120, 130]
++    assert snap.all_entry_exits["X"]["payload"]["profit"] == 20
++
++
++def test_reversal_expires_old_scope_instead_of_protecting_opposite_position():
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", "long", qty=1)
++        if i == 1:
++            ctx.exit("X", profit=30, loss=50)
++            ctx.entry("B", "short", qty=2)
++
++    e, result = run(
++        commands, candles((100, 101, 99, 100), (100, 101, 99, 100), (100, 101, 20, 100))
++    )
++    assert result.status == "completed", result.errors
++    assert not e._all_entry_exits and len(result.open_trades) == 1
++    assert result.open_trades[0].direction == "short" and result.open_trades[0].qty == 2
++
++
++@pytest.mark.parametrize(
++    "convert", ["all_to_named", "named_to_all", "relative_to_absolute", "absolute_to_relative"]
++)
++def test_replacement_does_not_leave_obsolete_targets_or_price_legs(convert):
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", "long", qty=2)
++            ctx.entry("B", "long", qty=3)
++        if i == 1:
++            ctx.exit(
++                "X",
++                **(
++                    {"from_entry": "A"}
++                    if convert in ("named_to_all", "absolute_to_relative")
++                    else {}
++                ),
++                **(
++                    {"profit": 20, "loss": 20}
++                    if convert == "relative_to_absolute"
++                    else {"limit": 120, "stop": 80}
++                ),
++            )
++        if i == 2:
++            ctx.exit(
++                "X",
++                **(
++                    {"from_entry": "A"}
++                    if convert in ("all_to_named", "relative_to_absolute")
++                    else {}
++                ),
++                **({"profit": 30} if convert == "absolute_to_relative" else {"limit": 130}),
++            )
++
++    e, result = run(
++        commands,
++        candles(
++            (100, 101, 99, 100),
++            (100, 101, 99, 100),
++            (100, 101, 99, 100),
++            (100, 121, 79, 100),
++            (100, 131, 99, 100),
++        ),
++        pyramiding=2,
++    )
++    assert result.status == "completed", result.errors
++    expected = 2 if convert in ("all_to_named", "relative_to_absolute") else 5
++    assert sum(t.qty for t in result.closed_trades) == expected
++    assert all(t.exit_price == 130 for t in result.closed_trades)
++    assert all(o.status not in ("pending", "active") for o in e.orders if o.kind == "exit")
++
++
++def test_opposite_order_reduces_a_reserved_position_without_phantom_fill():
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", "long", qty=4)
++        if i == 1:
++            ctx.exit("X", profit=30)
++            ctx.order("reduce", "short", qty=1)
++
++    e, result = run(
++        commands,
++        candles((100, 101, 99, 100), (100, 101, 99, 100), (100, 101, 99, 100), (100, 131, 99, 100)),
++    )
++    assert result.status == "completed", result.errors
++    assert [(t.qty, t.exit_price) for t in result.closed_trades] == [(1, 100), (3, 130)]
++    assert not result.open_trades and not e._all_entry_exits
++
++
++def test_relative_pending_repeated_entry_activates_only_after_its_real_fill():
++    def commands(ctx, i):
++        if i in (0, 1):
++            ctx.entry("A", "long", qty=i + 1)
++            ctx.exit("X", "A", profit=20)
++
++    _, result = run(
++        commands,
++        candles(
++            (100, 101, 99, 100), (100, 101, 99, 100), (110, 125, 109, 110), (110, 135, 109, 110)
++        ),
++        pyramiding=2,
++    )
++    assert result.status == "completed", result.errors
++    assert [(t.entry_price, t.exit_price, t.qty) for t in result.closed_trades] == [
++        (100, 120, 1),
++        (110, 130, 2),
++    ]
++    assert not result.open_trades
++
++
++def test_empty_native_from_entry_has_the_same_scope_as_omitted():
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", "long", qty=1)
++            ctx.exit("X", "", profit=5)
++
++    _, result = run(commands, candles((100, 101, 99, 100), (100, 106, 99, 100)))
++    assert result.status == "completed" and [
++        (t.qty, t.exit_price) for t in result.closed_trades
++    ] == [(1, 105)]
++
++
++def test_same_bar_same_id_lots_keep_distinct_filled_exit_keys_after_restore():
++    from backtest_engine import BacktestConfig, BacktestEngine
++    from backtest_engine.context import StrategyContext
++    from backtest_engine.core.strategy_command_processor import _apply_exit_command

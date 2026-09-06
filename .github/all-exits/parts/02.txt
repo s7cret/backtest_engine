@@ -1,0 +1,325 @@
++            if amount <= 0:
++                break
++    return result
++
++
++def expire_all_entry_exits(engine: Any) -> None:
++    """A flat/reversed position ends persistence, including still-pending entries."""
++    engine._all_entry_exits.clear()
++    for entry in engine.orders:
++        for key, template in tuple(entry.pending_exits.items()):
++            if template["payload"]["from_entry"] is None:
++                entry.pending_exits.pop(key)
++
++
++def apply_scoped_exit(
++    engine: Any,
++    payload: ExitPayload,
++    bar: Bar,
++    bar_index: int,
++    recalc_after_fill: bool,
++    limit: float | None,
++    stop: float | None,
++) -> None:
++    from backtest_engine.core.strategy_command_processor import _apply_exit_command
++
++    trades = matching_trades(engine, payload.from_entry)
++    if not trades:
++        return  # Flat without an existing entry is not a subscription to future positions.
++    if payload.from_entry is None:
++        engine._all_entry_exits[payload.id] = {
++            "payload": asdict(payload),
++            "bar_index": bar_index,
++            "time": bar.time,
++            "direction": engine.position.direction,
++        }
++    for trade in trades:
++        if trade.entry_fill_index is None:
++            # Legacy/manually constructed state has no opening fill identity.
++            # Deterministic negative IDs cannot collide with native fill indexes.
++            used = [
++                t.entry_fill_index
++                for t in (*engine.open_trades, *engine.closed_trades)
++                if t.entry_fill_index is not None
++            ]
++            trade.entry_fill_index = min([0, *used]) - 1
++        _apply_exit_command(
++            engine,
++            replace(payload, from_entry=trade.entry_id),
++            bar,
++            bar_index,
++            recalc_after_fill,
++            limit,
++            stop,
++            register_pending=False,
++            target_trade=trade,
++        )
++
++
++def activate_persistent_exits(engine: Any, entry: Order, bar: Bar, bar_index: int) -> None:
++    from backtest_engine.core.strategy_command_processor import _apply_exit_command, _clean_price
++
++    if entry.reduce_only or entry.direction != engine.position.direction:
++        return
++    new = matching_trades(engine, entry.id, len(engine.fills) - 1)
++    for template in tuple(engine._all_entry_exits.values()):
++        if template["direction"] != engine.position.direction:
++            continue
++        payload = ExitPayload(**template["payload"])
++        for trade in new:
++            if any(
++                o.kind == "exit"
++                and o.parent_exit_id == payload.id
++                and o.entry_fill_index == trade.entry_fill_index
++                and o.status in {"pending", "active"}
++                for o in engine.orders
++            ):
++                continue
++            before = len(engine.orders)
++            _apply_exit_command(
++                engine,
++                replace(payload, from_entry=entry.id),
++                bar,
++                bar_index,
++                True,
++                _clean_price(payload.limit),
++                _clean_price(payload.stop),
++                register_pending=False,
++                target_trade=trade,
++            )
++            for order in engine.orders[before:]:
++                order.created_bar_index = template["bar_index"]
++                order.created_time = template["time"]
++
++
++def reconcile_exit_scope(engine: Any, payload: ExitPayload, bar: Bar, bar_index: int) -> None:
++    """A replacement public ID cannot leave an obsolete target or price leg live."""
++    scoped = payload.from_entry is None or payload.profit is not None or payload.loss is not None
++    for order in engine.orders:
++        if (
++            order.kind != "exit"
++            or order.parent_exit_id != payload.id
++            or order.status not in {"pending", "active"}
++        ):
++            continue
++        wrong_mode = scoped != (order.entry_fill_index is not None)
++        wrong_entry = payload.from_entry is not None and order.from_entry != payload.from_entry
++        trailing = (
++            order.trail_price is not None
++            or order.trail_points is not None
++            or order.trail_offset is not None
++        )
++        removed_leg = (
++            (order.order_type == "limit" and payload.limit is None and payload.profit is None)
++            or (
++                order.order_type == "stop"
++                and not trailing
++                and payload.stop is None
++                and payload.loss is None
++            )
++            or (
++                trailing
++                and payload.trail_price is None
++                and payload.trail_points is None
++                and payload.trail_offset is None
++            )
++        )
++        if wrong_mode or wrong_entry or removed_leg:
++            order.status = "cancelled"
++            engine._cb("on_order_cancelled", order)
++            engine._event(
++                "ORDER_CANCELLED", "exit scope or leg replaced", bar_index, bar.time, order.id
++            )
+diff --git a/backtest_engine/core/fill_execution.py b/backtest_engine/core/fill_execution.py
+index 2dd52577545a6bfe0ac1294b0b247857dc3d7262..150b8ebb0d2df1d2e7bfcf48e8b94bd0cb091f21 100644
+--- a/backtest_engine/core/fill_execution.py
++++ b/backtest_engine/core/fill_execution.py
+@@ -30,7 +30,9 @@ def execute_fill(
+             return
+         order.qty = min(order.qty, available)
+     if order.kind == "exit":
+-        available = engine._available_exit_qty(order.from_entry, exclude_order=order)
++        available = engine._available_exit_qty(
++            order.from_entry, exclude_order=order, entry_fill_index=order.entry_fill_index
++        )
+         if available <= 0:
+             code = (
+                 "ORDER_REJECTED_NO_MATCHING_ENTRY"
+@@ -91,6 +93,8 @@ def execute_fill(
+         from backtest_engine.core.deferred_exits import activate_deferred_exits
+ 
+         activate_deferred_exits(engine, order, bar, bar_index)
++        from backtest_engine.core.exit_scope import activate_persistent_exits
++        activate_persistent_exits(engine, order, bar, bar_index)
+ 
+ 
+ def _consume_opposite_reverse_close_component(
+diff --git a/backtest_engine/core/fill_scanner.py b/backtest_engine/core/fill_scanner.py
+index daefe7ccec086fe69cbbb5a4041d43fea96363a6..a3cd9b7c9dc83ba45cd33e407dcfd1464ab5693d 100644
+--- a/backtest_engine/core/fill_scanner.py
++++ b/backtest_engine/core/fill_scanner.py
+@@ -230,11 +230,9 @@ def _fill_price_for_order(
+     path_is_open: bool,
+ ) -> float | None:
+     update_trailing_order(order, price)
+-    if (
+-        order.kind == "exit"
+-        and order.from_entry is not None
+-        and not engine._matching_open_trades(order.from_entry)
+-    ):
++    from backtest_engine.core.exit_scope import matching_trades
++    if (order.kind == "exit" and (order.from_entry is not None or order.entry_fill_index is not None)
++            and not matching_trades(engine, order.from_entry, order.entry_fill_index)):
+         return None
+     if order.order_type == "stop" and order.stop_price is None:
+         return None
+diff --git a/backtest_engine/core/intent_replay.py b/backtest_engine/core/intent_replay.py
+index 838593b3095690a81fbbb12dbdf19756b1ec48e5..852c0130b699326eba98ae30f4f04a98b4bf8351 100644
+--- a/backtest_engine/core/intent_replay.py
++++ b/backtest_engine/core/intent_replay.py
+@@ -371,7 +371,7 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
+     if kind == "exit":
+         ctx.exit(
+             order_id,
+-            from_entry=event["from_entry"],
++            from_entry=(None if event.get("exit_scope") == "all_entries" else event["from_entry"]),
+             qty=qty,
+             qty_percent=qty_percent,
+             limit=limit,
+diff --git a/backtest_engine/core/oca.py b/backtest_engine/core/oca.py
+index 1bc59f7ae5a87dd8db8c9ca0dc9e1dce5f5602bd..edc35d005507aadc5a9255b7ed60a7303963150c 100644
+--- a/backtest_engine/core/oca.py
++++ b/backtest_engine/core/oca.py
+@@ -15,6 +15,8 @@ def apply_oca(engine: Any, order: Order, bar: Bar, bar_index: int) -> None:
+             other is not order
+             and other.status in ("pending", "active")
+             and other.oca_name == order.oca_name
++            and (order.oca_explicit or other.oca_explicit
++                 or other.entry_fill_index == order.entry_fill_index)
+         ):
+             if order.oca_type == "cancel":
+                 other.status = "cancelled"
+@@ -28,6 +30,7 @@ def apply_oca(engine: Any, order: Order, bar: Bar, bar_index: int) -> None:
+                 )
+             elif order.oca_type == "reduce":
+                 other.qty = max(0.0, other.qty - order.qty)
++                other.reserved_qty = min(other.reserved_qty, other.qty)
+                 if other.qty <= 0:
+                     other.status = "cancelled"
+                     engine._cb("on_order_cancelled", other)
+diff --git a/backtest_engine/core/position_accounting.py b/backtest_engine/core/position_accounting.py
+index 7c79c9b8c9c07071fb0521c196b058884210ad7d..473705deb5be6d03c0cf5c3a282ef19986a8710c 100644
+--- a/backtest_engine/core/position_accounting.py
++++ b/backtest_engine/core/position_accounting.py
+@@ -69,6 +69,7 @@ def _open_position(
+         -commission,
+         0.0,
+         is_open=True,
++        entry_fill_index=len(engine.fills),
+     )
+     engine.open_trades.append(trade)
+     engine._cb("on_trade_open", trade)
+@@ -106,6 +107,7 @@ def _add_to_position(
+         -commission,
+         0.0,
+         is_open=True,
++        entry_fill_index=len(engine.fills),
+     )
+     engine.open_trades.append(trade)
+     engine._cb("on_trade_open", trade)
+@@ -125,11 +127,9 @@ def _reduce_or_reverse_position(
+     fill_point: str = "",
+ ) -> str:
+     qty_close = min(abs(signed), abs(engine.position.size))
+-    targets = [
+-        trade
+-        for trade in engine.open_trades
+-        if order.from_entry is None or trade.entry_id == order.from_entry
+-    ]
++    from backtest_engine.core.exit_scope import matching_trades, reserved_by_trade
++
++    targets = matching_trades(engine, order.from_entry, order.entry_fill_index)
+     if not targets:
+         engine._diag(
+             "ORDER_REJECTED_NO_MATCHING_ENTRY",
+@@ -144,14 +144,14 @@ def _reduce_or_reverse_position(
+     # position even when reduce-only strategy.exit orders are reserving it.
+     reserved = (
+         {}
+-        if order.position_effect in {"close", "reverse"}
+-        else engine._reserved_qty_by_entry(exclude_order=order)
++        if order.kind != "exit"
++        else reserved_by_trade(engine, exclude_order=order)
+     )
+     target_caps = {
+         id(trade): max(
+             0.0,
+             trade.qty
+-            - (reserved.get(trade.entry_id, 0.0) if order.from_entry is None else 0.0),
++            - reserved.get(id(trade), 0.0),
+         )
+         for trade in targets
+     }
+@@ -191,6 +191,8 @@ def _reduce_or_reverse_position(
+     qty_epsilon = _qty_epsilon(engine)
+     if abs(engine.position.size) < qty_epsilon:
+         _drop_dust_open_trades(engine, qty_epsilon)
++        from backtest_engine.core.exit_scope import expire_all_entry_exits
++        expire_all_entry_exits(engine)
+         engine.position = Position(realized_profit=engine.position.realized_profit)
+         return "flat"
+     same_direction = [
+@@ -204,6 +206,8 @@ def _reduce_or_reverse_position(
+             sum(trade.entry_price * trade.qty for trade in same_direction) / qty
+         )
+     if engine.position.size * current_sign < 0:
++        from backtest_engine.core.exit_scope import expire_all_entry_exits
++        expire_all_entry_exits(engine)
+         engine.position.direction = "long" if engine.position.size > 0 else "short"
+         engine.position.avg_price = price
+         _record_reversal_entry(engine, order, price, bar, bar_index, opening_commission)
+@@ -218,7 +222,8 @@ def _cancel_orphaned_exit_orders(
+             continue
+         if order.kind != "exit" or order.status not in {"pending", "active"}:
+             continue
+-        if order.from_entry is None or engine._matching_open_trades(order.from_entry):
++        from backtest_engine.core.exit_scope import matching_trades
++        if matching_trades(engine, order.from_entry, order.entry_fill_index):
+             continue
+         order.status = "cancelled"
+         engine._cb("on_order_cancelled", order)
+@@ -287,6 +292,7 @@ def _close_target_trades(
+         closed = replace(
+             trade,
+             exit_id=order.id,
++            exit_parent_id=order.parent_exit_id if order.kind == "exit" else None,
+             exit_time=bar.time,
+             exit_bar_index=bar_index,
+             exit_price=price,
+@@ -317,6 +323,7 @@ def _close_target_trades(
+                     closed.entry_id,
+                     closed.entry_time,
+                     closed.entry_bar_index,
++                    closed.entry_fill_index,
+                 )
+             )
+         engine._cb("on_trade_close", closed)
+@@ -348,7 +355,7 @@ def _closed_trade_exit_prices(engine: Any, order: Order) -> tuple[float | None,
+             continue
+         if (sibling.parent_exit_id or sibling.id) != parent_exit_id:
+             continue
+-        if sibling.from_entry != order.from_entry:
++        if sibling.from_entry != order.from_entry or sibling.entry_fill_index != order.entry_fill_index:
+             continue
+         if stop_price is None and sibling.stop_price is not None:
+             stop_price = sibling.stop_price
+@@ -407,6 +414,7 @@ def _record_reversal_entry(
+         -opening_commission,
+         0.0,
+         is_open=True,
++        entry_fill_index=len(engine.fills),
+     )
+     engine.open_trades.append(trade)
+     engine._cb("on_trade_open", trade)
+diff --git a/backtest_engine/core/resume_state.py b/backtest_engine/core/resume_state.py
+index dd8cad59926019d6d17cb7de0106b334da25294a..b76846329681ef3736cc67fe23b93e6884fea25a 100644

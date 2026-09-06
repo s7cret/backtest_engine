@@ -1,0 +1,287 @@
+diff --git a/backtest_engine/context/strategy_context.py b/backtest_engine/context/strategy_context.py
+index e2b1c731d7c5cfb59a2444d70da22cda2edc9375..a9a0c91313b39186f6642497bf5f8943f08dcca3 100644
+--- a/backtest_engine/context/strategy_context.py
++++ b/backtest_engine/context/strategy_context.py
+@@ -86,7 +86,7 @@ class StrategyContext:
+         self.buffer.add(
+             "exit",
+             id=id,
+-            from_entry=from_entry,
++            from_entry=None if from_entry == "" else from_entry,
+             qty=qty,
+             qty_percent=qty_percent,
+             limit=limit,
+diff --git a/backtest_engine/core/deferred_exits.py b/backtest_engine/core/deferred_exits.py
+index b8f87ea9fe38a62199accb17710bcaf30aa3ed1a..81dbff2569c0ee435543f1a981ade8e71936fc66 100644
+--- a/backtest_engine/core/deferred_exits.py
++++ b/backtest_engine/core/deferred_exits.py
+@@ -3,7 +3,7 @@
+ Templates belong to the entry order instance: cancellation/replacement cannot
+ attach them to a later unrelated order which happens to reuse the same ID.
+ Activation follows the actual parent fill on the historical price path, including
+-limit/stop/stop-limit entries. This is not all-entry exit persistence.
++limit/stop/stop-limit entries. Position-lifetime persistence is owned by exit_scope.
+ """
+ 
+ from __future__ import annotations
+@@ -12,7 +12,6 @@ from dataclasses import asdict
+ from typing import Any
+ 
+ from backtest_engine.context.command_buffer import ExitPayload
+-from backtest_engine.errors import StrategyRuntimeError
+ from backtest_engine.models import Bar, Order
+ 
+ 
+@@ -27,12 +26,12 @@ def remove_deferred_exits(engine: Any, exit_id: str | None = None) -> None:
+ 
+ def defer_exit(engine: Any, payload: ExitPayload, bar: Bar, bar_index: int) -> bool:
+     """Capture only pending orders already created by this callback or earlier."""
+-    if payload.from_entry is None:
+-        return False
+     entries = [
+         order
+         for order in engine.orders
+-        if order.id == payload.from_entry
++        if (payload.from_entry is None or order.id == payload.from_entry)
++        and (payload.from_entry is not None or engine.position.direction == "flat"
++             or order.direction == engine.position.direction)
+         and order.kind in {"entry", "order"}
+         and not order.reduce_only
+         and order.status in {"active", "pending"}
+@@ -67,10 +66,6 @@ def activate_deferred_exits(engine: Any, entry: Order, bar: Bar, bar_index: int)
+ 
+     for template in templates:
+         payload = ExitPayload(**template["payload"])
+-        if len(matching) > 1 and (payload.profit is not None or payload.loss is not None):
+-            raise StrategyRuntimeError(
+-                "deferred relative exits with repeated entry IDs require per-trade price levels"
+-            )
+         before = len(engine.orders)
+         _apply_exit_command(
+             engine,
+@@ -82,6 +77,9 @@ def activate_deferred_exits(engine: Any, entry: Order, bar: Bar, bar_index: int)
+             _clean_price(payload.stop),
+             register_pending=False,
+         )
++        if payload.from_entry is None and payload.id in engine._all_entry_exits:
++            engine._all_entry_exits[payload.id]["bar_index"] = template["bar_index"]
++            engine._all_entry_exits[payload.id]["time"] = template["time"]
+         # These commands existed before the fill. Preserve their creation clock,
+         # so process_orders_on_close cannot delay a previously submitted bracket.
+         for order in engine.orders[before:]:
+diff --git a/backtest_engine/core/delegated_strategy_intents.py b/backtest_engine/core/delegated_strategy_intents.py
+index f8802fcc94f20dd62268e1181ea4058e1721c583..842647673b2a71b2926957e9dcb5ed2f0700f34a 100644
+--- a/backtest_engine/core/delegated_strategy_intents.py
++++ b/backtest_engine/core/delegated_strategy_intents.py
+@@ -254,7 +254,8 @@ class DelegatedStrategyIntentHandler:
+         if kind == "close":
+             command_id = "close:" + command_id
+         if kind == "exit":
+-            entry_id = _nonempty_string(arguments["from_entry"], "from_entry")
++            entry_id = (None if arguments.get("from_entry", "") == "" else
++                        _nonempty_string(arguments["from_entry"], "from_entry"))
+             # Entry/exit commands in one callback are committed together. The
+             # broker owns binding to open trades or already-created market orders;
+             # a pre-callback position snapshot cannot decide whether an exit is valid.
+@@ -327,10 +328,13 @@ class DelegatedStrategyIntentHandler:
+         elif kind == "exit":
+             payload.update(
+                 order_id=command_id,
+-                from_entry=entry_id,
+                 comment=_optional_string(arguments.get("comment"), "comment"),
+                 oca_name=_optional_string(arguments.get("oca_name"), "oca_name"),
+             )
++            if entry_id is None:
++                payload.update(schema_version="2.3.0", exit_scope="all_entries")
++            else:
++                payload["from_entry"] = entry_id
+             for field in ("qty", "qty_percent", "profit", "limit", "loss", "stop"):
+                 value = _optional(arguments.get(field))
+                 if value is not None:
+diff --git a/backtest_engine/core/engine.py b/backtest_engine/core/engine.py
+index bbb2bbff5b3b6fff64259fa62a274bae9ba1e45f..88514fc43482efd032b063b739c5c485753c19c3 100644
+--- a/backtest_engine/core/engine.py
++++ b/backtest_engine/core/engine.py
+@@ -98,7 +98,8 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
+         self.fills: list[Fill] = []
+         self.closed_trades: list[Trade] = []
+         self.open_trades: list[Trade] = []
+-        self._filled_exit_entry_keys: set[tuple[str, str, int, int]] = set()
++        self._filled_exit_entry_keys: set[tuple] = set()
++        self._all_entry_exits: dict[str, dict] = {}
+         self._closed_trade_stats_count = 0
+         self._gross_profit_total = 0.0
+         self._gross_loss_total = 0.0
+@@ -420,67 +421,30 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
+     def _reserved_qty_by_entry(
+         self, exclude_order: Order | None = None
+     ) -> dict[str, float]:
+-        groups: dict[str, tuple[str | None, float]] = {}
+-        exclude_key = (
+-            (exclude_order.parent_exit_id or exclude_order.id)
+-            if exclude_order is not None
+-            else None
+-        )
+-        for o in self.orders:
+-            if o is exclude_order or (
+-                exclude_key is not None and (o.parent_exit_id or o.id) == exclude_key
+-            ):
+-                continue
+-            if o.kind == "exit" and o.status in ("pending", "active"):
+-                key = o.parent_exit_id or o.id
+-                qty = o.reserved_qty or o.qty
+-                prev = groups.get(key)
+-                if prev is None or qty > prev[1]:
+-                    groups[key] = (o.from_entry, qty)
+-        reserved: dict[str, float] = {}
+-        # Several pyramid entries can share an entry ID. A dict of only the
+-        # last trade undercounts their capacity and lets later exits overreserve.
+-        unreserved: dict[str, float] = {}
++        from backtest_engine.core.exit_scope import reserved_by_trade
++
++        allocation = reserved_by_trade(self, exclude_order)
++        result: dict[str, float] = {}
+         for trade in self.open_trades:
+-            unreserved[trade.entry_id] = unreserved.get(trade.entry_id, 0.0) + trade.qty
+-        for entry, qty in groups.values():
+-            if entry is not None:
+-                q = min(qty, unreserved.get(entry, 0.0))
+-                if q <= 0:
+-                    continue
+-                reserved[entry] = reserved.get(entry, 0.0) + q
+-                unreserved[entry] = max(0.0, unreserved.get(entry, 0.0) - q)
+-        for entry, qty in groups.values():
+-            if entry is not None:
+-                continue
+-            remaining = qty
+-            for entry_id in unreserved:
+-                if remaining <= 0:
+-                    break
+-                q = min(remaining, unreserved[entry_id])
+-                if q <= 0:
+-                    continue
+-                reserved[entry_id] = reserved.get(entry_id, 0.0) + q
+-                unreserved[entry_id] -= q
+-                remaining -= q
+-        return reserved
++            if amount := allocation.get(id(trade), 0.0):
++                result[trade.entry_id] = result.get(trade.entry_id, 0.0) + amount
++        return result
+ 
+     def _reserved_exit_qty(
+         self, from_entry: str | None, exclude_order: Order | None = None
+     ) -> float:
+         by_entry = self._reserved_qty_by_entry(exclude_order)
+-        if from_entry is None:
+-            return sum(by_entry.values())
+-        return by_entry.get(from_entry, 0.0)
++        return sum(by_entry.values()) if from_entry is None else by_entry.get(from_entry, 0.0)
+ 
+     def _available_exit_qty(
+-        self, from_entry: str | None, exclude_order: Order | None = None
++        self, from_entry: str | None, exclude_order: Order | None = None,
++        *, entry_fill_index: int | None = None,
+     ) -> float:
+-        return max(
+-            0.0,
+-            sum(t.qty for t in self._matching_open_trades(from_entry))
+-            - self._reserved_exit_qty(from_entry, exclude_order),
+-        )
++        from backtest_engine.core.exit_scope import matching_trades, reserved_by_trade
++
++        reserved = reserved_by_trade(self, exclude_order)
++        return sum(max(0.0, trade.qty - reserved.get(id(trade), 0.0))
++                   for trade in matching_trades(self, from_entry, entry_fill_index))
+ 
+     def _exit_base_price(self, from_entry: str | None) -> float:
+         trades = self._matching_open_trades(from_entry)
+diff --git a/backtest_engine/core/engine_realtime.py b/backtest_engine/core/engine_realtime.py
+index f238fc4131b5cccf39c9aa201c3d138ae46a1112..270f403f274d0537abc5a8f988440c3a33263eb0 100644
+--- a/backtest_engine/core/engine_realtime.py
++++ b/backtest_engine/core/engine_realtime.py
+@@ -54,6 +54,7 @@ class EngineRealtimeMixin:
+             closed_trades=clone_state(self.closed_trades),
+             open_trades=clone_state(self.open_trades),
+             last_trade_bar=self.last_trade_bar,
++            all_entry_exits=clone_state(self._all_entry_exits),
+             events=clone_state(self.events),
+             warnings=clone_state(self.warnings),
+             errors=clone_state(self.errors),
+@@ -77,16 +78,18 @@ class EngineRealtimeMixin:
+         self.max_runup = snapshot.max_runup
+         self.max_runup_percent = snapshot.max_runup_percent
+         self.position = clone_state(snapshot.position)
++        self._all_entry_exits = clone_state(snapshot.all_entry_exits)
+         self.orders = clone_state(snapshot.orders)
+         self.fills = clone_state(snapshot.fills)
+         self.closed_trades = clone_state(snapshot.closed_trades)
+         self.open_trades = clone_state(snapshot.open_trades)
+         self._filled_exit_entry_keys = {
+             (
+-                trade.exit_id.split(":", 1)[0],
++                trade.exit_parent_id or trade.exit_id.split(":", 1)[0],
+                 trade.entry_id,
+                 trade.entry_time,
+                 trade.entry_bar_index,
++                trade.entry_fill_index,
+             )
+             for trade in self.closed_trades
+             if trade.exit_id is not None
+diff --git a/backtest_engine/core/exit_scope.py b/backtest_engine/core/exit_scope.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c4fbb951e22b700607fc3c1fc630efca5cb564bf
+--- /dev/null
++++ b/backtest_engine/core/exit_scope.py
+@@ -0,0 +1,184 @@
++"""Exit targeting and position-lifetime policies in the existing broker.
++
++A public entry ID is not a lot identity. Relative and all-entry exits are
++materialized per actual opening fill. Absolute named exits retain their existing
++aggregate quantity behavior; complete FIFO/report attribution is a separate gate.
++"""
++
++from __future__ import annotations
++
++from dataclasses import asdict, replace
++from typing import Any
++
++from backtest_engine.context.command_buffer import ExitPayload
++from backtest_engine.models import Bar, Order, Trade
++
++
++def matching_trades(engine: Any, from_entry: str | None, lot: int | None = None) -> list[Trade]:
++    return [
++        trade
++        for trade in engine._matching_open_trades(from_entry)
++        if lot is None or trade.entry_fill_index == lot
++    ]
++
++
++def reservation_key(order: Order) -> tuple[str, int | None]:
++    return (order.parent_exit_id or order.id, order.entry_fill_index)
++
++
++def reserved_by_trade(engine: Any, exclude_order: Order | None = None) -> dict[int, float]:
++    """Reserve each TP/SL bracket once and distribute pooled reservations once.
++
++    Object identities are temporary keys in this one calculation only, never
++    persisted or used as checkpoint/run identities.
++    """
++    groups = {}
++    excluded = reservation_key(exclude_order) if exclude_order is not None else None
++    for order in engine.orders:
++        key = reservation_key(order)
++        if order.kind != "exit" or order.status not in {"pending", "active"} or key == excluded:
++            continue
++        amount = min(order.reserved_qty or order.qty, order.qty)
++        if key not in groups or amount > groups[key][1]:
++            groups[key] = (order, amount)
++    result: dict[int, float] = {}
++    # Preserve named-before-unqualified legacy allocation; new all-entry orders
++    # have concrete named lot targets and are allocated in command creation order.
++    for order, amount in sorted(groups.values(), key=lambda item: item[0].from_entry is None):
++        for trade in matching_trades(engine, order.from_entry, order.entry_fill_index):
++            key = id(trade)
++            used = min(amount, max(0.0, trade.qty - result.get(key, 0.0)))
++            result[key] = result.get(key, 0.0) + used
++            amount -= used
