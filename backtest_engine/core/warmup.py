@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from copy import deepcopy
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -67,6 +68,7 @@ class BrokerState:
     open_trades: tuple[object, ...]
     closed_trades: tuple[object, ...]
     last_trade_bar: int | None
+    all_entry_exits: dict[str, dict] = field(default_factory=dict)
 
     @classmethod
     def canonical_initial(cls, capital: float) -> BrokerState:
@@ -103,6 +105,7 @@ class BrokerState:
             open_trades=tuple(engine.open_trades),
             closed_trades=tuple(engine.closed_trades),
             last_trade_bar=engine.last_trade_bar,
+            all_entry_exits=deepcopy(engine._all_entry_exits),
         )
 
     def apply_to(self, engine: Any) -> None:
@@ -125,6 +128,7 @@ class BrokerState:
         engine.fills = list(self.fills)
         engine.open_trades = list(self.open_trades)
         engine.closed_trades = list(self.closed_trades)
+        engine._all_entry_exits = deepcopy(self.all_entry_exits)
         engine.last_trade_bar = self.last_trade_bar
         engine._filled_exit_entry_keys = set()
         engine._closed_trade_stats_count = 0

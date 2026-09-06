@@ -31,6 +31,9 @@ class Trade:
     phase: str | None = None
     # Entry size is stable when qty becomes the remaining quantity after partial exits.
     entry_qty: float | None = None
+    # Stable fill identity distinguishes pyramided lots, even on the same bar/ID.
+    entry_fill_index: int | None = None
+    exit_parent_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.entry_qty is None:

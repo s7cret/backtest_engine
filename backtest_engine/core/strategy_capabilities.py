@@ -115,11 +115,12 @@ _COMMANDS = (
     StrategyCommandSpec("strategy.cancel", ("id",), ("id",)),
     StrategyCommandSpec("strategy.cancel_all", (), ()),
     # The broker admits exits for open trades and pending price/market entries.
-    # A concrete entry ID is required; trailing/per-leg metadata remain unsupported.
+    # Omitted/empty from_entry uses the versioned all-entry scope. Trailing and
+    # per-leg metadata remain unsupported by this host surface.
     StrategyCommandSpec(
         "strategy.exit",
         _EXIT,
-        ("id", "from_entry"),
+        ("id",),
         frozenset(
             {
                 "trail_price",

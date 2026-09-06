@@ -98,7 +98,8 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         self.fills: list[Fill] = []
         self.closed_trades: list[Trade] = []
         self.open_trades: list[Trade] = []
-        self._filled_exit_entry_keys: set[tuple[str, str, int, int]] = set()
+        self._filled_exit_entry_keys: set[tuple] = set()
+        self._all_entry_exits: dict[str, dict] = {}
         self._closed_trade_stats_count = 0
         self._gross_profit_total = 0.0
         self._gross_loss_total = 0.0
@@ -420,67 +421,30 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
     def _reserved_qty_by_entry(
         self, exclude_order: Order | None = None
     ) -> dict[str, float]:
-        groups: dict[str, tuple[str | None, float]] = {}
-        exclude_key = (
-            (exclude_order.parent_exit_id or exclude_order.id)
-            if exclude_order is not None
-            else None
-        )
-        for o in self.orders:
-            if o is exclude_order or (
-                exclude_key is not None and (o.parent_exit_id or o.id) == exclude_key
-            ):
-                continue
-            if o.kind == "exit" and o.status in ("pending", "active"):
-                key = o.parent_exit_id or o.id
-                qty = o.reserved_qty or o.qty
-                prev = groups.get(key)
-                if prev is None or qty > prev[1]:
-                    groups[key] = (o.from_entry, qty)
-        reserved: dict[str, float] = {}
-        # Several pyramid entries can share an entry ID. A dict of only the
-        # last trade undercounts their capacity and lets later exits overreserve.
-        unreserved: dict[str, float] = {}
+        from backtest_engine.core.exit_scope import reserved_by_trade
+
+        allocation = reserved_by_trade(self, exclude_order)
+        result: dict[str, float] = {}
         for trade in self.open_trades:
-            unreserved[trade.entry_id] = unreserved.get(trade.entry_id, 0.0) + trade.qty
-        for entry, qty in groups.values():
-            if entry is not None:
-                q = min(qty, unreserved.get(entry, 0.0))
-                if q <= 0:
-                    continue
-                reserved[entry] = reserved.get(entry, 0.0) + q
-                unreserved[entry] = max(0.0, unreserved.get(entry, 0.0) - q)
-        for entry, qty in groups.values():
-            if entry is not None:
-                continue
-            remaining = qty
-            for entry_id in unreserved:
-                if remaining <= 0:
-                    break
-                q = min(remaining, unreserved[entry_id])
-                if q <= 0:
-                    continue
-                reserved[entry_id] = reserved.get(entry_id, 0.0) + q
-                unreserved[entry_id] -= q
-                remaining -= q
-        return reserved
+            if amount := allocation.get(id(trade), 0.0):
+                result[trade.entry_id] = result.get(trade.entry_id, 0.0) + amount
+        return result
 
     def _reserved_exit_qty(
         self, from_entry: str | None, exclude_order: Order | None = None
     ) -> float:
         by_entry = self._reserved_qty_by_entry(exclude_order)
-        if from_entry is None:
-            return sum(by_entry.values())
-        return by_entry.get(from_entry, 0.0)
+        return sum(by_entry.values()) if from_entry is None else by_entry.get(from_entry, 0.0)
 
     def _available_exit_qty(
-        self, from_entry: str | None, exclude_order: Order | None = None
+        self, from_entry: str | None, exclude_order: Order | None = None,
+        *, entry_fill_index: int | None = None,
     ) -> float:
-        return max(
-            0.0,
-            sum(t.qty for t in self._matching_open_trades(from_entry))
-            - self._reserved_exit_qty(from_entry, exclude_order),
-        )
+        from backtest_engine.core.exit_scope import matching_trades, reserved_by_trade
+
+        reserved = reserved_by_trade(self, exclude_order)
+        return sum(max(0.0, trade.qty - reserved.get(id(trade), 0.0))
+                   for trade in matching_trades(self, from_entry, entry_fill_index))
 
     def _exit_base_price(self, from_entry: str | None) -> float:
         trades = self._matching_open_trades(from_entry)

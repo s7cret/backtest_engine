@@ -3,7 +3,7 @@
 Templates belong to the entry order instance: cancellation/replacement cannot
 attach them to a later unrelated order which happens to reuse the same ID.
 Activation follows the actual parent fill on the historical price path, including
-limit/stop/stop-limit entries. This is not all-entry exit persistence.
+limit/stop/stop-limit entries. Position-lifetime persistence is owned by exit_scope.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from dataclasses import asdict
 from typing import Any
 
 from backtest_engine.context.command_buffer import ExitPayload
-from backtest_engine.errors import StrategyRuntimeError
 from backtest_engine.models import Bar, Order
 
 
@@ -27,12 +26,12 @@ def remove_deferred_exits(engine: Any, exit_id: str | None = None) -> None:
 
 def defer_exit(engine: Any, payload: ExitPayload, bar: Bar, bar_index: int) -> bool:
     """Capture only pending orders already created by this callback or earlier."""
-    if payload.from_entry is None:
-        return False
     entries = [
         order
         for order in engine.orders
-        if order.id == payload.from_entry
+        if (payload.from_entry is None or order.id == payload.from_entry)
+        and (payload.from_entry is not None or engine.position.direction == "flat"
+             or order.direction == engine.position.direction)
         and order.kind in {"entry", "order"}
         and not order.reduce_only
         and order.status in {"active", "pending"}
@@ -67,10 +66,6 @@ def activate_deferred_exits(engine: Any, entry: Order, bar: Bar, bar_index: int)
 
     for template in templates:
         payload = ExitPayload(**template["payload"])
-        if len(matching) > 1 and (payload.profit is not None or payload.loss is not None):
-            raise StrategyRuntimeError(
-                "deferred relative exits with repeated entry IDs require per-trade price levels"
-            )
         before = len(engine.orders)
         _apply_exit_command(
             engine,
@@ -82,6 +77,9 @@ def activate_deferred_exits(engine: Any, entry: Order, bar: Bar, bar_index: int)
             _clean_price(payload.stop),
             register_pending=False,
         )
+        if payload.from_entry is None and payload.id in engine._all_entry_exits:
+            engine._all_entry_exits[payload.id]["bar_index"] = template["bar_index"]
+            engine._all_entry_exits[payload.id]["time"] = template["time"]
         # These commands existed before the fill. Preserve their creation clock,
         # so process_orders_on_close cannot delay a previously submitted bracket.
         for order in engine.orders[before:]:

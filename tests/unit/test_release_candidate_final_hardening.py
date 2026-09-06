@@ -391,6 +391,7 @@ class _FakeEngine:
         self.diags: list[tuple[str, str | None]] = []
         self.events: list[str] = []
         self._filled_exit_entry_keys = None
+        self._all_entry_exits = {}
         self._max_position_size: float | None = 1.0
 
     def _apply_risk_rules(self, ctx: StrategyContext) -> None:
@@ -423,10 +424,12 @@ class _FakeEngine:
         ]
 
     def _available_exit_qty(
-        self, from_entry: str | None, exclude_order: Order | None = None
+        self, from_entry: str | None, exclude_order: Order | None = None,
+        *, entry_fill_index: int | None = None,
     ) -> float:
         del exclude_order
-        return sum(t.qty for t in self._matching_open_trades(from_entry))
+        return sum(t.qty for t in self._matching_open_trades(from_entry)
+                   if entry_fill_index is None or t.entry_fill_index == entry_fill_index)
 
     def _exit_base_price(self, from_entry: str | None) -> float:
         trades = self._matching_open_trades(from_entry)

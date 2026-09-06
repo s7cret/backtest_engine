@@ -37,3 +37,6 @@ class Order:
     phase: str | None = None
     # Plain data survives broker deepcopy/checkpoint and JSON result export.
     pending_exits: dict[str, dict] = field(default_factory=dict)
+    # None retains an aggregate named-entry scope; an integer targets one lot.
+    entry_fill_index: int | None = None
+    oca_explicit: bool = False

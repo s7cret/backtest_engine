@@ -434,16 +434,18 @@ def restore_resume_state(
     engine.max_runup = broker.max_runup
     engine.max_runup_percent = broker.max_runup_percent
     engine.position = broker.position
+    engine._all_entry_exits = broker.all_entry_exits
     engine.orders = broker.orders
     engine.fills = broker.fills
     engine.closed_trades = broker.closed_trades
     engine.open_trades = broker.open_trades
     engine._filled_exit_entry_keys = {
         (
-            trade.exit_id.split(":", 1)[0],
+            trade.exit_parent_id or trade.exit_id.split(":", 1)[0],
             trade.entry_id,
             trade.entry_time,
             trade.entry_bar_index,
+            trade.entry_fill_index,
         )
         for trade in engine.closed_trades
         if trade.exit_id is not None
@@ -524,6 +526,7 @@ def export_resume_state(
         engine.closed_trades,
         engine.open_trades,
         engine.last_trade_bar,
+        engine._all_entry_exits,
     )
     metadata: dict[str, Any] = {"resume_contract": "engine-broker-snapshot-v1"}
     if series is not None:

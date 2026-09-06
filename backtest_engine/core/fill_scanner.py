@@ -230,11 +230,9 @@ def _fill_price_for_order(
     path_is_open: bool,
 ) -> float | None:
     update_trailing_order(order, price)
-    if (
-        order.kind == "exit"
-        and order.from_entry is not None
-        and not engine._matching_open_trades(order.from_entry)
-    ):
+    from backtest_engine.core.exit_scope import matching_trades
+    if (order.kind == "exit" and (order.from_entry is not None or order.entry_fill_index is not None)
+            and not matching_trades(engine, order.from_entry, order.entry_fill_index)):
         return None
     if order.order_type == "stop" and order.stop_price is None:
         return None

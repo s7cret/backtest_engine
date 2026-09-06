@@ -11,7 +11,7 @@ from backtest_engine.context import (
     ExitPayload,
     StrategyContext,
 )
-from backtest_engine.models import Bar, Order
+from backtest_engine.models import Bar, Order, Trade
 
 EntryCommandKind = Literal["entry", "order"]
 OrderDirection = Literal["long", "short"]
@@ -36,6 +36,7 @@ def flush_strategy_commands(
         kind = command.name
         payload = command.payload
         if kind == "cancel_all":
+            engine._all_entry_exits.clear()
             remove_deferred_exits(engine)
             for order in engine.orders:
                 if order.status in ("pending", "active"):
@@ -51,6 +52,7 @@ def flush_strategy_commands(
             continue
         if kind == "cancel":
             assert isinstance(payload, CancelPayload)
+            engine._all_entry_exits.pop(payload.id, None)
             remove_deferred_exits(engine, payload.id)
             for order in engine.orders:
                 if (order.id == payload.id or order.parent_exit_id == payload.id) and order.status in ("pending", "active"):
@@ -184,12 +186,21 @@ def _apply_exit_command(
     stop: float | None,
     *,
     register_pending: bool = True,
+    target_trade: Trade | None = None,
 ) -> None:
     from backtest_engine.core.deferred_exits import defer_exit
 
+    from backtest_engine.core.exit_scope import apply_scoped_exit, matching_trades, reconcile_exit_scope
+
+    if register_pending:
+        reconcile_exit_scope(engine, payload, bar, bar_index)
+    if register_pending and payload.from_entry is not None:
+        engine._all_entry_exits.pop(payload.id, None)
     waiting = defer_exit(engine, payload, bar, bar_index) if register_pending else False
+    if target_trade is None and (payload.from_entry is None or payload.profit is not None or payload.loss is not None):
+        apply_scoped_exit(engine, payload, bar, bar_index, recalc_after_fill, limit, stop)
+        return
     if waiting and not engine._matching_open_trades(payload.from_entry):
-        # A submitted entry activates its captured instruction only on its fill.
         return
     if engine.position.direction == "flat":
         engine._diag(
@@ -204,7 +215,8 @@ def _apply_exit_command(
     direction = engine.position.direction
     side: OrderSide = "sell" if direction == "long" else "buy"
     from_entry = payload.from_entry
-    if _exit_id_already_filled_for_open_entry(engine, payload.id, from_entry):
+    lot = None if target_trade is None else target_trade.entry_fill_index
+    if _exit_id_already_filled_for_open_entry(engine, payload.id, from_entry, lot):
         return
     existing_exit = next(
         (
@@ -213,10 +225,12 @@ def _apply_exit_command(
             if order.kind == "exit"
             and order.status in ("pending", "active")
             and (order.parent_exit_id or order.id) == payload.id
+            and order.entry_fill_index == lot
         ),
         None,
     )
-    available = engine._available_exit_qty(from_entry, exclude_order=existing_exit)
+    available = engine._available_exit_qty(from_entry, exclude_order=existing_exit,
+        **({"entry_fill_index": lot} if lot is not None else {}))
     if available <= 0:
         engine._diag(
             "ORDER_REJECTED_NO_AVAILABLE_POSITION_QTY",
@@ -232,11 +246,22 @@ def _apply_exit_command(
     else:
         qty = engine._qty_from_args(
             _qty_args(payload.qty, payload.qty_percent),
-            sum(trade.entry_qty for trade in engine._matching_open_trades(from_entry)),
+            sum(trade.entry_qty for trade in matching_trades(engine, from_entry, lot)),
             bar.close,
         )
     qty = min(qty, available)
-    base = engine._exit_base_price(from_entry)
+    base = engine._exit_base_price(from_entry) if target_trade is None else target_trade.entry_price
+    # Stable labels keep the existing first bracket IDs. Additional simultaneous
+    # lots carry a suffix; the scope fields, not this label, control execution.
+    prefix = payload.id
+    if existing_exit is not None:
+        prefix = existing_exit.id.rsplit(":", 1)[0]
+    elif target_trade is not None and any(
+        o.kind == "exit" and o.status in {"pending", "active"}
+        and (o.parent_exit_id or o.id) == payload.id
+        for o in engine.orders
+    ):
+        prefix = f"{payload.id}:entry:{lot}"
     tick = getattr(engine, "_effective_mintick", 1.0) or 1.0
     if payload.profit is not None and limit is None:
         profit_price = float(payload.profit) * tick
@@ -264,7 +289,7 @@ def _apply_exit_command(
         _add_or_modify_exit_order(
             engine,
             Order(
-                id=payload.id + ":L",
+                id=prefix + ":L",
                 kind="exit",
                 direction=direction,
                 side=side,
@@ -282,6 +307,8 @@ def _apply_exit_command(
                 oca_type="reduce",
                 reserved_qty=qty,
                 parent_exit_id=payload.id,
+                entry_fill_index=lot,
+                oca_explicit=payload.oca_name is not None,
                 comment=payload.comment,
             ),
             bar,
@@ -291,7 +318,7 @@ def _apply_exit_command(
         _add_or_modify_exit_order(
             engine,
             Order(
-                id=payload.id + ":S",
+                id=prefix + ":S",
                 kind="exit",
                 direction=direction,
                 side=side,
@@ -309,6 +336,8 @@ def _apply_exit_command(
                 oca_type="reduce",
                 reserved_qty=qty,
                 parent_exit_id=payload.id,
+                entry_fill_index=lot,
+                oca_explicit=payload.oca_name is not None,
                 comment=payload.comment,
             ),
             bar,
@@ -333,7 +362,7 @@ def _apply_exit_command(
         )
         engine._add_order(
             Order(
-                id=payload.id + ":T",
+                id=prefix + ":T",
                 kind="exit",
                 direction=direction,
                 side=side,
@@ -351,6 +380,8 @@ def _apply_exit_command(
                 oca_type="reduce",
                 reserved_qty=qty,
                 parent_exit_id=payload.id,
+                entry_fill_index=lot,
+                oca_explicit=payload.oca_name is not None,
                 comment=payload.comment,
                 trail_price=activation,
                 trail_points=points_price,
@@ -362,23 +393,25 @@ def _apply_exit_command(
 
 
 def _exit_id_already_filled_for_open_entry(
-    engine: Any, exit_id: str, from_entry: str | None
+    engine: Any, exit_id: str, from_entry: str | None, lot: int | None = None
 ) -> bool:
     cache = getattr(engine, "_filled_exit_entry_keys", None)
     if cache is None:
         cache = {
             (
-                trade.exit_id.split(":", 1)[0],
+                trade.exit_parent_id or trade.exit_id.split(":", 1)[0],
                 trade.entry_id,
                 trade.entry_time,
                 trade.entry_bar_index,
+                trade.entry_fill_index,
             )
             for trade in engine.closed_trades
             if trade.exit_id is not None
         }
         engine._filled_exit_entry_keys = cache
-    for trade in engine._matching_open_trades(from_entry):
-        if (exit_id, trade.entry_id, trade.entry_time, trade.entry_bar_index) in cache:
+    from backtest_engine.core.exit_scope import matching_trades
+    for trade in matching_trades(engine, from_entry, lot):
+        if (exit_id, trade.entry_id, trade.entry_time, trade.entry_bar_index, trade.entry_fill_index) in cache:
             return True
     return False
 
@@ -391,6 +424,8 @@ def _add_or_modify_exit_order(
             order
             for order in engine.orders
             if order.id == new.id
+            and (new.parent_exit_id is None or order.parent_exit_id == new.parent_exit_id)
+            and order.entry_fill_index == new.entry_fill_index
             and order.kind == "exit"
             and order.status in ("pending", "active")
         ),
@@ -424,6 +459,8 @@ def _add_or_modify_exit_order(
     existing.position_direction = new.position_direction
     existing.from_entry = new.from_entry
     existing.oca_name = new.oca_name
+    existing.oca_explicit = new.oca_explicit
+    existing.entry_fill_index = new.entry_fill_index
     existing.oca_type = new.oca_type
     existing.parent_exit_id = new.parent_exit_id
     existing.comment = new.comment

@@ -254,7 +254,8 @@ class DelegatedStrategyIntentHandler:
         if kind == "close":
             command_id = "close:" + command_id
         if kind == "exit":
-            entry_id = _nonempty_string(arguments["from_entry"], "from_entry")
+            entry_id = (None if arguments.get("from_entry", "") == "" else
+                        _nonempty_string(arguments["from_entry"], "from_entry"))
             # Entry/exit commands in one callback are committed together. The
             # broker owns binding to open trades or already-created market orders;
             # a pre-callback position snapshot cannot decide whether an exit is valid.
@@ -327,10 +328,13 @@ class DelegatedStrategyIntentHandler:
         elif kind == "exit":
             payload.update(
                 order_id=command_id,
-                from_entry=entry_id,
                 comment=_optional_string(arguments.get("comment"), "comment"),
                 oca_name=_optional_string(arguments.get("oca_name"), "oca_name"),
             )
+            if entry_id is None:
+                payload.update(schema_version="2.3.0", exit_scope="all_entries")
+            else:
+                payload["from_entry"] = entry_id
             for field in ("qty", "qty_percent", "profit", "limit", "loss", "stop"):
                 value = _optional(arguments.get(field))
                 if value is not None:

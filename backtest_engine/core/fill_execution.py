@@ -30,7 +30,9 @@ def execute_fill(
             return
         order.qty = min(order.qty, available)
     if order.kind == "exit":
-        available = engine._available_exit_qty(order.from_entry, exclude_order=order)
+        available = engine._available_exit_qty(
+            order.from_entry, exclude_order=order, entry_fill_index=order.entry_fill_index
+        )
         if available <= 0:
             code = (
                 "ORDER_REJECTED_NO_MATCHING_ENTRY"
@@ -91,6 +93,8 @@ def execute_fill(
         from backtest_engine.core.deferred_exits import activate_deferred_exits
 
         activate_deferred_exits(engine, order, bar, bar_index)
+        from backtest_engine.core.exit_scope import activate_persistent_exits
+        activate_persistent_exits(engine, order, bar, bar_index)
 
 
 def _consume_opposite_reverse_close_component(

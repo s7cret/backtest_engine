@@ -54,6 +54,7 @@ class EngineRealtimeMixin:
             closed_trades=clone_state(self.closed_trades),
             open_trades=clone_state(self.open_trades),
             last_trade_bar=self.last_trade_bar,
+            all_entry_exits=clone_state(self._all_entry_exits),
             events=clone_state(self.events),
             warnings=clone_state(self.warnings),
             errors=clone_state(self.errors),
@@ -77,16 +78,18 @@ class EngineRealtimeMixin:
         self.max_runup = snapshot.max_runup
         self.max_runup_percent = snapshot.max_runup_percent
         self.position = clone_state(snapshot.position)
+        self._all_entry_exits = clone_state(snapshot.all_entry_exits)
         self.orders = clone_state(snapshot.orders)
         self.fills = clone_state(snapshot.fills)
         self.closed_trades = clone_state(snapshot.closed_trades)
         self.open_trades = clone_state(snapshot.open_trades)
         self._filled_exit_entry_keys = {
             (
-                trade.exit_id.split(":", 1)[0],
+                trade.exit_parent_id or trade.exit_id.split(":", 1)[0],
                 trade.entry_id,
                 trade.entry_time,
                 trade.entry_bar_index,
+                trade.entry_fill_index,
             )
             for trade in self.closed_trades
             if trade.exit_id is not None

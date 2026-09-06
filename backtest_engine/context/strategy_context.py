@@ -86,7 +86,7 @@ class StrategyContext:
         self.buffer.add(
             "exit",
             id=id,
-            from_entry=from_entry,
+            from_entry=None if from_entry == "" else from_entry,
             qty=qty,
             qty_percent=qty_percent,
             limit=limit,

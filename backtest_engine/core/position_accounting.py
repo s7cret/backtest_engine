@@ -69,6 +69,7 @@ def _open_position(
         -commission,
         0.0,
         is_open=True,
+        entry_fill_index=len(engine.fills),
     )
     engine.open_trades.append(trade)
     engine._cb("on_trade_open", trade)
@@ -106,6 +107,7 @@ def _add_to_position(
         -commission,
         0.0,
         is_open=True,
+        entry_fill_index=len(engine.fills),
     )
     engine.open_trades.append(trade)
     engine._cb("on_trade_open", trade)
@@ -125,11 +127,9 @@ def _reduce_or_reverse_position(
     fill_point: str = "",
 ) -> str:
     qty_close = min(abs(signed), abs(engine.position.size))
-    targets = [
-        trade
-        for trade in engine.open_trades
-        if order.from_entry is None or trade.entry_id == order.from_entry
-    ]
+    from backtest_engine.core.exit_scope import matching_trades, reserved_by_trade
+
+    targets = matching_trades(engine, order.from_entry, order.entry_fill_index)
     if not targets:
         engine._diag(
             "ORDER_REJECTED_NO_MATCHING_ENTRY",
@@ -144,14 +144,14 @@ def _reduce_or_reverse_position(
     # position even when reduce-only strategy.exit orders are reserving it.
     reserved = (
         {}
-        if order.position_effect in {"close", "reverse"}
-        else engine._reserved_qty_by_entry(exclude_order=order)
+        if order.kind != "exit"
+        else reserved_by_trade(engine, exclude_order=order)
     )
     target_caps = {
         id(trade): max(
             0.0,
             trade.qty
-            - (reserved.get(trade.entry_id, 0.0) if order.from_entry is None else 0.0),
+            - reserved.get(id(trade), 0.0),
         )
         for trade in targets
     }
@@ -191,6 +191,8 @@ def _reduce_or_reverse_position(
     qty_epsilon = _qty_epsilon(engine)
     if abs(engine.position.size) < qty_epsilon:
         _drop_dust_open_trades(engine, qty_epsilon)
+        from backtest_engine.core.exit_scope import expire_all_entry_exits
+        expire_all_entry_exits(engine)
         engine.position = Position(realized_profit=engine.position.realized_profit)
         return "flat"
     same_direction = [
@@ -204,6 +206,8 @@ def _reduce_or_reverse_position(
             sum(trade.entry_price * trade.qty for trade in same_direction) / qty
         )
     if engine.position.size * current_sign < 0:
+        from backtest_engine.core.exit_scope import expire_all_entry_exits
+        expire_all_entry_exits(engine)
         engine.position.direction = "long" if engine.position.size > 0 else "short"
         engine.position.avg_price = price
         _record_reversal_entry(engine, order, price, bar, bar_index, opening_commission)
@@ -218,7 +222,8 @@ def _cancel_orphaned_exit_orders(
             continue
         if order.kind != "exit" or order.status not in {"pending", "active"}:
             continue
-        if order.from_entry is None or engine._matching_open_trades(order.from_entry):
+        from backtest_engine.core.exit_scope import matching_trades
+        if matching_trades(engine, order.from_entry, order.entry_fill_index):
             continue
         order.status = "cancelled"
         engine._cb("on_order_cancelled", order)
@@ -287,6 +292,7 @@ def _close_target_trades(
         closed = replace(
             trade,
             exit_id=order.id,
+            exit_parent_id=order.parent_exit_id if order.kind == "exit" else None,
             exit_time=bar.time,
             exit_bar_index=bar_index,
             exit_price=price,
@@ -317,6 +323,7 @@ def _close_target_trades(
                     closed.entry_id,
                     closed.entry_time,
                     closed.entry_bar_index,
+                    closed.entry_fill_index,
                 )
             )
         engine._cb("on_trade_close", closed)
@@ -348,7 +355,7 @@ def _closed_trade_exit_prices(engine: Any, order: Order) -> tuple[float | None, 
             continue
         if (sibling.parent_exit_id or sibling.id) != parent_exit_id:
             continue
-        if sibling.from_entry != order.from_entry:
+        if sibling.from_entry != order.from_entry or sibling.entry_fill_index != order.entry_fill_index:
             continue
         if stop_price is None and sibling.stop_price is not None:
             stop_price = sibling.stop_price
@@ -407,6 +414,7 @@ def _record_reversal_entry(
         -opening_commission,
         0.0,
         is_open=True,
+        entry_fill_index=len(engine.fills),
     )
     engine.open_trades.append(trade)
     engine._cb("on_trade_open", trade)

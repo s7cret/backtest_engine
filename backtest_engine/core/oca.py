@@ -15,6 +15,8 @@ def apply_oca(engine: Any, order: Order, bar: Bar, bar_index: int) -> None:
             other is not order
             and other.status in ("pending", "active")
             and other.oca_name == order.oca_name
+            and (order.oca_explicit or other.oca_explicit
+                 or other.entry_fill_index == order.entry_fill_index)
         ):
             if order.oca_type == "cancel":
                 other.status = "cancelled"
@@ -28,6 +30,7 @@ def apply_oca(engine: Any, order: Order, bar: Bar, bar_index: int) -> None:
                 )
             elif order.oca_type == "reduce":
                 other.qty = max(0.0, other.qty - order.qty)
+                other.reserved_qty = min(other.reserved_qty, other.qty)
                 if other.qty <= 0:
                     other.status = "cancelled"
                     engine._cb("on_order_cancelled", other)
