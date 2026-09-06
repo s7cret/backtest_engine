@@ -1,0 +1,106 @@
+name: Verify metadata integration and positional admission before publication
+'on':
+  push:
+    branches: ['ops/rc6-metadata-transfer-20260906']
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: metadata-transfer
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: s7cret/openpine-contracts
+          ref: afa2351f07da94326382cf71a388b99e8f460f14
+          path: publisher-source
+          sparse-checkout: .github/exit-metadata/restore.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Select the exact reviewed publication helper
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          src=Path('publisher-source/.github/exit-metadata/restore.py').read_text()
+          old="STAGING = 'ops/rc6-exit-metadata-20260906'"
+          assert src.count(old)==1
+          Path(os.environ['RUNNER_TEMP'],'restore.py').write_text(src.replace(old,"STAGING = 'ops/rc6-metadata-transfer-20260906'"))
+          PY
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Restore exact reviewed source commit
+        run: |
+          python "$RUNNER_TEMP/restore.py" restore .github/metadata-transfer/plan.json "$RUNNER_TEMP/evidence"
+          cp "$RUNNER_TEMP/restore.py" "$RUNNER_TEMP/evidence/restore.py"
+      - name: Install clean engine and exact dependencies
+        run: |
+          python -m pip install setuptools==84.0.0 wheel==0.48.0 hatchling==1.32.0 build==1.6.0
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'dependencies'; root.mkdir()
+          pins={'openpine-contracts':'5950e0f99214e60b64162d074ed47f1e4bbc7141','pinelib':'cddaa0bf2324db36b4cd29e944a251032658c59d','marketdata-provider':'4e269bb7e3d389cae6214da9e17898c32c7ead15'}
+          sources=[]
+          for name,sha in pins.items():
+              path=root/name
+              subprocess.run(['git','clone','--quiet','https://github.com/s7cret/'+name+'.git',str(path)],check=True)
+              subprocess.run(['git','-C',str(path),'checkout','--detach',sha],check=True)
+              if subprocess.check_output(['git','-C',str(path),'rev-parse','HEAD'],text=True).strip()!=sha: raise SystemExit('wrong source')
+              sources.append(str(path))
+          clean=root/'engine'; clean.mkdir()
+          subprocess.run(['tar','-x','-C',str(clean)],input=subprocess.check_output(['git','archive','HEAD']),check=True)
+          subprocess.run(['python','-m','pip','install',*sources,str(clean)+'[dev]'],check=True)
+          (root.parent/'evidence/source-pins.json').write_text(json.dumps(pins,indent=2)+'\n')
+          PY
+      - name: Complete broker functional suite
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: python -m pytest -q --junitxml="$RUNNER_TEMP/evidence/backtest_engine.xml"
+      - name: Lint changed source and build distributions
+        run: |
+          python -m ruff check backtest_engine/core/delegated_strategy_intents.py backtest_engine/core/engine_support.py backtest_engine/core/fill_execution.py backtest_engine/core/order_metadata.py backtest_engine/core/strategy_capabilities.py tests/unit/test_positional_exit_admission.py tests/unit/test_required_order_events.py
+          python -m compileall -q backtest_engine
+          python -m build --no-isolation --outdir "$RUNNER_TEMP/evidence/dist" "$RUNNER_TEMP/dependencies/engine"
+          python -m pip freeze > "$RUNNER_TEMP/evidence/environment.txt"
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: metadata-transfer-${{ matrix.python }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence/
+          retention-days: 30
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: metadata-transfer-3.13-${{ github.run_id }}
+          path: evidence
+      - run: python evidence/restore.py publish evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: metadata-transfer-publication-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30

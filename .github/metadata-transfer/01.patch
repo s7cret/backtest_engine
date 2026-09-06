@@ -1,0 +1,258 @@
+diff --git a/backtest_engine/core/delegated_strategy_intents.py b/backtest_engine/core/delegated_strategy_intents.py
+index 646d7d7..c31e4a8 100644
+--- a/backtest_engine/core/delegated_strategy_intents.py
++++ b/backtest_engine/core/delegated_strategy_intents.py
+@@ -23,6 +23,7 @@ from backtest_engine.core.strategy_capabilities import (
+     STRATEGY_COMMANDS,
+     STRATEGY_CONSTANTS,
+     STRATEGY_STATE_VALUES,
++    validate_exit_shape,
+ )
+ 
+ OWNER = "backtest-engine"
+@@ -248,6 +249,8 @@ class DelegatedStrategyIntentHandler:
+         if not when:
+             return MappingProxyType({"draft_schema_id": DRAFT_SCHEMA_ID, "payload": None})
+         kind = spec.name.removeprefix("strategy.")
++        if kind == "exit":
++            validate_exit_shape({key for key, value in arguments.items() if _optional(value) is not None})
+         bar_time = self.bar_open_time_utc_ms.get(invocation.bar_index)
+         if bar_time is None:
+             raise ValueError("delegated strategy bar identity is unavailable")
+diff --git a/backtest_engine/core/engine_support.py b/backtest_engine/core/engine_support.py
+index 014daf3..d9e4776 100644
+--- a/backtest_engine/core/engine_support.py
++++ b/backtest_engine/core/engine_support.py
+@@ -88,7 +88,7 @@ class EngineSupportMixin:
+     def _want(self, name: str) -> bool:
+         return name in self.config.required_outputs
+ 
+-    def _event(self, code, msg, i=None, t=None, oid=None) -> None:
++    def _event(self, code, msg, i=None, t=None, oid=None, *, context=None) -> None:
+         if self.config.collect_events:
+             self.events.append(
+                 Diagnostic(
+@@ -99,6 +99,7 @@ class EngineSupportMixin:
+                     t,
+                     oid,
+                     phase=getattr(self, "_current_phase", None),
++                    context=None if context is None else dict(context),
+                 )
+             )
+ 
+diff --git a/backtest_engine/core/fill_execution.py b/backtest_engine/core/fill_execution.py
+index ee76618..de6a07e 100644
+--- a/backtest_engine/core/fill_execution.py
++++ b/backtest_engine/core/fill_execution.py
+@@ -9,6 +9,7 @@ from backtest_engine.broker.commission import calculate_commission
+ from backtest_engine.broker.rounding import round_to_step
+ from backtest_engine.broker.slippage import slippage_value
+ from backtest_engine.models import Bar, Fill, Order
++from backtest_engine.core.order_metadata import filled_order_context
+ 
+ 
+ @dataclass(frozen=True, slots=True)
+@@ -83,12 +84,14 @@ def execute_fill(
+         exit_leg=order.exit_leg,
+         parent_exit_id=order.parent_exit_id,
+     )
++    metadata = filled_order_context(order, len(engine.fills))
+     engine.fills.append(fill)
+     order.status = "filled"
+     engine.last_trade_bar = bar_index
+     engine._cb("on_fill", fill)
+     engine._event(
+-        "ORDER_FILLED", f"order {order.id} filled", bar_index, bar.time, order.id
++        "ORDER_FILLED", f"order {order.id} filled", bar_index, bar.time, order.id,
++        context=metadata,
+     )
+     _consume_opposite_reverse_close_component(
+         engine, order, before, bar, bar_index
+diff --git a/backtest_engine/core/order_metadata.py b/backtest_engine/core/order_metadata.py
+index 3d73e78..ec2146b 100644
+--- a/backtest_engine/core/order_metadata.py
++++ b/backtest_engine/core/order_metadata.py
+@@ -48,3 +48,17 @@ def execution_metadata(payload: Any, leg: str | None = None) -> dict[str, Any]:
+ def copy_order_metadata(target: Any, source: Any) -> None:
+     for name in ORDER_METADATA_FIELDS:
+         setattr(target, name, getattr(source, name))
++
++
++def filled_order_context(order: object, fill_index: int) -> dict:
++    """Audit data on the fill event; a suppressed alert never suppresses the fill."""
++    return {
++        "schema_id": "backtest_engine.order_fill_metadata.v1",
++        "fill_index": fill_index,
++        "public_order_id": order.parent_exit_id or order.id,
++        "comment": order.comment,
++        "alert_message": order.alert_message,
++        "disable_alert": order.disable_alert,
++        "alert_eligible": not order.disable_alert,
++        "exit_leg": order.exit_leg,
++    }
+diff --git a/backtest_engine/core/strategy_capabilities.py b/backtest_engine/core/strategy_capabilities.py
+index 5392fb1..a558b8e 100644
+--- a/backtest_engine/core/strategy_capabilities.py
++++ b/backtest_engine/core/strategy_capabilities.py
+@@ -51,7 +51,7 @@ class StrategyCommandSpec:
+             raise ValueError(f"{self.name}: historical tail arguments must be named")
+         if len(positional) > len(self.parameters):
+             raise ValueError("delegated strategy invocation has too many positional arguments")
+-        allowed = set(self.parameters) | ({"when"} if pine_version < 6 else set())
++        allowed = set(self.parameters) | self.unsupported_parameters | ({"when"} if pine_version < 6 else set())
+         if any(type(key) is not str or key not in allowed for key in named):
+             raise ValueError(f"{self.name}: unknown named argument (when is unavailable in v6)")
+         bound = dict(zip(self.parameters, positional))
+@@ -66,14 +66,22 @@ class StrategyCommandSpec:
+             from backtest_engine.core.order_metadata import EXIT_METADATA_FIELDS
+             if pine_version < 5 and set(bound).intersection(EXIT_METADATA_FIELDS):
+                 raise ValueError("per-leg metadata requires Pine v5 or v6")
+-            trailing = set(bound).intersection({"trail_price", "trail_points", "trail_offset"})
+-            if trailing and ("trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"})):
+-                raise ValueError("trailing exit requires trail_offset and an activation level")
+-            if trailing and set(bound).intersection({"stop", "loss"}):
+-                raise ValueError("fixed stop plus trailing arbitration is not yet supported by this host")
+         return bound
+ 
+ 
++def validate_exit_shape(active: set[str]) -> None:
++    """Validate known-present arguments after NA normalization, not signature slots.
++
++    The host supplies a conservative set from literal generated arguments; replay
++    supplies actual non-NA values. Dynamic unsupported forms still fail at runtime.
++    """
++    trailing = active.intersection({"trail_price", "trail_points", "trail_offset"})
++    if trailing and ("trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"})):
++        raise ValueError("trailing exit requires trail_offset and an activation level")
++    if trailing and active.intersection({"stop", "loss"}):
++        raise ValueError("fixed stop plus trailing arbitration is not yet supported by this host")
++
++
+ _ENTRY = (
+     "id",
+     "direction",
+@@ -99,7 +107,6 @@ _EXIT = (
+     "trail_points",
+     "trail_offset",
+     "oca_name",
+-    "oca_type",
+     "comment",
+     "comment_profit",
+     "comment_loss",
+@@ -124,8 +131,8 @@ _COMMANDS = (
+     StrategyCommandSpec("strategy.cancel", ("id",), ("id",)),
+     StrategyCommandSpec("strategy.cancel_all", (), ()),
+     # The broker admits exits for open trades and pending price/market entries.
+-    # Omitted/empty from_entry uses the versioned all-entry scope. Trailing and
+-    # per-leg metadata remain unsupported by this host surface.
++    # Omitted/empty from_entry uses the versioned all-entry scope.
++    # Per-leg metadata uses the published flat 2.6 contract.
+     StrategyCommandSpec(
+         "strategy.exit",
+         _EXIT,
+diff --git a/tests/unit/test_positional_exit_admission.py b/tests/unit/test_positional_exit_admission.py
+new file mode 100644
+index 0000000..5af56bb
+--- /dev/null
++++ b/tests/unit/test_positional_exit_admission.py
+@@ -0,0 +1,33 @@
++"""Archived binding fix uses the published metadata dialect after NA normalization."""
++import pytest
++from tests.unit.test_strategy_host_surface import handler, transaction, dispatch, seal
++from pinelib import na
++from pinelib.errors import PineRuntimeError
++
++@pytest.mark.parametrize("version", [5, 6])
++def test_na_slots_do_not_create_a_trailing_conflict(version):
++    h = handler(version)
++    tx = transaction(h, version)
++    dispatch(tx, "strategy.exit", ("X", "A"), dict(limit=105, stop=na,
++        trail_price=na, trail_points=na, trail_offset=na, comment_profit="TP"))
++    (event,) = seal(h, tx)
++    assert event["schema_version"] == "2.6.0"
++    assert event["comment_profit"] == "TP" and "exit_metadata" not in event
++    assert "stop" not in event and "trail_offset" not in event
++
++def test_v6_positional_comment_has_no_phantom_oca_type_slot():
++    h = handler(6)
++    tx = transaction(h, 6)
++    dispatch(tx, "strategy.exit", ("X", "A", na, na, 5, na, na, na, na, na, na, "group", "text"), {})
++    (event,) = seal(h, tx)
++    assert event["comment"] == "text" and event["oca_name"] == "group"
++    assert "oca_type" not in event
++
++@pytest.mark.parametrize("named", [dict(trail_price=105), dict(trail_offset=2),
++    dict(trail_price=105, trail_offset=2, stop=95)])
++def test_dynamic_active_shapes_are_still_rejected(named):
++    h = handler(6)
++    tx = transaction(h, 6)
++    dispatch(tx, "strategy.exit", ("X", "A"), named)
++    with pytest.raises(PineRuntimeError):
++        seal(h, tx)
+diff --git a/tests/unit/test_required_order_events.py b/tests/unit/test_required_order_events.py
+new file mode 100644
+index 0000000..5aeba68
+--- /dev/null
++++ b/tests/unit/test_required_order_events.py
+@@ -0,0 +1,61 @@
++"""Explicit output requirements must control collection, not just advertising."""
++
++from dataclasses import asdict
++import pytest
++from tests.unit.test_deferred_market_exits import candles, run
++
++
++def execute(*, collect_events, outputs, disabled=False):
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", "long", qty=1, alert_message="entry", disable_alert=disabled)
++            ctx.exit(
++                "X",
++                "A",
++                limit=105,
++                comment_profit="take-profit",
++                alert_profit="exit",
++                disable_alert=disabled,
++            )
++
++    return run(
++        commands,
++        candles((100, 101, 99, 100), (100, 110, 99, 104)),
++        collect_events=collect_events,
++        required_outputs=outputs,
++    )
++
++
++@pytest.mark.parametrize("disabled", [False, True])
++def test_required_order_events_matches_full_collection(disabled):
++    engine, required = execute(collect_events=False, outputs={"order_events"}, disabled=disabled)
++    _, full = execute(collect_events=True, outputs=set(), disabled=disabled)
++    assert required.status == full.status == "completed"
++    assert "order_events" in required.available_outputs
++    assert len([event for event in required.events if event.code == "ORDER_FILLED"]) == 2
++    assert [asdict(event) for event in required.events] == [asdict(event) for event in full.events]
++    assert len(engine.fills) == 2
++    assert all(
++        event.context["alert_eligible"] is (not disabled)
++        for event in required.events
++        if event.code == "ORDER_FILLED"
++    )
++
++
++def test_unrequested_events_are_not_materialized():
++    engine, result = execute(collect_events=False, outputs=set())
++    assert result.status == "completed"
++    assert result.events is None and not engine.events
++    assert "order_events" not in result.available_outputs
++    assert len(engine.fills) == 2
++
++
++def test_no_orders_is_a_valid_empty_requested_event_output():
++    engine, result = run(
++        lambda ctx, i: None,
++        candles((100, 101, 99, 100)),
++        collect_events=False,
++        required_outputs={"order_events"},
++    )
++    assert result.status == "completed"
++    assert result.events == [] and "order_events" in result.available_outputs
