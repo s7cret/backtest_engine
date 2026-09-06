@@ -1,0 +1,101 @@
+diff --git a/backtest_engine/core/delegated_strategy_intents.py b/backtest_engine/core/delegated_strategy_intents.py
+index f54951c3ea255d41cf8e447ed1e36ee007aba75e..abcb677076f96e74d7d614168bcf1cc272b0099c 100644
+--- a/backtest_engine/core/delegated_strategy_intents.py
++++ b/backtest_engine/core/delegated_strategy_intents.py
+@@ -17,6 +17,7 @@ from openpine_contracts import (
+ from pinelib import DelegatedCapabilityDispatcher, DelegatedInvocation, is_na
+ 
+ from backtest_engine.config import BacktestConfig
++from backtest_engine.core.order_metadata import EXIT_METADATA_FIELDS
+ from backtest_engine.core.intent_replay import IntentReplayIdentity
+ from backtest_engine.core.strategy_capabilities import (
+     STRATEGY_COMMANDS,
+@@ -366,6 +367,14 @@ class DelegatedStrategyIntentHandler:
+             if type(arguments["disable_alert"]) is not bool:
+                 raise ValueError("strategy intent disable_alert must be a bool")
+             payload["disable_alert"] = arguments["disable_alert"]
++        if kind == "exit":
++            metadata = {name: _optional_string(arguments[name], name)
++                        for name in EXIT_METADATA_FIELDS
++                        if _optional(arguments.get(name)) is not None}
++            if metadata:
++                payload.update(exit_semantics_version=payload["schema_version"],
++                               schema_version="2.6.0",
++                               exit_metadata=MappingProxyType(metadata))
+         return MappingProxyType(
+             {
+                 "draft_schema_id": DRAFT_SCHEMA_ID,
+@@ -399,6 +408,8 @@ class DelegatedStrategyIntentHandler:
+             if not isinstance(source_span, Mapping):
+                 raise ValueError("committed delegated strategy source span is invalid")
+             payload["source_span"] = dict(source_span)
++            if "exit_metadata" in payload:
++                payload["exit_metadata"] = dict(payload["exit_metadata"])
+             payload["sequence"] = start_sequence + len(sealed_intents)
+             payload["event_id"] = f"intent-event:{content_hash(payload, schema_id=SCHEMA_ID)}"
+             sealed = seal_content_hash(payload, schema_id=SCHEMA_ID)
+diff --git a/backtest_engine/core/fill_execution.py b/backtest_engine/core/fill_execution.py
+index 150b8ebb0d2df1d2e7bfcf48e8b94bd0cb091f21..ee766188f30356d23d13fa18edd9942bbe60a314 100644
+--- a/backtest_engine/core/fill_execution.py
++++ b/backtest_engine/core/fill_execution.py
+@@ -77,6 +77,11 @@ def execute_fill(
+         pricing.commission,
+         pricing.slippage,
+         point,
++        comment=order.comment,
++        alert_message=order.alert_message,
++        disable_alert=order.disable_alert,
++        exit_leg=order.exit_leg,
++        parent_exit_id=order.parent_exit_id,
+     )
+     engine.fills.append(fill)
+     order.status = "filled"
+diff --git a/backtest_engine/core/intent_replay.py b/backtest_engine/core/intent_replay.py
+index 40fa9416999a67449ed2b965ee9feb8f9ccae9c2..9d6a7c5945fee5c3d22c4b32f82d195495d6a03b 100644
+--- a/backtest_engine/core/intent_replay.py
++++ b/backtest_engine/core/intent_replay.py
+@@ -356,6 +356,7 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
+     limit = decimal_to_engine_number(event.get("limit"), field="limit", ctx=ctx)
+     stop = decimal_to_engine_number(event.get("stop"), field="stop", ctx=ctx)
+ 
++    metadata = {name: event[name] for name in ("alert_message", "disable_alert") if name in event}
+     if kind in {"entry", "order"}:
+         getattr(ctx, kind)(
+             order_id,
+@@ -366,11 +367,13 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
+             oca_name=event.get("oca_name"),
+             oca_type=event.get("oca_type"),
+             comment=event.get("comment"),
++            **metadata,
+         )
+         return
+     if kind == "exit":
+         ctx.exit(
+             order_id,
++            **dict(event.get("exit_metadata", {})),
+             **({"price_pair_policy": event["price_pair_policy"]} if "price_pair_policy" in event else {}),
+             from_entry=(None if event.get("exit_scope") == "all_entries" else event["from_entry"]),
+             qty=qty,
+@@ -380,6 +383,7 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
+             oca_name=event.get("oca_name"),
+             oca_type=event.get("oca_type"),
+             comment=event.get("comment"),
++            **metadata,
+             profit=decimal_to_engine_number(event.get("profit"), field="profit", ctx=ctx),
+             loss=decimal_to_engine_number(event.get("loss"), field="loss", ctx=ctx),
+             trail_price=decimal_to_engine_number(
+@@ -400,12 +404,14 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
+             qty_percent=qty_percent,
+             immediately=bool(event.get("immediately", False)),
+             comment=event.get("comment"),
++            **metadata,
+         )
+         return
+     if kind == "close_all":
+         ctx.close_all(
+             immediately=bool(event.get("immediately", False)),
+             comment=event.get("comment"),
++            **metadata,
+         )
+         return
+     if kind == "cancel":

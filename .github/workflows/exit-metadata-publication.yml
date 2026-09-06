@@ -1,0 +1,104 @@
+name: Verify execution metadata and per-fill exit quantities
+'on':
+  push:
+    branches: ['ops/rc6-exit-metadata-20260906']
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: rc6-exit-metadata-publication
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: s7cret/openpine-contracts
+          ref: afa2351f07da94326382cf71a388b99e8f460f14
+          path: publisher-source
+          sparse-checkout: .github/exit-metadata/restore.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - run: cp publisher-source/.github/exit-metadata/restore.py "$RUNNER_TEMP/restore.py"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Reassemble readable patches and restore exact commits
+        run: |
+          mkdir -p "$RUNNER_TEMP/submission"
+          cat .github/exit-metadata/01-{1,2,3,4,5}.part > "$RUNNER_TEMP/submission/01.patch"
+          cp .github/exit-metadata/{02.patch,03.patch,plan.json} "$RUNNER_TEMP/submission/"
+          python "$RUNNER_TEMP/restore.py" restore "$RUNNER_TEMP/submission/plan.json" "$RUNNER_TEMP/evidence"
+          cp "$RUNNER_TEMP/restore.py" "$RUNNER_TEMP/evidence/restore.py"
+      - name: Install reviewed engine and exact published dependencies
+        run: |
+          python -m pip install setuptools==84.0.0 wheel==0.48.0 hatchling==1.32.0 build==1.6.0
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'dependencies'
+          root.mkdir()
+          pins={'openpine-contracts':'5950e0f99214e60b64162d074ed47f1e4bbc7141','pinelib':'cddaa0bf2324db36b4cd29e944a251032658c59d','marketdata-provider':'4e269bb7e3d389cae6214da9e17898c32c7ead15'}
+          sources=[]
+          for name,sha in pins.items():
+              path=root/name
+              subprocess.run(['git','clone','--quiet','https://github.com/s7cret/'+name+'.git',str(path)],check=True)
+              subprocess.run(['git','-C',str(path),'checkout','--detach',sha],check=True)
+              if subprocess.check_output(['git','-C',str(path),'rev-parse','HEAD'],text=True).strip()!=sha:
+                  raise SystemExit('Source identity mismatch')
+              sources.append(str(path))
+          clean=root/'engine';clean.mkdir()
+          subprocess.run(['tar','-x','-C',str(clean)],input=subprocess.check_output(['git','archive','HEAD']),check=True)
+          subprocess.run(['python','-m','pip','install',*sources,str(clean)+'[dev]'],check=True)
+          (root.parent/'evidence/source-pins.json').write_text(json.dumps(pins,indent=2)+'\n')
+          PY
+      - name: Complete broker functional suite
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: python -m pytest -q --junitxml="$RUNNER_TEMP/evidence/backtest_engine.xml"
+      - name: Check every changed Python source and build distributions
+        run: |
+          git diff --name-only 38818c614a425902f881321faec311f03009c810 HEAD -- '*.py' | xargs python -m ruff check
+          python -m compileall -q backtest_engine
+          python -m build --no-isolation --outdir "$RUNNER_TEMP/evidence/dist" "$RUNNER_TEMP/dependencies/engine"
+          python -m pip freeze > "$RUNNER_TEMP/evidence/environment.txt"
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: exit-metadata-${{ matrix.python }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence/
+          retention-days: 30
+          if-no-files-found: error
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: exit-metadata-3.13-${{ github.run_id }}
+          path: evidence
+      - name: Fast-forward only RC6 and archive the temporary delivery ref
+        run: python evidence/restore.py publish evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: exit-metadata-publication-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30

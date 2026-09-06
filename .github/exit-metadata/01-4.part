@@ -1,0 +1,151 @@
+diff --git a/backtest_engine/core/strategy_command_processor.py b/backtest_engine/core/strategy_command_processor.py
+index cb515a4d4fb1163a956dec789074b1ad8aeb7aec..b0e1ffe00b04d1d1d6d431dc465b69de371ef2be 100644
+--- a/backtest_engine/core/strategy_command_processor.py
++++ b/backtest_engine/core/strategy_command_processor.py
+@@ -12,6 +12,7 @@ from backtest_engine.context import (
+     StrategyContext,
+ )
+ from backtest_engine.models import Bar, Order, Trade
++from backtest_engine.core.order_metadata import execution_metadata, copy_order_metadata
+ 
+ EntryCommandKind = Literal["entry", "order"]
+ OrderDirection = Literal["long", "short"]
+@@ -168,7 +169,7 @@ def _apply_close_command(
+             position_direction=engine.position.direction,
+             reduce_only=True,
+             from_entry=from_entry,
+-            comment=payload.comment,
++            **execution_metadata(payload),
+             immediately=payload.immediately,
+         ),
+         bar,
+@@ -313,7 +314,7 @@ def _apply_exit_command(
+                 parent_exit_id=payload.id,
+                 entry_fill_index=lot,
+                 oca_explicit=payload.oca_name is not None,
+-                comment=payload.comment,
++                **execution_metadata(payload, "profit"),
+             ),
+             bar,
+             bar_index,
+@@ -342,7 +343,7 @@ def _apply_exit_command(
+                 parent_exit_id=payload.id,
+                 entry_fill_index=lot,
+                 oca_explicit=payload.oca_name is not None,
+-                comment=payload.comment,
++                **execution_metadata(payload, "loss"),
+             ),
+             bar,
+             bar_index,
+@@ -373,7 +374,7 @@ def _apply_exit_command(
+                 parent_exit_id=payload.id,
+                 entry_fill_index=lot,
+                 oca_explicit=payload.oca_name is not None,
+-                comment=payload.comment,
++                **execution_metadata(payload, "trailing"),
+                 trail_price=activation,
+                 trail_points=points_price,
+                 trail_offset=offset,
+@@ -469,7 +470,7 @@ def _add_or_modify_exit_order(
+     existing.entry_fill_index = new.entry_fill_index
+     existing.oca_type = new.oca_type
+     existing.parent_exit_id = new.parent_exit_id
+-    existing.comment = new.comment
++    copy_order_metadata(existing, new)
+     existing.created_bar_index = new.created_bar_index
+     existing.created_time = new.created_time
+     existing.active_from_bar_index = new.active_from_bar_index
+@@ -525,7 +526,7 @@ def _apply_entry_or_order_command(
+                     reduce_only=True,
+                     limit_price=limit,
+                     stop_price=stop,
+-                    comment=payload.comment,
++                    **execution_metadata(payload),
+                 ),
+                 bar,
+                 bar_index,
+@@ -584,7 +585,7 @@ def _apply_entry_or_order_command(
+         None,
+         payload.oca_name,
+         cast(OcaType, payload.oca_type or "none"),
+-        comment=payload.comment,
++        **execution_metadata(payload),
+     )
+     new.qty_is_default = uses_default_qty
+     if existing:
+@@ -630,7 +631,7 @@ def _apply_entry_or_order_command(
+         existing.position_direction = new.position_direction
+         existing.oca_name = new.oca_name
+         existing.oca_type = new.oca_type
+-        existing.comment = new.comment
++        copy_order_metadata(existing, new)
+         existing.qty_is_default = new.qty_is_default
+         existing.created_bar_index = new.created_bar_index
+         existing.created_time = new.created_time
+diff --git a/backtest_engine/core/strategy_projection.py b/backtest_engine/core/strategy_projection.py
+index c0844d400e45f7645f308e0b90c70def5a9ba20c..0e4253dac9ffe1c8a20dbf118076061f25913b09 100644
+--- a/backtest_engine/core/strategy_projection.py
++++ b/backtest_engine/core/strategy_projection.py
+@@ -75,7 +75,7 @@ def _project_trade(engine: Any, trade: Any, *, is_open: bool) -> dict[str, Any]:
+             "commission": float(trade.commission_entry + trade.commission_exit),
+             "side": str(trade.direction),
+             "size": float(trade.qty if trade.direction == "long" else -trade.qty),
+-            "entry_comment": _trade_order_comment(
++            "entry_comment": trade.entry_comment if trade.metadata_captured else _trade_order_comment(
+                 engine.orders,
+                 order_id=trade.entry_id,
+                 at_bar_index=trade.entry_bar_index,
+@@ -84,7 +84,7 @@ def _project_trade(engine: Any, trade: Any, *, is_open: bool) -> dict[str, Any]:
+             "exit_comment": (
+                 None
+                 if is_open or trade.exit_id is None or trade.exit_bar_index is None
+-                else _trade_order_comment(
++                else trade.exit_comment if trade.metadata_captured else _trade_order_comment(
+                     engine.orders,
+                     order_id=trade.exit_id,
+                     at_bar_index=trade.exit_bar_index,
+diff --git a/backtest_engine/models/fill.py b/backtest_engine/models/fill.py
+index 2deec3f6fdae7bb58ef6c7ac0a9c1823556be43e..aa85d8672d424a0ffc72753746b776730d3a675a 100644
+--- a/backtest_engine/models/fill.py
++++ b/backtest_engine/models/fill.py
+@@ -19,3 +19,8 @@ class Fill:
+     slippage_value: float
+     intrabar_point: str | None = None
+     phase: str | None = None
++    comment: str | None = None
++    alert_message: str | None = None
++    disable_alert: bool = False
++    exit_leg: Literal["profit", "loss", "trailing"] | None = None
++    parent_exit_id: str | None = None
+diff --git a/backtest_engine/models/order.py b/backtest_engine/models/order.py
+index f1548c940a94e8fe53e5be23aac098e51e076876..d8d327d951a1ff89cea552c70ded937a07e1831f 100644
+--- a/backtest_engine/models/order.py
++++ b/backtest_engine/models/order.py
+@@ -41,3 +41,6 @@ class Order:
+     # None retains an aggregate named-entry scope; an integer targets one lot.
+     entry_fill_index: int | None = None
+     oca_explicit: bool = False
++    alert_message: str | None = None
++    disable_alert: bool = False
++    exit_leg: Literal["profit", "loss", "trailing"] | None = None
+diff --git a/backtest_engine/models/trade.py b/backtest_engine/models/trade.py
+index 9929ccc2b866226d100156f0bd2cfeea3943240a..90102476faf65d9435ebdeb9f362e1195dca67ac 100644
+--- a/backtest_engine/models/trade.py
++++ b/backtest_engine/models/trade.py
+@@ -35,6 +35,16 @@ class Trade:
+     entry_fill_index: int | None = None
+     exit_parent_id: str | None = None
+ 
++    # Execution-time snapshots. Legacy hand-built trades retain projection fallback.
++    entry_comment: str | None = None
++    exit_comment: str | None = None
++    metadata_captured: bool = False
++    entry_alert_message: str | None = None
++    exit_alert_message: str | None = None
++    entry_disable_alert: bool = False
++    exit_disable_alert: bool = False
++    exit_leg: str | None = None
++
+     def __post_init__(self) -> None:
+         if self.entry_qty is None:
+             self.entry_qty = self.qty

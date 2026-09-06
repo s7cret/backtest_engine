@@ -1,0 +1,130 @@
+diff --git a/backtest_engine/core/order_metadata.py b/backtest_engine/core/order_metadata.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..3d73e78e0f381f0db9024913229155a8e4380675
+--- /dev/null
++++ b/backtest_engine/core/order_metadata.py
+@@ -0,0 +1,50 @@
++"""Select per-leg metadata once, when an order is created or amended.
++
++Empty strings are explicit values, not a request to fall back. Fills/trades copy
++these values; later ID reuse must not rewrite earlier execution history. This
++module does not dispatch external notifications or expand alert templates.
++"""
++
++from __future__ import annotations
++
++from typing import Any
++
++EXIT_METADATA_FIELDS = (
++    "comment_profit",
++    "comment_loss",
++    "comment_trailing",
++    "alert_profit",
++    "alert_loss",
++    "alert_trailing",
++)
++ORDER_METADATA_FIELDS = ("comment", "alert_message", "disable_alert", "exit_leg")
++
++
++def validate_metadata(payload: Any) -> None:
++    for name in ("comment", "alert_message", *EXIT_METADATA_FIELDS):
++        value = getattr(payload, name, None)
++        if value is not None and type(value) is not str:
++            raise ValueError(f"{name} must be a string or None")
++    if type(payload.disable_alert) is not bool:
++        raise ValueError("disable_alert must be a bool")
++
++
++def execution_metadata(payload: Any, leg: str | None = None) -> dict[str, Any]:
++    if leg not in (None, "profit", "loss", "trailing"):
++        raise ValueError("unknown exit leg")
++    comment, message = payload.comment, payload.alert_message
++    if leg is not None:
++        specific_comment = getattr(payload, "comment_" + leg)
++        specific_message = getattr(payload, "alert_" + leg)
++        if specific_comment is not None:
++            comment = specific_comment
++        if specific_message is not None:
++            message = specific_message
++    return dict(
++        comment=comment, alert_message=message, disable_alert=payload.disable_alert, exit_leg=leg
++    )
++
++
++def copy_order_metadata(target: Any, source: Any) -> None:
++    for name in ORDER_METADATA_FIELDS:
++        setattr(target, name, getattr(source, name))
+diff --git a/backtest_engine/core/position_accounting.py b/backtest_engine/core/position_accounting.py
+index 473705deb5be6d03c0cf5c3a282ef19986a8710c..04c889ee25c8008f3099bf78fa6955b4977e6e1b 100644
+--- a/backtest_engine/core/position_accounting.py
++++ b/backtest_engine/core/position_accounting.py
+@@ -70,6 +70,10 @@ def _open_position(
+         0.0,
+         is_open=True,
+         entry_fill_index=len(engine.fills),
++        entry_comment=order.comment,
++        metadata_captured=True,
++        entry_alert_message=order.alert_message,
++        entry_disable_alert=order.disable_alert,
+     )
+     engine.open_trades.append(trade)
+     engine._cb("on_trade_open", trade)
+@@ -108,6 +112,10 @@ def _add_to_position(
+         0.0,
+         is_open=True,
+         entry_fill_index=len(engine.fills),
++        entry_comment=order.comment,
++        metadata_captured=True,
++        entry_alert_message=order.alert_message,
++        entry_disable_alert=order.disable_alert,
+     )
+     engine.open_trades.append(trade)
+     engine._cb("on_trade_open", trade)
+@@ -292,6 +300,9 @@ def _close_target_trades(
+         closed = replace(
+             trade,
+             exit_id=order.id,
++            exit_comment=order.comment,
++                exit_alert_message=order.alert_message,
++                exit_disable_alert=order.disable_alert, exit_leg=order.exit_leg,
+             exit_parent_id=order.parent_exit_id if order.kind == "exit" else None,
+             exit_time=bar.time,
+             exit_bar_index=bar_index,
+@@ -415,6 +426,10 @@ def _record_reversal_entry(
+         0.0,
+         is_open=True,
+         entry_fill_index=len(engine.fills),
++        entry_comment=order.comment,
++        metadata_captured=True,
++        entry_alert_message=order.alert_message,
++        entry_disable_alert=order.disable_alert,
+     )
+     engine.open_trades.append(trade)
+     engine._cb("on_trade_open", trade)
+diff --git a/backtest_engine/core/strategy_capabilities.py b/backtest_engine/core/strategy_capabilities.py
+index 0f40b31c1a531082408f677994cc37319c927c11..5392fb16923a9c1c567f2a3d9c40ea895b50d93a 100644
+--- a/backtest_engine/core/strategy_capabilities.py
++++ b/backtest_engine/core/strategy_capabilities.py
+@@ -63,6 +63,9 @@ class StrategyCommandSpec:
+         if rejected := self.unsupported_parameters.intersection(bound):
+             raise ValueError(f"{self.name}: unsupported host parameters {sorted(rejected)}")
+         if self.name == "strategy.exit":
++            from backtest_engine.core.order_metadata import EXIT_METADATA_FIELDS
++            if pine_version < 5 and set(bound).intersection(EXIT_METADATA_FIELDS):
++                raise ValueError("per-leg metadata requires Pine v5 or v6")
+             trailing = set(bound).intersection({"trail_price", "trail_points", "trail_offset"})
+             if trailing and ("trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"})):
+                 raise ValueError("trailing exit requires trail_offset and an activation level")
+@@ -130,12 +133,6 @@ _COMMANDS = (
+         frozenset(
+             {
+                 "oca_type",
+-                "comment_profit",
+-                "comment_loss",
+-                "comment_trailing",
+-                "alert_profit",
+-                "alert_loss",
+-                "alert_trailing",
+             }
+         ),
+     ),
