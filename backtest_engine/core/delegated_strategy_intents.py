@@ -255,10 +255,9 @@ class DelegatedStrategyIntentHandler:
             command_id = "close:" + command_id
         if kind == "exit":
             entry_id = _nonempty_string(arguments["from_entry"], "from_entry")
-            if self.open_entry_ids is None or entry_id not in self.open_entry_ids:
-                raise ValueError(
-                    "strategy.exit requires an already-open matching entry in this RC6 host; pending-entry exits are not admitted"
-                )
+            # Entry/exit commands in one callback are committed together. The
+            # broker owns binding to open trades or already-created market orders;
+            # a pre-callback position snapshot cannot decide whether an exit is valid.
             for relative, absolute in (("profit", "limit"), ("loss", "stop")):
                 if (
                     self.pine_version == 6

@@ -114,8 +114,8 @@ _COMMANDS = (
     ),
     StrategyCommandSpec("strategy.cancel", ("id",), ("id",)),
     StrategyCommandSpec("strategy.cancel_all", (), ()),
-    # Current intent schema requires a concrete entry ID. Trailing and per-leg
-    # metadata are not yet faithfully supported by the native bridge.
+    # The broker admits exits for open trades and pending market entries.
+    # A concrete entry ID is required; trailing/per-leg metadata remain unsupported.
     StrategyCommandSpec(
         "strategy.exit",
         _EXIT,

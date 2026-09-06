@@ -127,14 +127,15 @@ def test_unsupported_exits_fail_without_silent_parameter_loss(named, message):
     assert message in str(exc.value.__cause__)
 
 
-def test_pending_entry_exit_is_explicitly_rejected():
+def test_pending_entry_exit_is_committed_for_broker_owned_binding():
     h = handler(open_entry_ids=())
     tx = transaction(h)
     dispatch(tx, "strategy.entry", ("L", "strategy.long"))
     dispatch(tx, "strategy.exit", ("X", "L"), {"stop": 99}, line=2)
-    with pytest.raises(PineRuntimeError) as exc:
-        seal(h, tx)
-    assert "pending-entry exits" in str(exc.value.__cause__)
+    events = seal(h, tx)
+    assert [event["kind"] for event in events] == ["entry", "exit"]
+    assert events[1]["from_entry"] == "L"
+    assert [event["sequence"] for event in events] == [0, 1]
 
 
 def test_v5_absolute_exit_parameter_takes_precedence_in_existing_engine():
