@@ -48,7 +48,7 @@ def test_reducing_exit_quantity_releases_reservation_for_second_exit():
     assert not result.open_trades
 
 
-def test_reservations_sum_repeated_entry_ids_instead_of_only_last_trade():
+def test_each_repeated_entry_reserves_its_capped_absolute_exit_quantity():
     def commands(ctx, i):
         if i == 0:
             ctx.entry("A", "long", qty=2)
@@ -71,5 +71,7 @@ def test_reservations_sum_repeated_entry_ids_instead_of_only_last_trade():
     )
     assert result.status == "completed", result.errors
     fills = [(f.order_id, f.qty) for f in engine.fills if f.order_id.startswith(("X:", "Y:"))]
-    assert fills == [("Y:L", 1), ("X:L", 4)]
+    # qty=4 applies to each matched opening fill (2 and 3), not a pooled 5.
+    # Both lots are fully reserved by X, so Y cannot overbook either one.
+    assert fills == [("X:L", 2), ("X:entry:1:L", 3)]
     assert sum(t.qty for t in result.closed_trades) == 5 and not result.open_trades

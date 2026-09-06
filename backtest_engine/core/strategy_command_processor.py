@@ -198,11 +198,17 @@ def _apply_exit_command(
     if register_pending and payload.from_entry is not None:
         engine._all_entry_exits.pop(payload.id, None)
     waiting = defer_exit(engine, payload, bar, bar_index) if register_pending else False
-    if target_trade is None and (payload.from_entry is None or payload.profit is not None or payload.loss is not None or any(
-        v is not None for v in (payload.trail_price, payload.trail_points, payload.trail_offset))):
-        apply_scoped_exit(engine, payload, bar, bar_index, recalc_after_fill, limit, stop)
-        return
     if waiting and not engine._matching_open_trades(payload.from_entry):
+        return
+    # Every exit form uses an opening-fill identity. Absolute prices do not
+    # imply pooled quantities when several executions share the same entry ID.
+    if target_trade is None:
+        if payload.from_entry is not None and not matching_trades(engine, payload.from_entry):
+            engine._diag("ORDER_REJECTED_NO_AVAILABLE_POSITION_QTY",
+                         "exit has no matching unreserved position qty", "warning",
+                         bar_index, bar.time, payload.id)
+            return
+        apply_scoped_exit(engine, payload, bar, bar_index, recalc_after_fill, limit, stop)
         return
     if engine.position.direction == "flat":
         engine._diag(
@@ -403,7 +409,13 @@ def _exit_id_already_filled_for_open_entry(
         engine._filled_exit_entry_keys = cache
     from backtest_engine.core.exit_scope import matching_trades
     for trade in matching_trades(engine, from_entry, lot):
-        if (exit_id, trade.entry_id, trade.entry_time, trade.entry_bar_index, trade.entry_fill_index) in cache:
+        identity = (exit_id, trade.entry_id, trade.entry_time, trade.entry_bar_index)
+        if (*identity, trade.entry_fill_index) in cache:
+            return True
+        # Legacy rows had no fill identity; deterministic negative IDs assigned
+        # during migration must retain their already-filled-exit history.
+        if (trade.entry_fill_index is not None and trade.entry_fill_index < 0
+                and (*identity, None) in cache):
             return True
     return False
 

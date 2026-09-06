@@ -1,8 +1,8 @@
 """Exit targeting and position-lifetime policies in the existing broker.
 
-A public entry ID is not a lot identity. Relative and all-entry exits are
-materialized per actual opening fill. Absolute named exits retain their existing
-aggregate quantity behavior; complete FIFO/report attribution is a separate gate.
+A public entry ID is not a lot identity. Absolute, relative, trailing and all-entry
+exits are materialized per actual opening fill, sharing the same quantity and
+reservation rules. FIFO/report attribution is a separate acceptance boundary.
 """
 
 from __future__ import annotations
@@ -146,8 +146,6 @@ def activate_persistent_exits(engine: Any, entry: Order, bar: Bar, bar_index: in
 
 def reconcile_exit_scope(engine: Any, payload: ExitPayload, bar: Bar, bar_index: int) -> None:
     """A replacement public ID cannot leave an obsolete target or price leg live."""
-    scoped = payload.from_entry is None or payload.profit is not None or payload.loss is not None or any(
-        v is not None for v in (payload.trail_price, payload.trail_points, payload.trail_offset))
     for order in engine.orders:
         if (
             order.kind != "exit"
@@ -155,7 +153,9 @@ def reconcile_exit_scope(engine: Any, payload: ExitPayload, bar: Bar, bar_index:
             or order.status not in {"pending", "active"}
         ):
             continue
-        wrong_mode = scoped != (order.entry_fill_index is not None)
+        # Old broker snapshots may still contain a pooled absolute exit. On
+        # explicit replacement retire it before creating per-fill orders.
+        wrong_mode = order.entry_fill_index is None
         wrong_entry = payload.from_entry is not None and order.from_entry != payload.from_entry
         trailing = (
             order.trail_price is not None
