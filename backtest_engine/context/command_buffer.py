@@ -12,6 +12,12 @@ class EntryOrderPayload:
     oca_name: str | None = None
     oca_type: str | None = None
     comment: str | None = None
+    alert_message: str | None = None
+    disable_alert: bool = False
+
+    def __post_init__(self) -> None:
+        from backtest_engine.core.order_metadata import validate_metadata
+        validate_metadata(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +37,18 @@ class ExitPayload:
     oca_type: str | None = None
     comment: str | None = None
     price_pair_policy: str = "absolute_first"
+    alert_message: str | None = None
+    disable_alert: bool = False
+    comment_profit: str | None = None
+    comment_loss: str | None = None
+    comment_trailing: str | None = None
+    alert_profit: str | None = None
+    alert_loss: str | None = None
+    alert_trailing: str | None = None
 
     def __post_init__(self) -> None:
+        from backtest_engine.core.order_metadata import validate_metadata
+        validate_metadata(self)
         if self.price_pair_policy not in ("absolute_first", "first_trigger"):
             raise ValueError("invalid exit price_pair_policy")
         from backtest_engine.core.exit_prices import _optional_number
@@ -57,6 +73,12 @@ class ClosePayload:
     qty_percent: float | None = None
     immediately: bool = False
     comment: str | None = None
+    alert_message: str | None = None
+    disable_alert: bool = False
+
+    def __post_init__(self) -> None:
+        from backtest_engine.core.order_metadata import validate_metadata
+        validate_metadata(self)
 
 
 @dataclass(frozen=True, slots=True)

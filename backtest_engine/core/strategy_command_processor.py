@@ -12,6 +12,7 @@ from backtest_engine.context import (
     StrategyContext,
 )
 from backtest_engine.models import Bar, Order, Trade
+from backtest_engine.core.order_metadata import execution_metadata, copy_order_metadata
 
 EntryCommandKind = Literal["entry", "order"]
 OrderDirection = Literal["long", "short"]
@@ -168,7 +169,7 @@ def _apply_close_command(
             position_direction=engine.position.direction,
             reduce_only=True,
             from_entry=from_entry,
-            comment=payload.comment,
+            **execution_metadata(payload),
             immediately=payload.immediately,
         ),
         bar,
@@ -313,7 +314,7 @@ def _apply_exit_command(
                 parent_exit_id=payload.id,
                 entry_fill_index=lot,
                 oca_explicit=payload.oca_name is not None,
-                comment=payload.comment,
+                **execution_metadata(payload, "profit"),
             ),
             bar,
             bar_index,
@@ -342,7 +343,7 @@ def _apply_exit_command(
                 parent_exit_id=payload.id,
                 entry_fill_index=lot,
                 oca_explicit=payload.oca_name is not None,
-                comment=payload.comment,
+                **execution_metadata(payload, "loss"),
             ),
             bar,
             bar_index,
@@ -373,7 +374,7 @@ def _apply_exit_command(
                 parent_exit_id=payload.id,
                 entry_fill_index=lot,
                 oca_explicit=payload.oca_name is not None,
-                comment=payload.comment,
+                **execution_metadata(payload, "trailing"),
                 trail_price=activation,
                 trail_points=points_price,
                 trail_offset=offset,
@@ -469,7 +470,7 @@ def _add_or_modify_exit_order(
     existing.entry_fill_index = new.entry_fill_index
     existing.oca_type = new.oca_type
     existing.parent_exit_id = new.parent_exit_id
-    existing.comment = new.comment
+    copy_order_metadata(existing, new)
     existing.created_bar_index = new.created_bar_index
     existing.created_time = new.created_time
     existing.active_from_bar_index = new.active_from_bar_index
@@ -525,7 +526,7 @@ def _apply_entry_or_order_command(
                     reduce_only=True,
                     limit_price=limit,
                     stop_price=stop,
-                    comment=payload.comment,
+                    **execution_metadata(payload),
                 ),
                 bar,
                 bar_index,
@@ -584,7 +585,7 @@ def _apply_entry_or_order_command(
         None,
         payload.oca_name,
         cast(OcaType, payload.oca_type or "none"),
-        comment=payload.comment,
+        **execution_metadata(payload),
     )
     new.qty_is_default = uses_default_qty
     if existing:
@@ -630,7 +631,7 @@ def _apply_entry_or_order_command(
         existing.position_direction = new.position_direction
         existing.oca_name = new.oca_name
         existing.oca_type = new.oca_type
-        existing.comment = new.comment
+        copy_order_metadata(existing, new)
         existing.qty_is_default = new.qty_is_default
         existing.created_bar_index = new.created_bar_index
         existing.created_time = new.created_time

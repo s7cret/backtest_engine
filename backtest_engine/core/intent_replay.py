@@ -356,6 +356,7 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
     limit = decimal_to_engine_number(event.get("limit"), field="limit", ctx=ctx)
     stop = decimal_to_engine_number(event.get("stop"), field="stop", ctx=ctx)
 
+    metadata = {name: event[name] for name in ("alert_message", "disable_alert") if name in event}
     if kind in {"entry", "order"}:
         getattr(ctx, kind)(
             order_id,
@@ -366,11 +367,13 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
             oca_name=event.get("oca_name"),
             oca_type=event.get("oca_type"),
             comment=event.get("comment"),
+            **metadata,
         )
         return
     if kind == "exit":
         ctx.exit(
             order_id,
+            **dict(event.get("exit_metadata", {})),
             **({"price_pair_policy": event["price_pair_policy"]} if "price_pair_policy" in event else {}),
             from_entry=(None if event.get("exit_scope") == "all_entries" else event["from_entry"]),
             qty=qty,
@@ -380,6 +383,7 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
             oca_name=event.get("oca_name"),
             oca_type=event.get("oca_type"),
             comment=event.get("comment"),
+            **metadata,
             profit=decimal_to_engine_number(event.get("profit"), field="profit", ctx=ctx),
             loss=decimal_to_engine_number(event.get("loss"), field="loss", ctx=ctx),
             trail_price=decimal_to_engine_number(
@@ -400,12 +404,14 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
             qty_percent=qty_percent,
             immediately=bool(event.get("immediately", False)),
             comment=event.get("comment"),
+            **metadata,
         )
         return
     if kind == "close_all":
         ctx.close_all(
             immediately=bool(event.get("immediately", False)),
             comment=event.get("comment"),
+            **metadata,
         )
         return
     if kind == "cancel":

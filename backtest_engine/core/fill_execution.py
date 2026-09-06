@@ -77,6 +77,11 @@ def execute_fill(
         pricing.commission,
         pricing.slippage,
         point,
+        comment=order.comment,
+        alert_message=order.alert_message,
+        disable_alert=order.disable_alert,
+        exit_leg=order.exit_leg,
+        parent_exit_id=order.parent_exit_id,
     )
     engine.fills.append(fill)
     order.status = "filled"

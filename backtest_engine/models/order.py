@@ -41,3 +41,6 @@ class Order:
     # None retains an aggregate named-entry scope; an integer targets one lot.
     entry_fill_index: int | None = None
     oca_explicit: bool = False
+    alert_message: str | None = None
+    disable_alert: bool = False
+    exit_leg: Literal["profit", "loss", "trailing"] | None = None

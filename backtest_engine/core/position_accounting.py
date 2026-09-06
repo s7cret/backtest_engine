@@ -70,6 +70,10 @@ def _open_position(
         0.0,
         is_open=True,
         entry_fill_index=len(engine.fills),
+        entry_comment=order.comment,
+        metadata_captured=True,
+        entry_alert_message=order.alert_message,
+        entry_disable_alert=order.disable_alert,
     )
     engine.open_trades.append(trade)
     engine._cb("on_trade_open", trade)
@@ -108,6 +112,10 @@ def _add_to_position(
         0.0,
         is_open=True,
         entry_fill_index=len(engine.fills),
+        entry_comment=order.comment,
+        metadata_captured=True,
+        entry_alert_message=order.alert_message,
+        entry_disable_alert=order.disable_alert,
     )
     engine.open_trades.append(trade)
     engine._cb("on_trade_open", trade)
@@ -292,6 +300,9 @@ def _close_target_trades(
         closed = replace(
             trade,
             exit_id=order.id,
+            exit_comment=order.comment,
+                exit_alert_message=order.alert_message,
+                exit_disable_alert=order.disable_alert, exit_leg=order.exit_leg,
             exit_parent_id=order.parent_exit_id if order.kind == "exit" else None,
             exit_time=bar.time,
             exit_bar_index=bar_index,
@@ -415,6 +426,10 @@ def _record_reversal_entry(
         0.0,
         is_open=True,
         entry_fill_index=len(engine.fills),
+        entry_comment=order.comment,
+        metadata_captured=True,
+        entry_alert_message=order.alert_message,
+        entry_disable_alert=order.disable_alert,
     )
     engine.open_trades.append(trade)
     engine._cb("on_trade_open", trade)

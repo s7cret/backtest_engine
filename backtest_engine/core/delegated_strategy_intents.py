@@ -17,6 +17,7 @@ from openpine_contracts import (
 from pinelib import DelegatedCapabilityDispatcher, DelegatedInvocation, is_na
 
 from backtest_engine.config import BacktestConfig
+from backtest_engine.core.order_metadata import EXIT_METADATA_FIELDS
 from backtest_engine.core.intent_replay import IntentReplayIdentity
 from backtest_engine.core.strategy_capabilities import (
     STRATEGY_COMMANDS,
@@ -366,6 +367,14 @@ class DelegatedStrategyIntentHandler:
             if type(arguments["disable_alert"]) is not bool:
                 raise ValueError("strategy intent disable_alert must be a bool")
             payload["disable_alert"] = arguments["disable_alert"]
+        if kind == "exit":
+            metadata = {name: _optional_string(arguments[name], name)
+                        for name in EXIT_METADATA_FIELDS
+                        if _optional(arguments.get(name)) is not None}
+            if metadata:
+                payload.update(exit_semantics_version=payload["schema_version"],
+                               schema_version="2.6.0",
+                               exit_metadata=MappingProxyType(metadata))
         return MappingProxyType(
             {
                 "draft_schema_id": DRAFT_SCHEMA_ID,
@@ -399,6 +408,8 @@ class DelegatedStrategyIntentHandler:
             if not isinstance(source_span, Mapping):
                 raise ValueError("committed delegated strategy source span is invalid")
             payload["source_span"] = dict(source_span)
+            if "exit_metadata" in payload:
+                payload["exit_metadata"] = dict(payload["exit_metadata"])
             payload["sequence"] = start_sequence + len(sealed_intents)
             payload["event_id"] = f"intent-event:{content_hash(payload, schema_id=SCHEMA_ID)}"
             sealed = seal_content_hash(payload, schema_id=SCHEMA_ID)

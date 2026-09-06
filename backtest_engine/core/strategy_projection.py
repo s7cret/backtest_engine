@@ -75,7 +75,7 @@ def _project_trade(engine: Any, trade: Any, *, is_open: bool) -> dict[str, Any]:
             "commission": float(trade.commission_entry + trade.commission_exit),
             "side": str(trade.direction),
             "size": float(trade.qty if trade.direction == "long" else -trade.qty),
-            "entry_comment": _trade_order_comment(
+            "entry_comment": trade.entry_comment if trade.metadata_captured else _trade_order_comment(
                 engine.orders,
                 order_id=trade.entry_id,
                 at_bar_index=trade.entry_bar_index,
@@ -84,7 +84,7 @@ def _project_trade(engine: Any, trade: Any, *, is_open: bool) -> dict[str, Any]:
             "exit_comment": (
                 None
                 if is_open or trade.exit_id is None or trade.exit_bar_index is None
-                else _trade_order_comment(
+                else trade.exit_comment if trade.metadata_captured else _trade_order_comment(
                     engine.orders,
                     order_id=trade.exit_id,
                     at_bar_index=trade.exit_bar_index,

@@ -35,6 +35,16 @@ class Trade:
     entry_fill_index: int | None = None
     exit_parent_id: str | None = None
 
+    # Execution-time snapshots. Legacy hand-built trades retain projection fallback.
+    entry_comment: str | None = None
+    exit_comment: str | None = None
+    metadata_captured: bool = False
+    entry_alert_message: str | None = None
+    exit_alert_message: str | None = None
+    entry_disable_alert: bool = False
+    exit_disable_alert: bool = False
+    exit_leg: str | None = None
+
     def __post_init__(self) -> None:
         if self.entry_qty is None:
             self.entry_qty = self.qty

@@ -161,6 +161,8 @@ def test_command_buffer_and_strategy_context_edge_commands() -> None:
         "qty_percent": None,
         "immediately": False,
         "comment": None,
+        "alert_message": None,
+        "disable_alert": False,
     }
     assert commands[1].kwargs == {}
     with pytest.raises(ValueError, match="unsupported strategy command"):

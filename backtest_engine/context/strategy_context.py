@@ -30,6 +30,9 @@ class StrategyContext:
         oca_name: str | None = None,
         oca_type: str | None = None,
         comment: str | None = None,
+        *,
+        alert_message: str | None = None,
+        disable_alert: bool = False,
     ) -> None:
         self.buffer.add(
             "entry",
@@ -41,6 +44,8 @@ class StrategyContext:
             oca_name=oca_name,
             oca_type=oca_type,
             comment=comment,
+            alert_message=alert_message,
+            disable_alert=disable_alert,
         )
 
     def order(
@@ -53,6 +58,9 @@ class StrategyContext:
         oca_name: str | None = None,
         oca_type: str | None = None,
         comment: str | None = None,
+        *,
+        alert_message: str | None = None,
+        disable_alert: bool = False,
     ) -> None:
         self.buffer.add(
             "order",
@@ -64,6 +72,8 @@ class StrategyContext:
             oca_name=oca_name,
             oca_type=oca_type,
             comment=comment,
+            alert_message=alert_message,
+            disable_alert=disable_alert,
         )
 
     def exit(
@@ -84,6 +94,14 @@ class StrategyContext:
         comment: str | None = None,
         *,
         price_pair_policy: str = "absolute_first",
+        alert_message: str | None = None,
+        disable_alert: bool = False,
+        comment_profit: str | None = None,
+        comment_loss: str | None = None,
+        comment_trailing: str | None = None,
+        alert_profit: str | None = None,
+        alert_loss: str | None = None,
+        alert_trailing: str | None = None,
     ) -> None:
         self.buffer.add(
             "exit",
@@ -102,6 +120,14 @@ class StrategyContext:
             oca_name=oca_name,
             oca_type=oca_type,
             comment=comment,
+            alert_message=alert_message,
+            disable_alert=disable_alert,
+            comment_profit=comment_profit,
+            comment_loss=comment_loss,
+            comment_trailing=comment_trailing,
+            alert_profit=alert_profit,
+            alert_loss=alert_loss,
+            alert_trailing=alert_trailing,
         )
 
     def close(
@@ -111,6 +137,9 @@ class StrategyContext:
         qty_percent: float | None = None,
         immediately: bool = False,
         comment: str | None = None,
+        *,
+        alert_message: str | None = None,
+        disable_alert: bool = False,
     ) -> None:
         self.buffer.add(
             "close",
@@ -119,10 +148,16 @@ class StrategyContext:
             qty_percent=qty_percent,
             immediately=immediately,
             comment=comment,
+            alert_message=alert_message,
+            disable_alert=disable_alert,
         )
 
-    def close_all(self, immediately: bool = False, comment: str | None = None) -> None:
-        self.buffer.add("close_all", immediately=immediately, comment=comment)
+    def close_all(
+        self, immediately: bool = False, comment: str | None = None, *,
+        alert_message: str | None = None, disable_alert: bool = False,
+    ) -> None:
+        self.buffer.add("close_all", immediately=immediately, comment=comment,
+                        alert_message=alert_message, disable_alert=disable_alert)
 
     def cancel(self, id: str) -> None:
         self.buffer.add("cancel", id=id)

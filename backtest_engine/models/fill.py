@@ -19,3 +19,8 @@ class Fill:
     slippage_value: float
     intrabar_point: str | None = None
     phase: str | None = None
+    comment: str | None = None
+    alert_message: str | None = None
+    disable_alert: bool = False
+    exit_leg: Literal["profit", "loss", "trailing"] | None = None
+    parent_exit_id: str | None = None

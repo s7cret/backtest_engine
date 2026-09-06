@@ -63,6 +63,9 @@ class StrategyCommandSpec:
         if rejected := self.unsupported_parameters.intersection(bound):
             raise ValueError(f"{self.name}: unsupported host parameters {sorted(rejected)}")
         if self.name == "strategy.exit":
+            from backtest_engine.core.order_metadata import EXIT_METADATA_FIELDS
+            if pine_version < 5 and set(bound).intersection(EXIT_METADATA_FIELDS):
+                raise ValueError("per-leg metadata requires Pine v5 or v6")
             trailing = set(bound).intersection({"trail_price", "trail_points", "trail_offset"})
             if trailing and ("trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"})):
                 raise ValueError("trailing exit requires trail_offset and an activation level")
@@ -130,12 +133,6 @@ _COMMANDS = (
         frozenset(
             {
                 "oca_type",
-                "comment_profit",
-                "comment_loss",
-                "comment_trailing",
-                "alert_profit",
-                "alert_loss",
-                "alert_trailing",
             }
         ),
     ),
