@@ -23,6 +23,7 @@ from backtest_engine.core.strategy_capabilities import (
     STRATEGY_COMMANDS,
     STRATEGY_CONSTANTS,
     STRATEGY_STATE_VALUES,
+    validate_exit_shape,
 )
 
 OWNER = "backtest-engine"
@@ -248,6 +249,8 @@ class DelegatedStrategyIntentHandler:
         if not when:
             return MappingProxyType({"draft_schema_id": DRAFT_SCHEMA_ID, "payload": None})
         kind = spec.name.removeprefix("strategy.")
+        if kind == "exit":
+            validate_exit_shape({key for key, value in arguments.items() if _optional(value) is not None})
         bar_time = self.bar_open_time_utc_ms.get(invocation.bar_index)
         if bar_time is None:
             raise ValueError("delegated strategy bar identity is unavailable")

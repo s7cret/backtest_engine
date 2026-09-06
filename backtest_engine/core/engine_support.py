@@ -88,7 +88,7 @@ class EngineSupportMixin:
     def _want(self, name: str) -> bool:
         return name in self.config.required_outputs
 
-    def _event(self, code, msg, i=None, t=None, oid=None) -> None:
+    def _event(self, code, msg, i=None, t=None, oid=None, *, context=None) -> None:
         if self.config.collect_events:
             self.events.append(
                 Diagnostic(
@@ -99,6 +99,7 @@ class EngineSupportMixin:
                     t,
                     oid,
                     phase=getattr(self, "_current_phase", None),
+                    context=None if context is None else dict(context),
                 )
             )
 

@@ -48,3 +48,17 @@ def execution_metadata(payload: Any, leg: str | None = None) -> dict[str, Any]:
 def copy_order_metadata(target: Any, source: Any) -> None:
     for name in ORDER_METADATA_FIELDS:
         setattr(target, name, getattr(source, name))
+
+
+def filled_order_context(order: object, fill_index: int) -> dict:
+    """Audit data on the fill event; a suppressed alert never suppresses the fill."""
+    return {
+        "schema_id": "backtest_engine.order_fill_metadata.v1",
+        "fill_index": fill_index,
+        "public_order_id": order.parent_exit_id or order.id,
+        "comment": order.comment,
+        "alert_message": order.alert_message,
+        "disable_alert": order.disable_alert,
+        "alert_eligible": not order.disable_alert,
+        "exit_leg": order.exit_leg,
+    }

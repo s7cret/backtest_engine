@@ -51,7 +51,7 @@ class StrategyCommandSpec:
             raise ValueError(f"{self.name}: historical tail arguments must be named")
         if len(positional) > len(self.parameters):
             raise ValueError("delegated strategy invocation has too many positional arguments")
-        allowed = set(self.parameters) | ({"when"} if pine_version < 6 else set())
+        allowed = set(self.parameters) | self.unsupported_parameters | ({"when"} if pine_version < 6 else set())
         if any(type(key) is not str or key not in allowed for key in named):
             raise ValueError(f"{self.name}: unknown named argument (when is unavailable in v6)")
         bound = dict(zip(self.parameters, positional))
@@ -66,12 +66,20 @@ class StrategyCommandSpec:
             from backtest_engine.core.order_metadata import EXIT_METADATA_FIELDS
             if pine_version < 5 and set(bound).intersection(EXIT_METADATA_FIELDS):
                 raise ValueError("per-leg metadata requires Pine v5 or v6")
-            trailing = set(bound).intersection({"trail_price", "trail_points", "trail_offset"})
-            if trailing and ("trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"})):
-                raise ValueError("trailing exit requires trail_offset and an activation level")
-            if trailing and set(bound).intersection({"stop", "loss"}):
-                raise ValueError("fixed stop plus trailing arbitration is not yet supported by this host")
         return bound
+
+
+def validate_exit_shape(active: set[str]) -> None:
+    """Validate known-present arguments after NA normalization, not signature slots.
+
+    The host supplies a conservative set from literal generated arguments; replay
+    supplies actual non-NA values. Dynamic unsupported forms still fail at runtime.
+    """
+    trailing = active.intersection({"trail_price", "trail_points", "trail_offset"})
+    if trailing and ("trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"})):
+        raise ValueError("trailing exit requires trail_offset and an activation level")
+    if trailing and active.intersection({"stop", "loss"}):
+        raise ValueError("fixed stop plus trailing arbitration is not yet supported by this host")
 
 
 _ENTRY = (
@@ -99,7 +107,6 @@ _EXIT = (
     "trail_points",
     "trail_offset",
     "oca_name",
-    "oca_type",
     "comment",
     "comment_profit",
     "comment_loss",
@@ -124,8 +131,8 @@ _COMMANDS = (
     StrategyCommandSpec("strategy.cancel", ("id",), ("id",)),
     StrategyCommandSpec("strategy.cancel_all", (), ()),
     # The broker admits exits for open trades and pending price/market entries.
-    # Omitted/empty from_entry uses the versioned all-entry scope. Trailing and
-    # per-leg metadata remain unsupported by this host surface.
+    # Omitted/empty from_entry uses the versioned all-entry scope.
+    # Per-leg metadata uses the published flat 2.6 contract.
     StrategyCommandSpec(
         "strategy.exit",
         _EXIT,

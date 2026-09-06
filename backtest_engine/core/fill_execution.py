@@ -9,6 +9,7 @@ from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.broker.rounding import round_to_step
 from backtest_engine.broker.slippage import slippage_value
 from backtest_engine.models import Bar, Fill, Order
+from backtest_engine.core.order_metadata import filled_order_context
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,12 +84,14 @@ def execute_fill(
         exit_leg=order.exit_leg,
         parent_exit_id=order.parent_exit_id,
     )
+    metadata = filled_order_context(order, len(engine.fills))
     engine.fills.append(fill)
     order.status = "filled"
     engine.last_trade_bar = bar_index
     engine._cb("on_fill", fill)
     engine._event(
-        "ORDER_FILLED", f"order {order.id} filled", bar_index, bar.time, order.id
+        "ORDER_FILLED", f"order {order.id} filled", bar_index, bar.time, order.id,
+        context=metadata,
     )
     _consume_opposite_reverse_close_component(
         engine, order, before, bar, bar_index
