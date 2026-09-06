@@ -175,3 +175,36 @@ def test_deferred_instructions_survive_broker_snapshot_without_aliasing():
     n = len(e.orders)
     activate_deferred_exits(e, e.orders[0], rows[1], 1)
     assert len(e.orders) == n
+
+
+@pytest.mark.parametrize(
+    "direction,entry_price,leg,level",
+    [
+        ("long", 110, "limit", 105),
+        ("long", 90, "stop", 95),
+        ("short", 90, "limit", 95),
+        ("short", 110, "stop", 105),
+    ],
+)
+@pytest.mark.parametrize("recalc", [False, True])
+def test_gap_beyond_waiting_bracket_uses_entry_open_not_next_ohlc_point(
+    direction, entry_price, leg, level, recalc
+):
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry("L", direction, qty=1)
+            ctx.exit("X", "L", **{leg: level})
+
+    engine, result = run(
+        commands,
+        candles(
+            (100, 101, 99, 100),
+            (entry_price, entry_price + 2, entry_price - 1, entry_price),
+        ),
+        calc_on_order_fills=recalc,
+    )
+    assert result.status == "completed", result.errors
+    assert [(t.entry_price, t.exit_price, t.qty) for t in result.closed_trades] == [
+        (entry_price, entry_price, 1)
+    ]
+    assert [fill.intrabar_point for fill in engine.fills] == ["open", "open"]

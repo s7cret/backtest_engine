@@ -158,6 +158,7 @@ def _scan_orders_at_path_point(
         )
         if fill_price is None:
             continue
+        had_deferred_exits = bool(order.pending_exits)
         engine._fill(order, bar, bar_index, fill_price, point)
         if order.status != "filled":
             continue
@@ -171,6 +172,12 @@ def _scan_orders_at_path_point(
             recalc = _recalculate_after_fill(
                 engine, strategy, ctx, bar, bar_index, fill_price, recalc
             )
+            return True, recalc, filled
+        if had_deferred_exits:
+            # Their commands predate this entry fill. Newly materialized brackets
+            # must be considered at this same price point, even when script fill
+            # recalculation is disabled (e.g. entry opens beyond an absolute TP).
+            # The filled parent is terminal, so it cannot restart the scan twice.
             return True, recalc, filled
     if engine._maybe_margin_call(price, bar, bar_index, point):
         filled = True
