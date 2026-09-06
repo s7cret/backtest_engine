@@ -1,0 +1,305 @@
+diff --git a/backtest_engine/core/deferred_exits.py b/backtest_engine/core/deferred_exits.py
+index b7b2a9afd944088d451a0620a3b2ea187b99198e..b8f87ea9fe38a62199accb17710bcaf30aa3ed1a 100644
+--- a/backtest_engine/core/deferred_exits.py
++++ b/backtest_engine/core/deferred_exits.py
+@@ -1,9 +1,9 @@
+-"""Explicit exits waiting for an already-created market entry.
++"""Explicit exits waiting for an already-created entry.
+ 
+ Templates belong to the entry order instance: cancellation/replacement cannot
+ attach them to a later unrelated order which happens to reuse the same ID.
+-Only market-entry deferral is admitted until continuous price-segment activation
+-is implemented for limit/stop entries. This is not all-entry exit persistence.
++Activation follows the actual parent fill on the historical price path, including
++limit/stop/stop-limit entries. This is not all-entry exit persistence.
+ """
+ 
+ from __future__ import annotations
+@@ -37,11 +37,6 @@ def defer_exit(engine: Any, payload: ExitPayload, bar: Bar, bar_index: int) -> b
+         and not order.reduce_only
+         and order.status in {"active", "pending"}
+     ]
+-    if any(order.order_type != "market" for order in entries):
+-        raise StrategyRuntimeError(
+-            "deferred strategy.exit for price-based entries requires continuous fill activation; "
+-            "only pending market entries are supported"
+-        )
+     # Redefining the same public exit ID replaces its previous pending binding.
+     remove_deferred_exits(engine, payload.id)
+     for entry in entries:
+diff --git a/backtest_engine/core/fill_scanner.py b/backtest_engine/core/fill_scanner.py
+index 9edf76f9accff9f66ab0b83405be314d8f28e02a..daefe7ccec086fe69cbbb5a4041d43fea96363a6 100644
+--- a/backtest_engine/core/fill_scanner.py
++++ b/backtest_engine/core/fill_scanner.py
+@@ -59,45 +59,48 @@ def process_bar_fills(
+         engine.orders = [
+             order for order in engine.orders if order.status in ("pending", "active")
+         ]
++    from backtest_engine.core.price_events import next_price_event
++
+     recalc = 0
+     path = engine._price_path(bar)
+-    path_cursor = 0
+-    while True:
+-        filled = False
+-        restart_after_recalc = False
+-        for path_index, (price, point) in enumerate(
+-            path[path_cursor:], start=path_cursor
+-        ):
+-            path_is_open = point == "open" or point.endswith(".open")
+-            if open_only and not path_is_open:
+-                continue
+-            if skip_open and path_is_open:
+-                continue
+-            restart_after_recalc, recalc, filled = _scan_orders_at_path_point(
+-                engine,
+-                strategy,
+-                ctx,
+-                bar,
+-                bar_index,
+-                price,
+-                point,
+-                path_is_open,
+-                path_index,
+-                recalc,
+-                filled,
+-                close_activation_only,
+-                skip_trailing,
+-                trailing_only,
+-                tick_phase,
+-            )
+-            if restart_after_recalc:
+-                path_cursor = path_index
+-                break
+-        if restart_after_recalc and path_cursor < len(path):
++    previous_price = None
++    for path_index, (destination, destination_point) in enumerate(path):
++        is_open = destination_point == "open" or destination_point.endswith(".open")
++        chart_open = is_open and path_index == 0
++        if ((open_only and not chart_open) or (skip_open and chart_open)
++                or (close_activation_only and path_index != len(path) - 1)):
++            previous_price = destination
+             continue
+-        if not (engine.config.calc_on_order_fills and filled):
+-            break
+-        break
++        # A gap between bars (also magnifier bars) has no intermediate prices.
++        # Observed ticks and close-only executions must not invent a price path.
++        interpolate = (previous_price is not None and not is_open and not open_only
++                       and not close_activation_only and tick_phase is None
++                       and not getattr(engine, "_realtime_tick_execution", False))
++        cursor = previous_price if interpolate else destination
++        while True:
++            price = (next_price_event(engine, cursor, destination, bar_index)
++                     if interpolate else destination)
++            at_endpoint = price == destination
++            point = destination_point if at_endpoint else destination_point + ".cross"
++            activation_ids: set[int] = set()
++            while True:
++                known_orders = {id(order) for order in engine.orders if order.status == "active"}
++                restart, recalc, _ = _scan_orders_at_path_point(
++                    engine, strategy, ctx, bar, bar_index, price, point,
++                    is_open and at_endpoint, path_index, recalc, False,
++                    close_activation_only, skip_trailing or not at_endpoint,
++                    trailing_only, tick_phase, activation_ids,
++                )
++                if not restart:
++                    break
++                # A newly attached/created marketable price order starts here,
++                # not at an earlier price on the segment. It can get improvement.
++                activation_ids.update(id(order) for order in engine.orders
++                                      if id(order) not in known_orders)
++            cursor = price
++            if at_endpoint:
++                break
++        previous_price = destination
+ 
+ 
+ def _scan_orders_at_path_point(
+@@ -116,6 +119,7 @@ def _scan_orders_at_path_point(
+     skip_trailing: bool,
+     trailing_only: bool,
+     tick_phase: Literal["non_final", "final"] | None,
++    activation_ids: set[int] | None = None,
+ ) -> tuple[bool, int, bool]:
+     for order in _orders_for_path_point(engine, price, bar, path_is_open):
+         is_trailing = (
+@@ -154,7 +158,7 @@ def _scan_orders_at_path_point(
+             bar_index,
+             price,
+             point,
+-            path_is_open,
++            path_is_open or (activation_ids is not None and id(order) in activation_ids),
+         )
+         if fill_price is None:
+             continue
+@@ -261,6 +265,7 @@ def _fill_price_for_order(
+     if order.order_type == "stop" and stop_reached(order, price):
+         return _stop_fill_price(engine, order, price, is_open_point, bar_index)
+     if order.order_type == "stop_limit":
++        newly_activated = not order.stop_limit_activated
+         if not order.stop_limit_activated and stop_reached(order, price):
+             order.stop_limit_activated = True
+             engine._event(
+@@ -281,7 +286,7 @@ def _fill_price_for_order(
+             )
+         ):
+             return None
+-        return engine._limit_fill_price(order, price, is_open_point)
++        return engine._limit_fill_price(order, price, is_open_point or newly_activated)
+     return None
+ 
+ 
+diff --git a/backtest_engine/core/native_run_loop.py b/backtest_engine/core/native_run_loop.py
+index e86e78a57b92511d2bac4c7dd59ac6665ccacf69..7807cb74c987087d71c3643c36d001325883678e 100644
+--- a/backtest_engine/core/native_run_loop.py
++++ b/backtest_engine/core/native_run_loop.py
+@@ -228,20 +228,12 @@ def run_native_strategy(
+         engine._call_strategy(strategy, bar, i)
+         if allow_broker:
+             engine._flush(ctx, bar, i)
+-            if (
+-                engine.config.process_orders_on_close
+-                or engine.config.calc_on_order_fills
+-            ):
+-                engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
+-            else:
+-                engine._process_bar_fills(
+-                    strategy,
+-                    ctx,
+-                    bar,
+-                    i,
+-                    skip_open=True,
+-                    close_activation_only=True,
+-                )
++            # The historical OHLC path was consumed before the close callback.
++            # Only closing-tick eligible orders may execute now; do not replay
++            # an earlier high/low for a bracket attached halfway through the bar.
++            engine._process_bar_fills(
++                strategy, ctx, bar, i, skip_open=True, close_activation_only=True,
++            )
+         elif decision is not None and not decision.broker_execution_allowed:
+             discard_command_buffer(engine, ctx, i, bar.time)
+         stamp_phase(engine, getattr(engine, "_current_phase", None))
+diff --git a/backtest_engine/core/price_events.py b/backtest_engine/core/price_events.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..9a863e76c8965e72a240012f18076336fb135890
+--- /dev/null
++++ b/backtest_engine/core/price_events.py
+@@ -0,0 +1,59 @@
++"""Next executable boundary on one monotone historical price-path segment.
++
++Open gaps and observed realtime ticks are discrete points, not interpolations.
++Recompute after every event: stop-limit activation, OCA and attached exits can
++change the next boundary. This helper never mutates an order or executes a fill.
++"""
++
++from __future__ import annotations
++
++from typing import Any
++
++
++def next_price_event(engine: Any, start: float, end: float, bar_index: int) -> float:
++    """Choose the nearest strictly-forward plain-order trigger, or the endpoint."""
++    if start == end:
++        return end
++    ascending = end > start
++    nearest = end
++    for order in engine.orders:
++        if order.status != "active":
++            continue
++        if engine.config.process_orders_on_close and order.created_bar_index == bar_index:
++            continue  # Closing-tick orders cannot see earlier path crossings.
++        if any(
++            value is not None
++            for value in (order.trail_price, order.trail_points, order.trail_offset)
++        ):
++            continue  # Trailing evolution remains owned by the existing scanner.
++        if (
++            order.kind == "exit"
++            and order.from_entry is not None
++            and not engine._matching_open_trades(order.from_entry)
++        ):
++            continue
++        is_limit = order.order_type == "limit" or (
++            order.order_type == "stop_limit" and order.stop_limit_activated
++        )
++        is_stop = order.order_type == "stop" or (
++            order.order_type == "stop_limit" and not order.stop_limit_activated
++        )
++        trigger = None
++        if is_limit and order.limit_price is not None:
++            # Verification penetration changes the trigger, not the execution price.
++            penetration = (
++                engine.config.mintick or 0.0
++            ) * engine.config.backtest_fill_limits_assumption_ticks
++            trigger = order.limit_price + (penetration if order.side == "sell" else -penetration)
++            if ascending != (order.side == "sell"):
++                continue
++        elif is_stop and order.stop_price is not None:
++            trigger = order.stop_price
++            if ascending != (order.side == "buy"):
++                continue
++        if trigger is not None:
++            if ascending and start < trigger < nearest:
++                nearest = trigger
++            elif not ascending and nearest < trigger < start:
++                nearest = trigger
++    return nearest
+diff --git a/backtest_engine/core/strategy_capabilities.py b/backtest_engine/core/strategy_capabilities.py
+index df8f8f7b2b2a1a8def1be54f4eea9ea57c7e9c76..3d25d35124f729470c8e96237a77d6dca4afee74 100644
+--- a/backtest_engine/core/strategy_capabilities.py
++++ b/backtest_engine/core/strategy_capabilities.py
+@@ -114,7 +114,7 @@ _COMMANDS = (
+     ),
+     StrategyCommandSpec("strategy.cancel", ("id",), ("id",)),
+     StrategyCommandSpec("strategy.cancel_all", (), ()),
+-    # The broker admits exits for open trades and pending market entries.
++    # The broker admits exits for open trades and pending price/market entries.
+     # A concrete entry ID is required; trailing/per-leg metadata remain unsupported.
+     StrategyCommandSpec(
+         "strategy.exit",
+diff --git a/backtest_engine/core/strategy_command_processor.py b/backtest_engine/core/strategy_command_processor.py
+index b99526206ddc35c083faafb0b2ea6c533ac28ef8..2e199479da33d010f80218fb6f2a135e7ea6a1f5 100644
+--- a/backtest_engine/core/strategy_command_processor.py
++++ b/backtest_engine/core/strategy_command_processor.py
+@@ -189,7 +189,7 @@ def _apply_exit_command(
+ 
+     waiting = defer_exit(engine, payload, bar, bar_index) if register_pending else False
+     if waiting and not engine._matching_open_trades(payload.from_entry):
+-        # A submitted market entry activates its captured instruction later.
++        # A submitted entry activates its captured instruction only on its fill.
+         return
+     if engine.position.direction == "flat":
+         engine._diag(
+diff --git a/tests/unit/test_deferred_market_exits.py b/tests/unit/test_deferred_market_exits.py
+index 7af6d5af74171943d2e274aaa748af9d30e9aced..4e1a1b4c24bf5b7799ab7d4d4ca2eb5af0197d72 100644
+--- a/tests/unit/test_deferred_market_exits.py
++++ b/tests/unit/test_deferred_market_exits.py
+@@ -142,16 +142,21 @@ def test_changed_entry_id_does_not_keep_previous_waiting_exit():
+ 
+ 
+ @pytest.mark.parametrize("price_args", [{"limit": 99}, {"stop": 101}, {"limit": 99, "stop": 101}])
+-def test_price_entry_activation_is_explicitly_not_claimed(price_args):
++def test_price_entry_activation_waits_for_a_forward_fill(price_args):
+     def commands(ctx, i):
+         if i == 0:
+             ctx.entry("L", "long", **price_args)
+             ctx.exit("X", "L", limit=105)
+ 
+-    from backtest_engine.errors import StrategyRuntimeError
+-
+-    with pytest.raises(StrategyRuntimeError, match="continuous fill activation"):
+-        run(commands, candles((100, 101, 99, 100), (100, 106, 98, 100)))
++    engine, result = run(commands, candles((100, 101, 99, 100), (100, 106, 98, 100)))
++    assert result.status == "completed", result.errors
++    if len(price_args) == 2:
++        # The low/limit touch precedes stop activation; no backward fill.
++        assert not result.closed_trades and not result.open_trades
++        assert engine.orders[0].stop_limit_activated
++    else:
++        assert [(t.entry_price, t.exit_price) for t in result.closed_trades] == [
++            (99 if "limit" in price_args else 101, 105)]
+ 
+ 
+ def test_deferred_instructions_survive_broker_snapshot_without_aliasing():
