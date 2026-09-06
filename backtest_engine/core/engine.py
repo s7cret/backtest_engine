@@ -30,7 +30,7 @@ from backtest_engine.core.protocol_boundary import (
 )
 from backtest_engine.core.risk_rules import (
     apply_risk_rules,
-    max_position_size_allows,
+    cap_entry_quantity,
     pending_entry_position_delta,
 )
 from backtest_engine.core.score_window import (
@@ -374,13 +374,9 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
     def _risk_allows_order(
         self, o: Order, bar: Bar, i: int, exclude_order: Order | None = None
     ) -> bool:
-        if not max_position_size_allows(
-            max_position_size=self._max_position_size,
-            current_size=self.position.size,
-            orders=self.orders,
-            order=o,
-            exclude_order=exclude_order,
-        ):
+        old_qty = o.qty
+        o.qty = cap_entry_quantity(self, o)
+        if o.kind == "entry" and self._max_position_size is not None and o.qty <= 0:
             self._diag(
                 "ORDER_REJECTED_RISK_MAX_POSITION_SIZE",
                 "order rejected by risk.max_position_size",
@@ -390,6 +386,10 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                 o.id,
             )
             return False
+        if o.qty != old_qty:
+            self._event(
+                "ORDER_MODIFIED", "entry quantity limited by max_position_size", i, bar.time, o.id
+            )
         return True
 
     def _add_order(self, o: Order, bar: Bar, i: int) -> None:

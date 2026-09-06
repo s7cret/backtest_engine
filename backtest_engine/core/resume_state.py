@@ -271,9 +271,7 @@ def restore_resume_state(
             "resume_state.bar_index must be an integer greater than or equal to -1"
         )
     if series is not None and cursor >= len(series):
-        raise ResumeUnsupportedError(
-            "resume_state.bar_index must reference an available input bar"
-        )
+        raise ResumeUnsupportedError("resume_state.bar_index must reference an available input bar")
     if resume_state.broker_state is None:
         raise ResumeUnsupportedError(
             "resume_state is missing broker_state; use BacktestEngine export_resume_state or provide a compatible snapshot"
@@ -284,9 +282,7 @@ def restore_resume_state(
         if engine.config.resume_validation_policy == "strict":
             raise ResumeUnsupportedError(msg)
         engine._diag("RESUME_CONFIG_MISMATCH", msg, "warning")
-    expected_tick_fingerprint = resume_state.metadata.get(
-        "realtime_tick_schedule_fingerprint"
-    )
+    expected_tick_fingerprint = resume_state.metadata.get("realtime_tick_schedule_fingerprint")
     current_schedule = getattr(engine, "_realtime_tick_schedule", None)
     strict_resume = engine.config.resume_validation_policy == "strict"
     strict_tick_resume = current_schedule is not None and strict_resume
@@ -296,13 +292,9 @@ def restore_resume_state(
         )
     if expected_tick_fingerprint is not None and current_schedule is not None:
         processed_schedule = current_schedule[: max(0, resume_state.bar_index + 1)]
-        current_tick_fingerprint = realtime_tick_schedule_fingerprint(
-            processed_schedule
-        )
+        current_tick_fingerprint = realtime_tick_schedule_fingerprint(processed_schedule)
         if current_tick_fingerprint != expected_tick_fingerprint:
-            msg = (
-                "resume state tick schedule fingerprint does not match processed ticks"
-            )
+            msg = "resume state tick schedule fingerprint does not match processed ticks"
             if engine.config.resume_validation_policy == "strict":
                 raise ResumeUnsupportedError(msg)
             engine._diag("RESUME_TICK_SCHEDULE_MISMATCH", msg, "warning")
@@ -312,13 +304,9 @@ def restore_resume_state(
         and expected_bar_fingerprint is None
         and engine.config.resume_validation_policy == "strict"
     ):
-        raise ResumeUnsupportedError(
-            "strict resume state is missing bar prefix fingerprint"
-        )
+        raise ResumeUnsupportedError("strict resume state is missing bar prefix fingerprint")
     if expected_bar_fingerprint is not None and series is not None:
-        current_bar_fingerprint = bar_prefix_fingerprint(
-            series, max(0, resume_state.bar_index + 1)
-        )
+        current_bar_fingerprint = bar_prefix_fingerprint(series, max(0, resume_state.bar_index + 1))
         if current_bar_fingerprint != expected_bar_fingerprint:
             msg = "resume state bar prefix fingerprint does not match processed bars"
             if engine.config.resume_validation_policy == "strict":
@@ -335,9 +323,7 @@ def restore_resume_state(
     )
     if strict_resume:
         strict_statistics = cast(dict[str, Any], statistics_state)
-        collect_equity = (
-            engine._want("equity_curve") or engine.config.collect_equity_curve
-        )
+        collect_equity = engine._want("equity_curve") or engine.config.collect_equity_curve
         if collect_equity:
             equity_curve = strict_statistics["equity_curve"]
             expected_points = max(0, cursor + 1)
@@ -371,18 +357,14 @@ def restore_resume_state(
                 "the processed score window"
             )
         for name in ("events", "warnings", "errors"):
-            if any(
-                not isinstance(item, Diagnostic) for item in strict_statistics[name]
-            ):
+            if any(not isinstance(item, Diagnostic) for item in strict_statistics[name]):
                 raise ResumeUnsupportedError(
                     f"strict resume statistics_state.{name} must contain diagnostics"
                 )
     try:
         statistics_state = clone_state(statistics_state)
     except Exception as exc:
-        raise ResumeUnsupportedError(
-            "resume statistics_state could not be detached"
-        ) from exc
+        raise ResumeUnsupportedError("resume statistics_state could not be detached") from exc
     broker = resume_state.broker_state
     if not isinstance(broker, BrokerSnapshot):
         raise ResumeUnsupportedError(
@@ -391,15 +373,16 @@ def restore_resume_state(
     try:
         broker = clone_state(broker)
     except Exception as exc:
-        raise ResumeUnsupportedError(
-            "resume broker_state could not be detached"
-        ) from exc
+        raise ResumeUnsupportedError("resume broker_state could not be detached") from exc
     if strict_resume:
         _validate_strict_statistics_against_broker(
             cast(dict[str, Any], statistics_state),
             broker,
             score_start_index=max(0, engine._score_start_index),
         )
+    from backtest_engine.core.risk_rules import validate_snapshot_risk, restore_risk_state
+
+    validate_snapshot_risk(broker)
     runtime_restore = None
     if resume_state.runtime_state is not None:
         runtime_restore = getattr(runtime, "restore_state", None)
@@ -425,6 +408,8 @@ def restore_resume_state(
         strategy_restore=strategy_restore,
         strategy_state=resume_state.strategy_state,
     )
+    if broker.risk_state is not None:
+        restore_risk_state(engine, broker.risk_state)
     engine.cash = broker.cash
     engine.equity = broker.equity
     engine.peak_equity = broker.peak_equity
@@ -461,12 +446,8 @@ def restore_resume_state(
     ctx.state = engine.state
     engine._update_state()
     if isinstance(statistics_state, dict):
-        engine._resume_equity_curve_history = list(
-            statistics_state.get("equity_curve", [])
-        )
-        engine._score_equity_points = list(
-            statistics_state.get("score_equity_points", [])
-        )
+        engine._resume_equity_curve_history = list(statistics_state.get("equity_curve", []))
+        engine._score_equity_points = list(statistics_state.get("score_equity_points", []))
         current_warnings = list(engine.warnings)
         current_errors = list(engine.errors)
         engine.events = list(statistics_state.get("events", [])) + list(engine.events)
@@ -495,14 +476,11 @@ def export_resume_state(
     series: BarSeries | None = None,
 ) -> BacktestResumeState:
     strategy_export = (
-        getattr(strategy, "export_realtime_state", None)
-        or getattr(strategy, "export_state", None)
+        getattr(strategy, "export_realtime_state", None) or getattr(strategy, "export_state", None)
         if strategy is not None
         else None
     )
-    runtime_export = (
-        getattr(runtime, "export_state", None) if runtime is not None else None
-    )
+    runtime_export = getattr(runtime, "export_state", None) if runtime is not None else None
     strategy_state = strategy_export() if callable(strategy_export) else None
     runtime_state = runtime_export() if callable(runtime_export) else None
     if strategy is not None and strategy_state is None:
@@ -511,6 +489,8 @@ def export_resume_state(
             "strategy does not implement export_state(); resume snapshot contains engine/runtime state only",
             "warning",
         )
+    from backtest_engine.core.risk_rules import capture_risk_state
+
     broker = BrokerSnapshot(
         engine.cash,
         engine.equity,
@@ -527,16 +507,16 @@ def export_resume_state(
         engine.open_trades,
         engine.last_trade_bar,
         engine._all_entry_exits,
+        capture_risk_state(engine),
+        1,
     )
     metadata: dict[str, Any] = {"resume_contract": "engine-broker-snapshot-v1"}
     if series is not None:
-        metadata["bar_prefix_fingerprint"] = bar_prefix_fingerprint(
-            series, max(0, bar_index + 1)
-        )
+        metadata["bar_prefix_fingerprint"] = bar_prefix_fingerprint(series, max(0, bar_index + 1))
     tick_schedule = getattr(engine, "_realtime_tick_schedule", None)
     if tick_schedule is not None:
-        metadata["realtime_tick_schedule_fingerprint"] = (
-            realtime_tick_schedule_fingerprint(tick_schedule[: max(0, bar_index + 1)])
+        metadata["realtime_tick_schedule_fingerprint"] = realtime_tick_schedule_fingerprint(
+            tick_schedule[: max(0, bar_index + 1)]
         )
     return build_resume_state(
         bar_index=bar_index,
@@ -545,9 +525,7 @@ def export_resume_state(
         strategy_state=strategy_state,
         runtime_state=runtime_state,
         statistics_state={
-            "equity_curve": clone_state(
-                getattr(engine, "_resume_equity_curve_history", [])
-            ),
+            "equity_curve": clone_state(getattr(engine, "_resume_equity_curve_history", [])),
             "score_equity_points": clone_state(engine._score_equity_points),
             "events": clone_state(engine.events),
             "warnings": clone_state(engine.warnings),

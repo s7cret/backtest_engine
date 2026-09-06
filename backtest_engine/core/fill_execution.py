@@ -19,15 +19,23 @@ class FillPricing:
     slippage: float
 
 
-def execute_fill(
-    engine, order: Order, bar: Bar, bar_index: int, price: float, point: str
-) -> None:
+def execute_fill(engine, order: Order, bar: Bar, bar_index: int, price: float, point: str) -> None:
+    from backtest_engine.core.risk_rules import enforce_entry_fill_risk
+
+    if not enforce_entry_fill_risk(engine, order, bar, bar_index):
+        return
     if order.kind == "close":
         available = sum(trade.qty for trade in engine._matching_open_trades(order.from_entry))
         if available <= 0 or engine.position.direction != order.position_direction:
             order.status = "cancelled"
             engine._cb("on_order_cancelled", order)
-            engine._event("ORDER_CANCELLED", "close no longer has a matching position", bar_index, bar.time, order.id)
+            engine._event(
+                "ORDER_CANCELLED",
+                "close no longer has a matching position",
+                bar_index,
+                bar.time,
+                order.id,
+            )
             return
         order.qty = min(order.qty, available)
     if order.kind == "exit":
@@ -90,18 +98,21 @@ def execute_fill(
     engine.last_trade_bar = bar_index
     engine._cb("on_fill", fill)
     engine._event(
-        "ORDER_FILLED", f"order {order.id} filled", bar_index, bar.time, order.id,
+        "ORDER_FILLED",
+        f"order {order.id} filled",
+        bar_index,
+        bar.time,
+        order.id,
         context=metadata,
     )
-    _consume_opposite_reverse_close_component(
-        engine, order, before, bar, bar_index
-    )
+    _consume_opposite_reverse_close_component(engine, order, before, bar, bar_index)
     engine._apply_oca(order, bar, bar_index)
     if order.kind in {"entry", "order"}:
         from backtest_engine.core.deferred_exits import activate_deferred_exits
 
         activate_deferred_exits(engine, order, bar, bar_index)
         from backtest_engine.core.exit_scope import activate_persistent_exits
+
         activate_persistent_exits(engine, order, bar, bar_index)
 
 

@@ -235,16 +235,17 @@ def test_risk_max_position_size_is_enforced_by_engine():
         end_time=3,
         commission_type="none",
         process_orders_on_close=True,
-    finality_policy="ALLOW_OPEN",
-     )
+        finality_policy="ALLOW_OPEN",
+    )
 
     result = BacktestEngine(cfg).run(RiskMaxPositionStrategy, bars=bars)
 
     assert result.open_trades is not None
-    assert [trade.entry_id for trade in result.open_trades] == ["allowed"]
-    assert any(
-        d.code == "ORDER_REJECTED_RISK_MAX_POSITION_SIZE" for d in result.warnings
-    )
+    assert [trade.entry_id for trade in result.open_trades] == ["too_large"]
+    assert result.open_trades[0].qty == 1
+    assert not result.errors
+    # A second entry may be denied by pyramiding first; the first is clipped,
+    # not rejected wholesale, and the exposure remains at the risk limit.
 
 
 class RiskMaxPositionPendingEntriesStrategy:
@@ -348,7 +349,7 @@ class RiskAllowEntryCloseOnlyStrategy:
             self.ctx.entry("short_reduces", "short", qty=1)
 
 
-def test_risk_allow_entry_in_opposite_direction_reduces_existing_position():
+def test_risk_allow_entry_in_opposite_direction_closes_without_reversing():
     bars = [
         Bar(1, 100, 100, 100, 100),
         Bar(2, 100, 100, 100, 100),
@@ -361,19 +362,17 @@ def test_risk_allow_entry_in_opposite_direction_reduces_existing_position():
         end_time=3,
         commission_type="none",
         process_orders_on_close=True,
-    finality_policy="ALLOW_OPEN",
-     )
+        finality_policy="ALLOW_OPEN",
+    )
 
     result = BacktestEngine(cfg).run(RiskAllowEntryCloseOnlyStrategy, bars=bars)
 
     assert result.closed_trades is not None
-    assert [
-        (trade.entry_id, trade.exit_id, trade.qty) for trade in result.closed_trades
-    ] == [("long", "short_reduces", 1.0)]
+    assert [(trade.entry_id, trade.exit_id, trade.qty) for trade in result.closed_trades] == [
+        ("long", "short_reduces", 2.0)
+    ]
     assert result.open_trades is not None
-    assert [
-        (trade.entry_id, trade.direction, trade.qty) for trade in result.open_trades
-    ] == [("long", "long", 1.0)]
+    assert [(trade.entry_id, trade.direction, trade.qty) for trade in result.open_trades] == []
 
 
 class RiskStateMutationStrategy:

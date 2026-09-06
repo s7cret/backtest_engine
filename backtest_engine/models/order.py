@@ -23,9 +23,7 @@ class Order:
     oca_type: Literal["cancel", "reduce", "none"] = "none"
     reserved_qty: float = 0.0
     parent_exit_id: str | None = None
-    status: Literal[
-        "pending", "active", "filled", "cancelled", "expired", "rejected"
-    ] = "pending"
+    status: Literal["pending", "active", "filled", "cancelled", "expired", "rejected"] = "pending"
     comment: str | None = None
     immediately: bool = False
     stop_limit_activated: bool = False
@@ -44,3 +42,5 @@ class Order:
     alert_message: str | None = None
     disable_alert: bool = False
     exit_leg: Literal["profit", "loss", "trailing"] | None = None
+    # Desired new-direction size, excluding any reversal close component.
+    entry_open_qty: float | None = None

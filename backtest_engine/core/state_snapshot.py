@@ -83,6 +83,8 @@ class BrokerSnapshot:
     open_trades: list[Trade] = field(default_factory=list)
     last_trade_bar: int | None = None
     all_entry_exits: dict[str, dict] = field(default_factory=dict)
+    risk_state: dict[str, object] | None = None
+    risk_state_version: int = 0
 
 
 @dataclass(frozen=True)

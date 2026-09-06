@@ -33,6 +33,9 @@ def flush_strategy_commands(
     from backtest_engine.core.deferred_exits import remove_deferred_exits
 
     engine._apply_risk_rules(ctx)
+    from backtest_engine.core.risk_rules import reconcile_pending_entry_directions
+
+    reconcile_pending_entry_directions(engine, bar, bar_index, recalc=recalc_after_fill)
     for command in ctx.buffer.drain():
         kind = command.name
         payload = command.payload
@@ -56,7 +59,9 @@ def flush_strategy_commands(
             engine._all_entry_exits.pop(payload.id, None)
             remove_deferred_exits(engine, payload.id)
             for order in engine.orders:
-                if (order.id == payload.id or order.parent_exit_id == payload.id) and order.status in ("pending", "active"):
+                if (
+                    order.id == payload.id or order.parent_exit_id == payload.id
+                ) and order.status in ("pending", "active"):
                     order.status = "cancelled"
                     engine._cb("on_order_cancelled", order)
                     engine._event(
@@ -69,9 +74,7 @@ def flush_strategy_commands(
             continue
         if kind in ("close", "close_all"):
             assert isinstance(payload, ClosePayload)
-            _apply_close_command(
-                engine, kind, payload, bar, bar_index, recalc_after_fill
-            )
+            _apply_close_command(engine, kind, payload, bar, bar_index, recalc_after_fill)
             continue
 
         assert isinstance(payload, EntryOrderPayload | ExitPayload)
@@ -80,7 +83,11 @@ def flush_strategy_commands(
         order_type: OrderType = (
             "market"
             if limit is None and stop is None
-            else "limit" if stop is None else "stop" if limit is None else "stop_limit"
+            else "limit"
+            if stop is None
+            else "stop"
+            if limit is None
+            else "stop_limit"
         )
         if kind == "exit":
             assert isinstance(payload, ExitPayload)
@@ -511,11 +518,9 @@ def _apply_entry_or_order_command(
     side: OrderSide = "buy" if direction == "long" else "sell"
     uses_default_qty = payload.qty is None
     qty = engine._qty_from_args(_qty_args(payload.qty), None, bar.close)
+    opening_qty = qty
     if kind == "entry" and not engine._entry_direction_allowed(direction):
-        if (
-            engine.position.direction != "flat"
-            and engine.position.direction != direction
-        ):
+        if engine.position.direction != "flat" and engine.position.direction != direction:
             close_direction = cast(OrderDirection, engine.position.direction)
             close_side: OrderSide = "sell" if close_direction == "long" else "buy"
             engine._add_order(
@@ -525,8 +530,8 @@ def _apply_entry_or_order_command(
                     direction=close_direction,
                     side=close_side,
                     position_effect="close",
-                    order_type=order_type,
-                    qty=min(qty, abs(engine.position.size)),
+                    order_type="market",
+                    qty=abs(engine.position.size) if qty > 0 else 0,
                     created_bar_index=bar_index,
                     created_time=bar.time,
                     active_from_bar_index=(
@@ -536,8 +541,8 @@ def _apply_entry_or_order_command(
                     ),
                     position_direction=close_direction,
                     reduce_only=True,
-                    limit_price=limit,
-                    stop_price=stop,
+                    limit_price=None,
+                    stop_price=None,
                     **execution_metadata(payload),
                 ),
                 bar,
@@ -600,6 +605,7 @@ def _apply_entry_or_order_command(
         **execution_metadata(payload),
     )
     new.qty_is_default = uses_default_qty
+    new.entry_open_qty = opening_qty if kind == "entry" else None
     if existing:
         if new.qty <= 0:
             # Pine semantic for strategy.entry(...qty=0) replacement:
@@ -645,12 +651,11 @@ def _apply_entry_or_order_command(
         existing.oca_type = new.oca_type
         copy_order_metadata(existing, new)
         existing.qty_is_default = new.qty_is_default
+        existing.entry_open_qty = new.entry_open_qty
         existing.created_bar_index = new.created_bar_index
         existing.created_time = new.created_time
         existing.active_from_bar_index = new.active_from_bar_index
-        existing.status = (
-            "active" if new.active_from_bar_index <= bar_index else "pending"
-        )
+        existing.status = "active" if new.active_from_bar_index <= bar_index else "pending"
         engine._event(
             "ORDER_MODIFIED",
             f"order {existing.id} modified",

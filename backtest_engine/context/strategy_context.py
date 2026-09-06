@@ -194,7 +194,11 @@ class StrategyContext:
         value_type = str(type).lower()
         if value_type not in {"fixed", "contracts", "shares"}:
             raise ValueError(f"unsupported risk_max_position_size type: {type!r}")
-        self.risk_rules.append(RiskRule("max_position_size", float(value), "fixed"))
+        from backtest_engine.core.risk_rules import validate_position_limit
+
+        self.risk_rules.append(
+            RiskRule("max_position_size", validate_position_limit(value), "fixed")
+        )
 
     def risk_max_intraday_loss(self, value: float, type: str) -> None:
         raise UnsupportedRiskRuleError(

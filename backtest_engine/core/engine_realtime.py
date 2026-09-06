@@ -39,6 +39,8 @@ class EngineRealtimeMixin:
     def _export_realtime_broker_state(self) -> RealtimeBrokerSnapshot:
         """Export a detached broker checkpoint for future realtime tick rollback."""
 
+        from backtest_engine.core.risk_rules import capture_risk_state
+
         return RealtimeBrokerSnapshot(
             cash=self.cash,
             equity=self.equity,
@@ -55,6 +57,8 @@ class EngineRealtimeMixin:
             open_trades=clone_state(self.open_trades),
             last_trade_bar=self.last_trade_bar,
             all_entry_exits=clone_state(self._all_entry_exits),
+            risk_state=capture_risk_state(self),
+            risk_state_version=1,
             events=clone_state(self.events),
             warnings=clone_state(self.warnings),
             errors=clone_state(self.errors),
@@ -69,6 +73,11 @@ class EngineRealtimeMixin:
             raise ResumeUnsupportedError(
                 "realtime broker rollback requires a RealtimeBrokerSnapshot"
             )
+        from backtest_engine.core.risk_rules import restore_risk_state, validate_snapshot_risk
+
+        validate_snapshot_risk(snapshot)
+        if snapshot.risk_state is not None:
+            restore_risk_state(self, snapshot.risk_state)
         self.cash = snapshot.cash
         self.equity = snapshot.equity
         self.peak_equity = snapshot.peak_equity

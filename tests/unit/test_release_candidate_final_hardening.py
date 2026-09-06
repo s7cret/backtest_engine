@@ -21,7 +21,7 @@ from backtest_engine.core.fill_scanner import (
 )
 from backtest_engine.core.risk_rules import (
     apply_risk_rules,
-    max_position_size_allows,
+    cap_entry_quantity,
     pending_entry_position_delta,
 )
 from backtest_engine.core.strategy_command_processor import (
@@ -544,8 +544,8 @@ def test_backtest_engine_internal_helper_edges() -> None:
         default_qty_type="fixed",
         default_qty_value=1,
         commission_type="none",
-    finality_policy="ALLOW_OPEN",
-     )
+        finality_policy="ALLOW_OPEN",
+    )
     engine = BacktestEngine(config)
     assert len(engine._slice_range(BarSeries.from_bars([Bar(0, 1, 1, 1, 1)]))) == 0
     assert engine._qty_from_args({}, None, 10.0) == 0.0
@@ -566,12 +566,13 @@ def test_backtest_engine_internal_helper_edges() -> None:
             end_time=1,
             max_position_size=1,
             commission_type="none",
-        finality_policy="ALLOW_OPEN",
-         )
+            finality_policy="ALLOW_OPEN",
+        )
     )
     engine._max_position_size = 1
     oversized = _order("big", qty=2.0)
-    assert engine._risk_allows_order(oversized, _bar(), 0) is False
+    assert engine._risk_allows_order(oversized, _bar(), 0) is True
+    assert oversized.qty == 1.0
     zero = _order("zero", qty=0.0)
     engine._add_order(zero, _bar(), 0)
     assert any(d.code == "ORDER_REJECTED_ZERO_QTY" for d in engine.warnings)
@@ -617,10 +618,12 @@ def test_resume_state_non_strict_and_restore_requirements() -> None:
 
 def test_risk_rules_all_branches_and_position_projection() -> None:
     engine = types.SimpleNamespace(
-        _allow_long=False, _allow_short=False, _early_stop_enabled=False
+        _allow_long=False, _allow_short=False, _early_stop_enabled=False, _max_position_size=None
     )
     ctx = StrategyContext(
-        BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN")
+        BacktestConfig(
+            symbol="S", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN"
+        )
     )
     ctx.risk_allow_entry_in("all")
     ctx.risk_max_drawdown(5, "percent")
@@ -631,7 +634,9 @@ def test_risk_rules_all_branches_and_position_projection() -> None:
     assert engine._max_position_size == 2
 
     bad_ctx = StrategyContext(
-        BacktestConfig(symbol="S", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN")
+        BacktestConfig(
+            symbol="S", timeframe="1", start_time=0, end_time=1, finality_policy="ALLOW_OPEN"
+        )
     )
     bad_ctx.risk_rules.append(RiskRule("unknown"))
     with pytest.raises(UnsupportedRiskRuleError):
@@ -641,12 +646,11 @@ def test_risk_rules_all_branches_and_position_projection() -> None:
     b = _order("b", qty=2)
     b.direction = "short"
     assert pending_entry_position_delta([a, b], exclude_order=a) == -2
-    assert max_position_size_allows(
-        max_position_size=None, current_size=0, orders=[], order=a
-    )
+    assert cap_entry_quantity(types.SimpleNamespace(_max_position_size=None), a) == a.qty
     exit_order = _order("x", kind="exit")
-    assert max_position_size_allows(
-        max_position_size=1, current_size=10, orders=[], order=exit_order
+    assert (
+        cap_entry_quantity(types.SimpleNamespace(_max_position_size=1), exit_order)
+        == exit_order.qty
     )
 
 
