@@ -29,11 +29,14 @@ def flush_strategy_commands(
     *,
     recalc_after_fill: bool = False,
 ) -> None:
+    from backtest_engine.core.deferred_exits import remove_deferred_exits
+
     engine._apply_risk_rules(ctx)
     for command in ctx.buffer.drain():
         kind = command.name
         payload = command.payload
         if kind == "cancel_all":
+            remove_deferred_exits(engine)
             for order in engine.orders:
                 if order.status in ("pending", "active"):
                     order.status = "cancelled"
@@ -48,6 +51,7 @@ def flush_strategy_commands(
             continue
         if kind == "cancel":
             assert isinstance(payload, CancelPayload)
+            remove_deferred_exits(engine, payload.id)
             for order in engine.orders:
                 if (order.id == payload.id or order.parent_exit_id == payload.id) and order.status in ("pending", "active"):
                     order.status = "cancelled"
@@ -178,7 +182,15 @@ def _apply_exit_command(
     recalc_after_fill: bool,
     limit: float | None,
     stop: float | None,
+    *,
+    register_pending: bool = True,
 ) -> None:
+    from backtest_engine.core.deferred_exits import defer_exit
+
+    waiting = defer_exit(engine, payload, bar, bar_index) if register_pending else False
+    if waiting and not engine._matching_open_trades(payload.from_entry):
+        # A submitted market entry activates its captured instruction later.
+        return
     if engine.position.direction == "flat":
         engine._diag(
             "ORDER_REJECTED_NO_AVAILABLE_POSITION_QTY",

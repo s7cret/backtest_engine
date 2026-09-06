@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 
@@ -35,3 +35,5 @@ class Order:
     trail_activated: bool = False
     qty_is_default: bool = False
     phase: str | None = None
+    # Plain data survives broker deepcopy/checkpoint and JSON result export.
+    pending_exits: dict[str, dict] = field(default_factory=dict)

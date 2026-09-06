@@ -87,6 +87,10 @@ def execute_fill(
         engine, order, before, bar, bar_index
     )
     engine._apply_oca(order, bar, bar_index)
+    if order.kind in {"entry", "order"}:
+        from backtest_engine.core.deferred_exits import activate_deferred_exits
+
+        activate_deferred_exits(engine, order, bar, bar_index)
 
 
 def _consume_opposite_reverse_close_component(
