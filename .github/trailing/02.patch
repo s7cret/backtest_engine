@@ -1,0 +1,77 @@
+diff --git a/backtest_engine/core/delegated_strategy_intents.py b/backtest_engine/core/delegated_strategy_intents.py
+index 1b511258930fbea5c04ec522329df493e4f540d5..f54951c3ea255d41cf8e447ed1e36ee007aba75e 100644
+--- a/backtest_engine/core/delegated_strategy_intents.py
++++ b/backtest_engine/core/delegated_strategy_intents.py
+@@ -261,7 +261,7 @@ class DelegatedStrategyIntentHandler:
+             # a pre-callback position snapshot cannot decide whether an exit is valid.
+             if not any(
+                 _optional(arguments.get(key)) is not None
+-                for key in ("limit", "stop", "profit", "loss")
++                for key in ("limit", "stop", "profit", "loss", "trail_price", "trail_points")
+             ):
+                 raise ValueError("strategy.exit requires a supported active price leg")
+         payload: dict[str, Any] = {
+@@ -326,7 +326,7 @@ class DelegatedStrategyIntentHandler:
+                 payload.update(schema_version="2.3.0", exit_scope="all_entries")
+             else:
+                 payload["from_entry"] = entry_id
+-            for field in ("qty", "qty_percent", "profit", "limit", "loss", "stop"):
++            for field in ("qty", "qty_percent", "profit", "limit", "loss", "stop", "trail_price", "trail_points", "trail_offset"):
+                 value = _optional(arguments.get(field))
+                 if value is not None:
+                     payload[field] = _decimal(value, field)
+@@ -335,6 +335,15 @@ class DelegatedStrategyIntentHandler:
+                 for relative, absolute in (("profit", "limit"), ("loss", "stop"))
+             ):
+                 payload.update(schema_version="2.4.0", price_pair_policy="first_trigger")
++            trailing = set(payload).intersection({"trail_price", "trail_points", "trail_offset"})
++            if trailing:
++                if "trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"}):
++                    raise ValueError("trailing exit requires active trail_offset and activation")
++                if Decimal(payload["trail_offset"]) < 0:
++                    raise ValueError("trail_offset must be nonnegative")
++                payload.update(schema_version="2.5.0", price_pair_policy=(
++                    "first_trigger" if self.pine_version == 6 else "absolute_first"))
++
+         elif kind in {"close", "close_all"}:
+             immediate = _optional(arguments.get("immediately"))
+             if immediate is not None and type(immediate) is not bool:
+diff --git a/backtest_engine/core/strategy_capabilities.py b/backtest_engine/core/strategy_capabilities.py
+index cdfa3c7a4e908fd12b6136f0c3039075c396714e..0f40b31c1a531082408f677994cc37319c927c11 100644
+--- a/backtest_engine/core/strategy_capabilities.py
++++ b/backtest_engine/core/strategy_capabilities.py
+@@ -62,6 +62,12 @@ class StrategyCommandSpec:
+             raise ValueError(f"{self.name} requires {', '.join(sorted(missing))}")
+         if rejected := self.unsupported_parameters.intersection(bound):
+             raise ValueError(f"{self.name}: unsupported host parameters {sorted(rejected)}")
++        if self.name == "strategy.exit":
++            trailing = set(bound).intersection({"trail_price", "trail_points", "trail_offset"})
++            if trailing and ("trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"})):
++                raise ValueError("trailing exit requires trail_offset and an activation level")
++            if trailing and set(bound).intersection({"stop", "loss"}):
++                raise ValueError("fixed stop plus trailing arbitration is not yet supported by this host")
+         return bound
+ 
+ 
+@@ -123,9 +129,6 @@ _COMMANDS = (
+         ("id",),
+         frozenset(
+             {
+-                "trail_price",
+-                "trail_points",
+-                "trail_offset",
+                 "oca_type",
+                 "comment_profit",
+                 "comment_loss",
+diff --git a/tests/unit/test_strategy_host_surface.py b/tests/unit/test_strategy_host_surface.py
+index f9cefeb0e3ebaed39e353f601978cd8c8e165e46..deec8210c9b99324eeef472ff74c34e07ea3b88a 100644
+--- a/tests/unit/test_strategy_host_surface.py
++++ b/tests/unit/test_strategy_host_surface.py
+@@ -112,7 +112,7 @@ def test_historical_when_suppresses_and_preserves_contiguous_sequence(version, n
+ @pytest.mark.parametrize(
+     "named,message",
+     [
+-        ({"trail_price": 101, "trail_offset": 2}, "unsupported host parameters"),
++        ({"trail_price": 101}, "requires trail_offset"),
+         ({"comment_profit": "TP"}, "unsupported host parameters"),
+         ({}, "active price leg"),

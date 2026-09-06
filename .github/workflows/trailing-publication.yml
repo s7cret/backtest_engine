@@ -1,0 +1,113 @@
+name: Verify causal trailing exits before publication
+'on':
+  push:
+    branches: ['ops/rc6-trailing-20260906']
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: rc6-trailing-publication
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: s7cret/openpine-contracts
+          ref: 91f53004be56298f0a3ffcb02c2108672e047f9f
+          path: publisher-source
+          sparse-checkout: .github/trailing/restore.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - run: cp publisher-source/.github/trailing/restore.py "$RUNNER_TEMP/restore.py"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Reassemble readable patches and restore exact reviewed source
+        run: |
+          python - <<'PY'
+          import os, pathlib, shutil
+          source = pathlib.Path('.github/trailing')
+          out = pathlib.Path(os.environ['RUNNER_TEMP'])/'submission'
+          out.mkdir()
+          shutil.copy(source/'plan.json',out/'plan.json')
+          shutil.copy(source/'02.patch',out/'02.patch')
+          # Remove a transport-only leading space on a diff header. The helper
+          # still requires the exact original patch, tree and commit checksums.
+          code = (source/'01-code.patch').read_bytes().replace(b'\n diff --git ',b'\ndiff --git ')
+          (out/'01.patch').write_bytes(code+(source/'01-tests.patch').read_bytes())
+          PY
+          python "$RUNNER_TEMP/restore.py" restore "$RUNNER_TEMP/submission/plan.json" "$RUNNER_TEMP/evidence"
+          cp "$RUNNER_TEMP/restore.py" "$RUNNER_TEMP/evidence/restore.py"
+      - name: Install clean reviewed engine and exact sibling sources
+        run: |
+          python -m pip install setuptools==84.0.0 wheel==0.48.0 hatchling==1.32.0 build==1.6.0
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'dependencies'
+          root.mkdir()
+          pins={'openpine-contracts':'9aa381dc0c1570fda1ea90221d9148194e506279','pinelib':'cddaa0bf2324db36b4cd29e944a251032658c59d','marketdata-provider':'4e269bb7e3d389cae6214da9e17898c32c7ead15'}
+          sources=[]
+          for name,sha in pins.items():
+              path=root/name
+              subprocess.run(['git','clone','--quiet','https://github.com/s7cret/'+name+'.git',str(path)],check=True)
+              subprocess.run(['git','-C',str(path),'checkout','--detach',sha],check=True)
+              if subprocess.check_output(['git','-C',str(path),'rev-parse','HEAD'],text=True).strip()!=sha:
+                  raise SystemExit('Source identity mismatch')
+              sources.append(str(path))
+          clean=root/'engine';clean.mkdir()
+          subprocess.run(['tar','-x','-C',str(clean)],input=subprocess.check_output(['git','archive','HEAD']),check=True)
+          subprocess.run(['python','-m','pip','install',*sources,str(clean)+'[dev]'],check=True)
+          (root.parent/'evidence/source-pins.json').write_text(json.dumps(pins,indent=2)+'\n')
+          PY
+      - name: Complete broker functional suite
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: python -m pytest -q --junitxml="$RUNNER_TEMP/evidence/backtest_engine.xml"
+      - name: Changed-source lint and distribution builds
+        run: |
+          python -m ruff check backtest_engine/context/command_buffer.py backtest_engine/core/exit_prices.py backtest_engine/core/exit_scope.py backtest_engine/core/fill_scanner.py backtest_engine/core/price_events.py backtest_engine/core/strategy_command_processor.py backtest_engine/core/strategy_capabilities.py backtest_engine/core/delegated_strategy_intents.py backtest_engine/models/order.py tests/unit/test_trailing_exit_events.py tests/unit/test_strategy_host_surface.py
+          python -m compileall -q backtest_engine
+          python -m build --no-isolation --outdir "$RUNNER_TEMP/evidence/dist" "$RUNNER_TEMP/dependencies/engine"
+          python -m pip freeze > "$RUNNER_TEMP/evidence/environment.txt"
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trailing-${{ matrix.python }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence/
+          retention-days: 30
+          if-no-files-found: error
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: trailing-3.13-${{ github.run_id }}
+          path: evidence
+      - name: Fast-forward RC6 and archive only this temporary branch
+        run: python evidence/restore.py publish evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trailing-publication-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30

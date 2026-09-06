@@ -1,0 +1,283 @@
+diff --git a/backtest_engine/context/command_buffer.py b/backtest_engine/context/command_buffer.py
+index 0f69c0d5feb3a23c3654b62bb931d237886b2816..61865dbf0f01345c2eeeccfd8758eccd28e649b4 100644
+--- a/backtest_engine/context/command_buffer.py
++++ b/backtest_engine/context/command_buffer.py
+@@ -35,6 +35,19 @@ class ExitPayload:
+     def __post_init__(self) -> None:
+         if self.price_pair_policy not in ("absolute_first", "first_trigger"):
+             raise ValueError("invalid exit price_pair_policy")
++        from backtest_engine.core.exit_prices import _optional_number
++        names = ("trail_price", "trail_points", "trail_offset")
++        values = {name: _optional_number(getattr(self, name), name) for name in names}
++        for name, value in values.items():
++            object.__setattr__(self, name, value)
++        if any(value is not None for value in values.values()):
++            if values["trail_offset"] is None or (
++                values["trail_price"] is None and values["trail_points"] is None
++            ):
++                raise ValueError("trailing exit requires trail_offset and an activation level")
++            if values["trail_offset"] < 0:
++                raise ValueError("trail_offset must be nonnegative")
++
+ 
+ 
+ @dataclass(frozen=True, slots=True)
+diff --git a/backtest_engine/core/exit_prices.py b/backtest_engine/core/exit_prices.py
+index 290ab08ce6b389782b6b76d0da63fc3b9d728c60..1caaf0f62bf07ff8499bfeb98af71d970bfc207f 100644
+--- a/backtest_engine/core/exit_prices.py
++++ b/backtest_engine/core/exit_prices.py
+@@ -64,3 +64,29 @@ def resolve_exit_prices(
+         return min(absolute, relative) if lower_first else max(absolute, relative)
+ 
+     return choose(limit, profit, "profit"), choose(stop, loss, "loss")
++
++
++def resolve_trailing_prices(
++    *, direction: str, entry_price: float, mintick: float,
++    trail_price: float | None, trail_points: float | None,
++    trail_offset: float | None, policy: str = "absolute_first",
++) -> tuple[float, float] | None:
++    """Resolve activation and offset at one real fill; no guessed missing offset."""
++    absolute = _optional_number(trail_price, "trail_price")
++    points = _optional_number(trail_points, "trail_points")
++    offset = _optional_number(trail_offset, "trail_offset")
++    if absolute is None and points is None and offset is None:
++        return None
++    if offset is None or (absolute is None and points is None):
++        raise ValueError("trailing exit requires trail_offset and an activation level")
++    if offset < 0:
++        raise ValueError("trail_offset must be nonnegative")
++    activation, _ = resolve_exit_prices(
++        direction=direction, entry_price=entry_price, mintick=mintick,
++        limit=absolute, profit=points, stop=None, loss=None, policy=policy,
++    )
++    distance = offset * mintick
++    if not math.isfinite(distance) or (offset != 0 and distance == 0):
++        raise ValueError("trail_offset is outside the finite runtime range")
++    assert activation is not None
++    return activation, distance
+ diff --git a/backtest_engine/core/exit_scope.py b/backtest_engine/core/exit_scope.py
+index c4fbb951e22b700607fc3c1fc630efca5cb564bf..8e44d88e1505fd61e85fa1f0903cd83db751a9f9 100644
+--- a/backtest_engine/core/exit_scope.py
++++ b/backtest_engine/core/exit_scope.py
+@@ -146,7 +146,8 @@ def activate_persistent_exits(engine: Any, entry: Order, bar: Bar, bar_index: in
+ 
+ def reconcile_exit_scope(engine: Any, payload: ExitPayload, bar: Bar, bar_index: int) -> None:
+     """A replacement public ID cannot leave an obsolete target or price leg live."""
+-    scoped = payload.from_entry is None or payload.profit is not None or payload.loss is not None
++    scoped = payload.from_entry is None or payload.profit is not None or payload.loss is not None or any(
++        v is not None for v in (payload.trail_price, payload.trail_points, payload.trail_offset))
+     for order in engine.orders:
+         if (
+             order.kind != "exit"
+diff --git a/backtest_engine/core/fill_scanner.py b/backtest_engine/core/fill_scanner.py
+index a3cd9b7c9dc83ba45cd33e407dcfd1464ab5693d..cbb9a3159843c261d1884a5a1fafe9cb2c63e684 100644
+--- a/backtest_engine/core/fill_scanner.py
++++ b/backtest_engine/core/fill_scanner.py
+@@ -18,26 +18,20 @@ def update_trailing_order(order: Order, price: float) -> None:
+     ):
+         return
+     offset = float(order.trail_offset or 0.0)
+-    if order.direction == "long":
+-        if not order.trail_activated and (
+-            order.trail_price is None or price >= order.trail_price
++    favorable = order.direction == "long"
++    if not order.trail_activated:
++        if order.trail_price is not None and (
++            price < order.trail_price if favorable else price > order.trail_price
+         ):
+-            order.trail_activated = True
+-        if order.trail_activated:
+-            order.stop_price = max(
+-                order.stop_price if order.stop_price is not None else float("-inf"),
+-                price - offset,
+-            )
+-    else:
+-        if not order.trail_activated and (
+-            order.trail_price is None or price <= order.trail_price
+-        ):
+-            order.trail_activated = True
+-        if order.trail_activated:
+-            order.stop_price = min(
+-                order.stop_price if order.stop_price is not None else float("inf"),
+-                price + offset,
+-            )
++            return
++        order.trail_activated = True
++    best = order.trail_best_price
++    # Old broker checkpoints did not store best-price explicitly.
++    if best is None and order.stop_price is not None:
++        best = order.stop_price + offset if favorable else order.stop_price - offset
++    best = price if best is None else (max(best, price) if favorable else min(best, price))
++    order.trail_best_price = best
++    order.stop_price = best - offset if favorable else best + offset
+ 
+ 
+ def process_bar_fills(
+@@ -88,7 +82,7 @@ def process_bar_fills(
+                 restart, recalc, _ = _scan_orders_at_path_point(
+                     engine, strategy, ctx, bar, bar_index, price, point,
+                     is_open and at_endpoint, path_index, recalc, False,
+-                    close_activation_only, skip_trailing or not at_endpoint,
++                    close_activation_only, skip_trailing,
+                     trailing_only, tick_phase, activation_ids,
+                 )
+                 if not restart:
+@@ -163,6 +157,7 @@ def _scan_orders_at_path_point(
+         if fill_price is None:
+             continue
+         had_deferred_exits = bool(order.pending_exits)
++        order_count = len(engine.orders)
+         engine._fill(order, bar, bar_index, fill_price, point)
+         if order.status != "filled":
+             continue
+@@ -177,7 +172,10 @@ def _scan_orders_at_path_point(
+                 engine, strategy, ctx, bar, bar_index, fill_price, recalc
+             )
+             return True, recalc, filled
+-        if had_deferred_exits:
++        if had_deferred_exits or any(
++            child.status == "active" for child in engine.orders[order_count:]
++        ):
++            # Persistent all-entry policies also attach new brackets here.
+             # Their commands predate this entry fill. Newly materialized brackets
+             # must be considered at this same price point, even when script fill
+             # recalculation is disabled (e.g. entry opens beyond an absolute TP).
+diff --git a/backtest_engine/core/price_events.py b/backtest_engine/core/price_events.py
+index 9a863e76c8965e72a240012f18076336fb135890..61cd80f7cca0a49bca76871c76cdcc2ba846afa4 100644
+--- a/backtest_engine/core/price_events.py
++++ b/backtest_engine/core/price_events.py
+@@ -11,7 +11,7 @@ from typing import Any
+ 
+ 
+ def next_price_event(engine: Any, start: float, end: float, bar_index: int) -> float:
+-    """Choose the nearest strictly-forward plain-order trigger, or the endpoint."""
++    """Choose the nearest strictly-forward order or trail-activation trigger, or the endpoint."""
+     if start == end:
+         return end
+     ascending = end > start
+@@ -21,11 +21,6 @@ def next_price_event(engine: Any, start: float, end: float, bar_index: int) -> f
+             continue
+         if engine.config.process_orders_on_close and order.created_bar_index == bar_index:
+             continue  # Closing-tick orders cannot see earlier path crossings.
+-        if any(
+-            value is not None
+-            for value in (order.trail_price, order.trail_points, order.trail_offset)
+-        ):
+-            continue  # Trailing evolution remains owned by the existing scanner.
+         if (
+             order.kind == "exit"
+             and order.from_entry is not None
+@@ -39,7 +34,15 @@ def next_price_event(engine: Any, start: float, end: float, bar_index: int) -> f
+             order.order_type == "stop_limit" and not order.stop_limit_activated
+         )
+         trigger = None
+-        if is_limit and order.limit_price is not None:
++        trailing = any(v is not None for v in
++                       (order.trail_price, order.trail_points, order.trail_offset))
++        if trailing and not order.trail_activated:
++            # Activation, not a fill. The scanner evolves the trail at this exact
++            # point before asking for the next strictly-forward boundary.
++            trigger = order.trail_price
++            if ascending != (order.direction == "long"):
++                continue
++        elif is_limit and order.limit_price is not None:
+             # Verification penetration changes the trigger, not the execution price.
+             penetration = (
+                 engine.config.mintick or 0.0
+diff --git a/backtest_engine/core/strategy_command_processor.py b/backtest_engine/core/strategy_command_processor.py
+index 90a3786528b45b721e4121dfe99865b2b16ca6fd..cb515a4d4fb1163a956dec789074b1ad8aeb7aec 100644
+--- a/backtest_engine/core/strategy_command_processor.py
++++ b/backtest_engine/core/strategy_command_processor.py
+@@ -197,7 +197,8 @@ def _apply_exit_command(
+     if register_pending and payload.from_entry is not None:
+         engine._all_entry_exits.pop(payload.id, None)
+     waiting = defer_exit(engine, payload, bar, bar_index) if register_pending else False
+-    if target_trade is None and (payload.from_entry is None or payload.profit is not None or payload.loss is not None):
++    if target_trade is None and (payload.from_entry is None or payload.profit is not None or payload.loss is not None or any(
++        v is not None for v in (payload.trail_price, payload.trail_points, payload.trail_offset))):
+         apply_scoped_exit(engine, payload, bar, bar_index, recalc_after_fill, limit, stop)
+         return
+     if waiting and not engine._matching_open_trades(payload.from_entry):
+@@ -270,11 +271,13 @@ def _apply_exit_command(
+         limit=limit, stop=stop, profit=payload.profit, loss=payload.loss,
+         policy=payload.price_pair_policy,
+     )
+-    has_trail = (
+-        payload.trail_price is not None
+-        or payload.trail_points is not None
+-        or payload.trail_offset is not None
++    from backtest_engine.core.exit_prices import resolve_trailing_prices
++    trailing = resolve_trailing_prices(
++        direction=direction, entry_price=base, mintick=tick,
++        trail_price=payload.trail_price, trail_points=payload.trail_points,
++        trail_offset=payload.trail_offset, policy=payload.price_pair_policy,
+     )
++    has_trail = trailing is not None
+     if limit is None and stop is None and not has_trail:
+         engine._diag(
+             "ORDER_REJECTED_EMPTY_EXIT",
+@@ -344,24 +347,11 @@ def _apply_exit_command(
+             bar,
+             bar_index,
+         )
+-    if has_trail:
+-        points = payload.trail_points
+-        activation = payload.trail_price
+-        tick = getattr(engine, "_effective_mintick", 1.0) or 1.0
+-        points_price = float(points) * tick if points is not None else None
+-        if activation is None and points_price is not None:
+-            activation = (
+-                base + points_price if direction == "long" else base - points_price
+-            )
+-        offset = (
+-            float(
+-                payload.trail_offset
+-                if payload.trail_offset is not None
+-                else (points if points is not None else 0.0)
+-            )
+-            * tick
+-        )
+-        engine._add_order(
++    if trailing is not None:
++        activation, offset = trailing
++        points_price = None  # Already resolved at this specific entry fill.
++        _add_or_modify_exit_order(
++            engine,
+             Order(
+                 id=prefix + ":T",
+                 kind="exit",
+@@ -447,6 +437,21 @@ def _add_or_modify_exit_order(
+         return
+     if not engine._risk_allows_order(new, bar, bar_index, existing):
+         return
++    was_trailing = existing.trail_offset is not None
++    is_trailing = new.trail_offset is not None
++    if was_trailing and is_trailing:
++        new.trail_activated = existing.trail_activated
++        new.trail_best_price = existing.trail_best_price
++        if new.trail_best_price is None and existing.stop_price is not None:
++            new.trail_best_price = (existing.stop_price + existing.trail_offset
++                                   if existing.direction == "long"
++                                   else existing.stop_price - existing.trail_offset)
++        if new.trail_activated and new.trail_best_price is not None:
++            new.stop_price = (new.trail_best_price - new.trail_offset
++                              if new.direction == "long"
++                              else new.trail_best_price + new.trail_offset)
++    existing.trail_activated = new.trail_activated
++    existing.trail_best_price = new.trail_best_price
+     existing.qty = new.qty
+     existing.reserved_qty = new.reserved_qty
+     existing.limit_price = new.limit_price
+diff --git a/backtest_engine/models/order.py b/backtest_engine/models/order.py
+index 2a93697ec085735343d511fd4b1d98666c2f3d6a..f1548c940a94e8fe53e5be23aac098e51e076876 100644
+--- a/backtest_engine/models/order.py
++++ b/backtest_engine/models/order.py
+@@ -33,6 +33,7 @@ class Order:
+     trail_points: float | None = None
+     trail_offset: float | None = None
+     trail_activated: bool = False
++    trail_best_price: float | None = None
+     qty_is_default: bool = False
+     phase: str | None = None
+     # Plain data survives broker deepcopy/checkpoint and JSON result export.
