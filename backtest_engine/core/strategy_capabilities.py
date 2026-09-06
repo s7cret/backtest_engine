@@ -46,12 +46,20 @@ class StrategyCommandSpec:
             "strategy.close_all": 0,
             "strategy.cancel": 1,
             "strategy.cancel_all": 0,
-        }[self.name]
+        }.get(self.name, len(self.parameters))
         if pine_version < 6 and len(positional) > safe_prefix:
             raise ValueError(f"{self.name}: historical tail arguments must be named")
         if len(positional) > len(self.parameters):
             raise ValueError("delegated strategy invocation has too many positional arguments")
-        allowed = set(self.parameters) | self.unsupported_parameters | ({"when"} if pine_version < 6 else set())
+        allowed = (
+            set(self.parameters)
+            | self.unsupported_parameters
+            | (
+                {"when"}
+                if pine_version < 6 and not self.name.startswith("strategy.risk.")
+                else set()
+            )
+        )
         if any(type(key) is not str or key not in allowed for key in named):
             raise ValueError(f"{self.name}: unknown named argument (when is unavailable in v6)")
         bound = dict(zip(self.parameters, positional))
@@ -64,6 +72,7 @@ class StrategyCommandSpec:
             raise ValueError(f"{self.name}: unsupported host parameters {sorted(rejected)}")
         if self.name == "strategy.exit":
             from backtest_engine.core.order_metadata import EXIT_METADATA_FIELDS
+
             if pine_version < 5 and set(bound).intersection(EXIT_METADATA_FIELDS):
                 raise ValueError("per-leg metadata requires Pine v5 or v6")
         return bound
@@ -118,6 +127,8 @@ _EXIT = (
     "disable_alert",
 )
 _COMMANDS = (
+    StrategyCommandSpec("strategy.risk.allow_entry_in", ("value",), ("value",)),
+    StrategyCommandSpec("strategy.risk.max_position_size", ("contracts",), ("contracts",)),
     StrategyCommandSpec("strategy.entry", _ENTRY, ("id", "direction")),
     StrategyCommandSpec("strategy.order", _ENTRY, ("id", "direction")),
     StrategyCommandSpec(

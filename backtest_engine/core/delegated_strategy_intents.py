@@ -248,9 +248,15 @@ class DelegatedStrategyIntentHandler:
             raise ValueError("strategy intent when must be a bool or historical numeric/na")
         if not when:
             return MappingProxyType({"draft_schema_id": DRAFT_SCHEMA_ID, "payload": None})
-        kind = spec.name.removeprefix("strategy.")
+        kind = (
+            "risk"
+            if spec.name.startswith("strategy.risk.")
+            else spec.name.removeprefix("strategy.")
+        )
         if kind == "exit":
-            validate_exit_shape({key for key, value in arguments.items() if _optional(value) is not None})
+            validate_exit_shape(
+                {key for key, value in arguments.items() if _optional(value) is not None}
+            )
         bar_time = self.bar_open_time_utc_ms.get(invocation.bar_index)
         if bar_time is None:
             raise ValueError("delegated strategy bar identity is unavailable")
@@ -258,8 +264,11 @@ class DelegatedStrategyIntentHandler:
         if kind == "close":
             command_id = "close:" + command_id
         if kind == "exit":
-            entry_id = (None if arguments.get("from_entry", "") == "" else
-                        _nonempty_string(arguments["from_entry"], "from_entry"))
+            entry_id = (
+                None
+                if arguments.get("from_entry", "") == ""
+                else _nonempty_string(arguments["from_entry"], "from_entry")
+            )
             # Entry/exit commands in one callback are committed together. The
             # broker owns binding to open trades or already-created market orders;
             # a pre-callback position snapshot cannot decide whether an exit is valid.
@@ -295,7 +304,34 @@ class DelegatedStrategyIntentHandler:
             "source_span": MappingProxyType(_source_span(invocation)),
             "idempotency_key": f"intent-delivery:{invocation.invocation_id}",
         }
-        if kind in {"entry", "order"}:
+        if kind == "risk":
+            rule = spec.name.removeprefix("strategy.risk.")
+            if rule == "allow_entry_in":
+                direction = arguments["value"]
+                if type(direction) is not str or direction not in {
+                    "strategy.direction.long",
+                    "strategy.direction.short",
+                    "strategy.direction.all",
+                }:
+                    raise ValueError("risk direction requires a strategy.direction constant")
+                value, unit = "0", direction.removeprefix("strategy.direction.")
+            else:
+                from backtest_engine.core.risk_rules import validate_position_limit
+
+                validate_position_limit(arguments["contracts"])
+                value, unit = _decimal(arguments["contracts"], "contracts"), "fixed"
+                number = Decimal(value)
+                validate_position_limit(float(number))
+                if number != 0 and float(number) == 0:
+                    raise ValueError("risk limit is outside the runtime range")
+            payload.update(
+                command_id=spec.name,
+                risk_rule=rule,
+                risk_value=value,
+                risk_unit=unit,
+                risk_scope="strategy",
+            )
+        elif kind in {"entry", "order"}:
             payload.update(
                 {
                     "order_id": command_id,
@@ -330,7 +366,17 @@ class DelegatedStrategyIntentHandler:
                 payload.update(schema_version="2.3.0", exit_scope="all_entries")
             else:
                 payload["from_entry"] = entry_id
-            for field in ("qty", "qty_percent", "profit", "limit", "loss", "stop", "trail_price", "trail_points", "trail_offset"):
+            for field in (
+                "qty",
+                "qty_percent",
+                "profit",
+                "limit",
+                "loss",
+                "stop",
+                "trail_price",
+                "trail_points",
+                "trail_offset",
+            ):
                 value = _optional(arguments.get(field))
                 if value is not None:
                     payload[field] = _decimal(value, field)
@@ -341,12 +387,18 @@ class DelegatedStrategyIntentHandler:
                 payload.update(schema_version="2.4.0", price_pair_policy="first_trigger")
             trailing = set(payload).intersection({"trail_price", "trail_points", "trail_offset"})
             if trailing:
-                if "trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"}):
+                if "trail_offset" not in trailing or not trailing.intersection(
+                    {"trail_price", "trail_points"}
+                ):
                     raise ValueError("trailing exit requires active trail_offset and activation")
                 if Decimal(payload["trail_offset"]) < 0:
                     raise ValueError("trail_offset must be nonnegative")
-                payload.update(schema_version="2.5.0", price_pair_policy=(
-                    "first_trigger" if self.pine_version == 6 else "absolute_first"))
+                payload.update(
+                    schema_version="2.5.0",
+                    price_pair_policy=(
+                        "first_trigger" if self.pine_version == 6 else "absolute_first"
+                    ),
+                )
 
         elif kind in {"close", "close_all"}:
             immediate = _optional(arguments.get("immediately"))
@@ -371,13 +423,19 @@ class DelegatedStrategyIntentHandler:
                 raise ValueError("strategy intent disable_alert must be a bool")
             payload["disable_alert"] = arguments["disable_alert"]
         if kind == "exit":
-            metadata = {name: _optional_string(arguments[name], name)
-                        for name in EXIT_METADATA_FIELDS
-                        if _optional(arguments.get(name)) is not None}
+            metadata = {
+                name: _optional_string(arguments[name], name)
+                for name in EXIT_METADATA_FIELDS
+                if _optional(arguments.get(name)) is not None
+            }
             if metadata:
-                payload.update(schema_version="2.6.0",
-                               price_pair_policy="first_trigger" if self.pine_version == 6 else "absolute_first",
-                               **metadata)
+                payload.update(
+                    schema_version="2.6.0",
+                    price_pair_policy="first_trigger"
+                    if self.pine_version == 6
+                    else "absolute_first",
+                    **metadata,
+                )
         return MappingProxyType(
             {
                 "draft_schema_id": DRAFT_SCHEMA_ID,

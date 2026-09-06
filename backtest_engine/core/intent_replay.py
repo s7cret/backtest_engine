@@ -334,7 +334,7 @@ def decimal_to_engine_number(value: object, *, field: str, ctx: Any) -> float | 
         }[mode]
         number = (number / step).to_integral_value(rounding=rounding) * step
     result = float(number)
-    if not math.isfinite(result):
+    if not math.isfinite(result) or (number != 0 and result == 0):
         raise IntentDecimalConversionError(f"intent {field} is outside engine float range")
     return result
 
