@@ -114,7 +114,7 @@ _COMMANDS = (
     ),
     StrategyCommandSpec("strategy.cancel", ("id",), ("id",)),
     StrategyCommandSpec("strategy.cancel_all", (), ()),
-    # The broker admits exits for open trades and pending market entries.
+    # The broker admits exits for open trades and pending price/market entries.
     # A concrete entry ID is required; trailing/per-leg metadata remain unsupported.
     StrategyCommandSpec(
         "strategy.exit",

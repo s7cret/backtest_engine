@@ -59,45 +59,48 @@ def process_bar_fills(
         engine.orders = [
             order for order in engine.orders if order.status in ("pending", "active")
         ]
+    from backtest_engine.core.price_events import next_price_event
+
     recalc = 0
     path = engine._price_path(bar)
-    path_cursor = 0
-    while True:
-        filled = False
-        restart_after_recalc = False
-        for path_index, (price, point) in enumerate(
-            path[path_cursor:], start=path_cursor
-        ):
-            path_is_open = point == "open" or point.endswith(".open")
-            if open_only and not path_is_open:
-                continue
-            if skip_open and path_is_open:
-                continue
-            restart_after_recalc, recalc, filled = _scan_orders_at_path_point(
-                engine,
-                strategy,
-                ctx,
-                bar,
-                bar_index,
-                price,
-                point,
-                path_is_open,
-                path_index,
-                recalc,
-                filled,
-                close_activation_only,
-                skip_trailing,
-                trailing_only,
-                tick_phase,
-            )
-            if restart_after_recalc:
-                path_cursor = path_index
-                break
-        if restart_after_recalc and path_cursor < len(path):
+    previous_price = None
+    for path_index, (destination, destination_point) in enumerate(path):
+        is_open = destination_point == "open" or destination_point.endswith(".open")
+        chart_open = is_open and path_index == 0
+        if ((open_only and not chart_open) or (skip_open and chart_open)
+                or (close_activation_only and path_index != len(path) - 1)):
+            previous_price = destination
             continue
-        if not (engine.config.calc_on_order_fills and filled):
-            break
-        break
+        # A gap between bars (also magnifier bars) has no intermediate prices.
+        # Observed ticks and close-only executions must not invent a price path.
+        interpolate = (previous_price is not None and not is_open and not open_only
+                       and not close_activation_only and tick_phase is None
+                       and not getattr(engine, "_realtime_tick_execution", False))
+        cursor = previous_price if interpolate else destination
+        while True:
+            price = (next_price_event(engine, cursor, destination, bar_index)
+                     if interpolate else destination)
+            at_endpoint = price == destination
+            point = destination_point if at_endpoint else destination_point + ".cross"
+            activation_ids: set[int] = set()
+            while True:
+                known_orders = {id(order) for order in engine.orders if order.status == "active"}
+                restart, recalc, _ = _scan_orders_at_path_point(
+                    engine, strategy, ctx, bar, bar_index, price, point,
+                    is_open and at_endpoint, path_index, recalc, False,
+                    close_activation_only, skip_trailing or not at_endpoint,
+                    trailing_only, tick_phase, activation_ids,
+                )
+                if not restart:
+                    break
+                # A newly attached/created marketable price order starts here,
+                # not at an earlier price on the segment. It can get improvement.
+                activation_ids.update(id(order) for order in engine.orders
+                                      if id(order) not in known_orders)
+            cursor = price
+            if at_endpoint:
+                break
+        previous_price = destination
 
 
 def _scan_orders_at_path_point(
@@ -116,6 +119,7 @@ def _scan_orders_at_path_point(
     skip_trailing: bool,
     trailing_only: bool,
     tick_phase: Literal["non_final", "final"] | None,
+    activation_ids: set[int] | None = None,
 ) -> tuple[bool, int, bool]:
     for order in _orders_for_path_point(engine, price, bar, path_is_open):
         is_trailing = (
@@ -154,7 +158,7 @@ def _scan_orders_at_path_point(
             bar_index,
             price,
             point,
-            path_is_open,
+            path_is_open or (activation_ids is not None and id(order) in activation_ids),
         )
         if fill_price is None:
             continue
@@ -261,6 +265,7 @@ def _fill_price_for_order(
     if order.order_type == "stop" and stop_reached(order, price):
         return _stop_fill_price(engine, order, price, is_open_point, bar_index)
     if order.order_type == "stop_limit":
+        newly_activated = not order.stop_limit_activated
         if not order.stop_limit_activated and stop_reached(order, price):
             order.stop_limit_activated = True
             engine._event(
@@ -281,7 +286,7 @@ def _fill_price_for_order(
             )
         ):
             return None
-        return engine._limit_fill_price(order, price, is_open_point)
+        return engine._limit_fill_price(order, price, is_open_point or newly_activated)
     return None
 
 

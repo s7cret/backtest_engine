@@ -142,16 +142,21 @@ def test_changed_entry_id_does_not_keep_previous_waiting_exit():
 
 
 @pytest.mark.parametrize("price_args", [{"limit": 99}, {"stop": 101}, {"limit": 99, "stop": 101}])
-def test_price_entry_activation_is_explicitly_not_claimed(price_args):
+def test_price_entry_activation_waits_for_a_forward_fill(price_args):
     def commands(ctx, i):
         if i == 0:
             ctx.entry("L", "long", **price_args)
             ctx.exit("X", "L", limit=105)
 
-    from backtest_engine.errors import StrategyRuntimeError
-
-    with pytest.raises(StrategyRuntimeError, match="continuous fill activation"):
-        run(commands, candles((100, 101, 99, 100), (100, 106, 98, 100)))
+    engine, result = run(commands, candles((100, 101, 99, 100), (100, 106, 98, 100)))
+    assert result.status == "completed", result.errors
+    if len(price_args) == 2:
+        # The low/limit touch precedes stop activation; no backward fill.
+        assert not result.closed_trades and not result.open_trades
+        assert engine.orders[0].stop_limit_activated
+    else:
+        assert [(t.entry_price, t.exit_price) for t in result.closed_trades] == [
+            (99 if "limit" in price_args else 101, 105)]
 
 
 def test_deferred_instructions_survive_broker_snapshot_without_aliasing():

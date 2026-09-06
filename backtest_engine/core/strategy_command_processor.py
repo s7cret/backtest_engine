@@ -189,7 +189,7 @@ def _apply_exit_command(
 
     waiting = defer_exit(engine, payload, bar, bar_index) if register_pending else False
     if waiting and not engine._matching_open_trades(payload.from_entry):
-        # A submitted market entry activates its captured instruction later.
+        # A submitted entry activates its captured instruction only on its fill.
         return
     if engine.position.direction == "flat":
         engine._diag(

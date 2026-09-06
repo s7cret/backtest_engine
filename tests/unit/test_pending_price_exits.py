@@ -1,0 +1,308 @@
+"""Causal price-entry brackets on synthetic, explicitly specified OHLC paths.
+
+These are deterministic specification examples, not recorded TradingView output.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from tests.unit.test_deferred_market_exits import candles, run
+
+
+def mirrored(rows, direction):
+    return (
+        rows
+        if direction == "long"
+        else [
+            (200 - opened, 200 - low, 200 - high, 200 - closed)
+            for opened, high, low, closed in rows
+        ]
+    )
+
+
+def price(value, direction):
+    return value if direction == "long" else 200 - value
+
+
+@pytest.mark.parametrize("direction", ["long", "short"])
+@pytest.mark.parametrize("entry_kind", ["limit", "stop", "stop_limit"])
+@pytest.mark.parametrize("recalc", [False, True])
+@pytest.mark.parametrize("on_close", [False, True])
+def test_relative_bracket_activates_at_actual_price_entry(direction, entry_kind, recalc, on_close):
+    # LIMIT: enter on the descending leg and stop before that leg ends.
+    # STOP: enter on the ascending leg and profit before that leg ends.
+    # STOP_LIMIT: first see its limit while dormant, activate at the high,
+    # then enter on the later decline and stop before that decline ends.
+    settings = {
+        "limit": {"limit": 99},
+        "stop": {"stop": 101},
+        "stop_limit": {"stop": 101, "limit": 99},
+    }[entry_kind]
+    rows = (
+        [(100, 101, 99, 100), (100, 104, 95, 96)]
+        if entry_kind == "stop_limit"
+        else [(100, 101, 99, 100), (100, 103, 97, 100)]
+    )
+    expected = (99, 98, "X:S") if entry_kind in {"limit", "stop_limit"} else (101, 102, "X:L")
+
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry(
+                "L", direction, qty=2, **{key: price(v, direction) for key, v in settings.items()}
+            )
+            ctx.exit("X", "L", profit=1, loss=1)
+
+    engine, result = run(
+        commands,
+        candles(*mirrored(rows, direction)),
+        calc_on_order_fills=recalc,
+        process_orders_on_close=on_close,
+    )
+    assert result.status == "completed", result.errors
+    assert [
+        (t.entry_price, t.exit_price, t.qty, t.entry_bar_index, t.exit_bar_index)
+        for t in result.closed_trades
+    ] == [(price(expected[0], direction), price(expected[1], direction), 2, 1, 1)]
+    assert [f.order_id for f in engine.fills] == ["L", expected[2]]
+    assert not result.open_trades
+
+
+@pytest.mark.parametrize("direction", ["long", "short"])
+@pytest.mark.parametrize("recalc", [False, True])
+def test_earlier_low_cannot_stop_later_entry_even_after_close_callback(direction, recalc):
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry("L", direction, qty=1, stop=price(103, direction))
+            ctx.exit("X", "L", stop=price(99, direction), limit=price(110, direction))
+
+    rows = [
+        (100, 101, 99, 100),
+        (100, 106, 98, 102),
+    ]  # low first, stop 99 existed only after entry 103
+    engine, result = run(commands, candles(*mirrored(rows, direction)), calc_on_order_fills=recalc)
+    assert not result.closed_trades
+    assert [(t.entry_price, t.qty) for t in result.open_trades] == [(price(103, direction), 1)]
+    assert [f.order_id for f in engine.fills] == ["L"]
+
+
+@pytest.mark.parametrize("direction", ["long", "short"])
+@pytest.mark.parametrize("recalc", [False, True])
+def test_stop_limit_does_not_use_limit_touch_before_stop_activation(direction, recalc):
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry(
+                "L", direction, qty=1, stop=price(102, direction), limit=price(101, direction)
+            )
+            ctx.exit("X", "L", profit=3, loss=4)
+
+    rows = [(100, 101, 99, 100), (100, 104, 97, 103), (103, 105, 100, 104)]
+    engine, result = run(commands, candles(*mirrored(rows, direction)), calc_on_order_fills=recalc)
+    assert [
+        (t.entry_bar_index, t.entry_price, t.exit_bar_index, t.exit_price)
+        for t in result.closed_trades
+    ] == [(2, price(101, direction), 2, price(104, direction))]
+    assert sum(e.code == "STOP_LIMIT_ACTIVATED" for e in result.events) == 1
+    assert [f.order_id for f in engine.fills] == ["L", "X:L"]
+
+
+@pytest.mark.parametrize("direction", ["long", "short"])
+@pytest.mark.parametrize("recalc", [False, True])
+def test_marketable_stop_limit_is_filled_at_activation_not_worse_limit(direction, recalc):
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry(
+                "L", direction, qty=1, stop=price(102, direction), limit=price(104, direction)
+            )
+            ctx.exit("X", "L", profit=1, loss=5)
+
+    engine, result = run(
+        commands,
+        candles(*mirrored([(100, 101, 99, 100), (100, 105, 99, 103)], direction)),
+        calc_on_order_fills=recalc,
+    )
+    assert [(t.entry_price, t.exit_price) for t in result.closed_trades] == [
+        (price(102, direction), price(103, direction))
+    ]
+
+
+@pytest.mark.parametrize("direction", ["long", "short"])
+@pytest.mark.parametrize("leg", ["limit", "stop"])
+def test_already_marketable_absolute_bracket_uses_current_activation_price(direction, leg):
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry("L", direction, qty=1, stop=price(103, direction))
+            # At entry 103 both these alternative exits are already marketable.
+            ctx.exit("X", "L", **{leg: price(102 if leg == "limit" else 104, direction)})
+
+    engine, result = run(
+        commands, candles(*mirrored([(100, 101, 99, 100), (100, 106, 99, 105)], direction))
+    )
+    assert [(t.entry_price, t.exit_price) for t in result.closed_trades] == [
+        (price(103, direction), price(103, direction))
+    ]
+
+
+@pytest.mark.parametrize("direction", ["long", "short"])
+def test_oca_winner_is_nearest_price_not_first_created_order(direction):
+    def commands(ctx, i):
+        if i == 0:
+            for name, level in [("far", 104), ("near", 102)]:
+                ctx.order(
+                    name,
+                    direction,
+                    qty=1,
+                    stop=price(level, direction),
+                    oca_name="g",
+                    oca_type="cancel",
+                )
+                ctx.exit("exit-" + name, name, profit=1, loss=5)
+
+    engine, result = run(
+        commands, candles(*mirrored([(100, 101, 99, 100), (100, 106, 99, 105)], direction))
+    )
+    assert [(t.entry_id, t.entry_price, t.exit_price) for t in result.closed_trades] == [
+        ("near", price(102, direction), price(103, direction))
+    ]
+    assert next(o for o in engine.orders if o.id == "far").status == "cancelled"
+
+
+@pytest.mark.parametrize("entry_kind", ["limit", "stop", "stop_limit"])
+@pytest.mark.parametrize("cancel", ["exit", "entry", "all"])
+def test_cancellation_never_resurrects_pending_price_bracket(entry_kind, cancel):
+    settings = {
+        "limit": {"limit": 99},
+        "stop": {"stop": 101},
+        "stop_limit": {"stop": 101, "limit": 99},
+    }[entry_kind]
+
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry("L", "long", qty=1, **settings)
+            ctx.exit("X", "L", profit=1, loss=1)
+            if cancel == "all":
+                ctx.cancel_all()
+            else:
+                ctx.cancel("X" if cancel == "exit" else "L")
+        if i == 2 and cancel != "exit":
+            ctx.entry("L", "long", qty=1, **settings)
+
+    rows = [(100, 101, 99, 100), (100, 104, 95, 98), (100, 101, 99, 100), (100, 104, 95, 98)]
+    engine, result = run(commands, candles(*rows))
+    assert result.status == "completed", result.errors
+    assert len(result.open_trades) == 1 and not result.closed_trades
+    assert not any(o.kind == "exit" for o in engine.orders)
+
+
+def test_later_exit_update_changes_pending_payload_without_early_execution():
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry("L", "long", qty=4, stop=110)
+            ctx.exit("X", "L", profit=1, loss=2)
+        if i == 1:
+            ctx.exit("X", "L", profit=3, qty=1)
+
+    engine, result = run(
+        commands, candles((100, 101, 99, 100), (100, 105, 99, 104), (104, 115, 103, 114))
+    )
+    assert [(t.entry_price, t.exit_price, t.qty) for t in result.closed_trades] == [(110, 113, 1)]
+    assert result.open_trades[0].qty == 3
+    assert not any(o.id == "X:S" for o in engine.orders)
+
+
+def test_limit_penetration_uses_trigger_threshold_but_actual_limit_fill_price():
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry("L", "long", qty=1, limit=99)
+            ctx.exit("X", "L", profit=5, loss=5)
+
+    engine, result = run(
+        commands,
+        candles((100, 101, 99, 100), (100, 105, 98, 100), (100, 107, 96, 103)),
+        backtest_fill_limits_assumption_ticks=2,
+    )
+    assert [(t.entry_bar_index, t.entry_price, t.exit_price) for t in result.closed_trades] == [
+        (2, 99, 104)
+    ]
+    assert [f.order_id for f in engine.fills] == ["L", "X:L"]
+
+
+def test_open_gap_is_not_interpolated_into_unobserved_prices():
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry("L", "long", qty=1, stop=103)
+            ctx.exit("X", "L", profit=2, loss=3)
+
+    engine, result = run(commands, candles((100, 101, 99, 100), (110, 113, 109, 111)))
+    assert [(t.entry_price, t.exit_price) for t in result.closed_trades] == [(110, 112)]
+    assert engine.fills[0].intrabar_point == "open"
+
+
+def test_close_only_does_not_invent_intrabar_crossings():
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry("L", "long", qty=1, stop=103)
+            ctx.exit("X", "L", profit=1)
+
+    _, result = run(
+        commands, candles((100, 101, 99, 100), (100, 106, 95, 102)), fill_model="close_only"
+    )
+    assert not result.open_trades and not result.closed_trades
+
+
+@pytest.mark.parametrize("direction", ["long", "short"])
+def test_magnifier_keeps_subbar_opens_in_order_and_gaps_discrete(direction):
+    from dataclasses import replace
+
+    parent_ohlc = [(100, 101, 99, 100), (100, 113, 99, 111)]
+    parents = candles(*mirrored(parent_ohlc, direction))
+    lower_ohlc = [(100, 104, 99, 104), (110, 113, 109, 111)]
+    lower = []
+    for i, ohlc in enumerate(mirrored(lower_ohlc, direction)):
+        lower.append(
+            replace(candles(ohlc)[0], time=60_000 + i * 30_000, time_close=89_999 + i * 30_000)
+        )
+    first = replace(parents[0], time_close=59_999)
+
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry("L", direction, qty=1, stop=price(103, direction))
+            ctx.exit("X", "L", profit=2, loss=5)
+
+    engine, result = run(
+        commands,
+        parents,
+        use_bar_magnifier=True,
+        bar_magnifier_lower_tf="30s",
+        bar_magnifier_bars={0: [first], 60_000: lower},
+    )
+    # Entry happens in the first subbar, then the second subbar gaps over TP.
+    assert [(t.entry_price, t.exit_price) for t in result.closed_trades] == [
+        (price(103, direction), price(110, direction))
+    ]
+    assert engine.fills[1].intrabar_point == "lower[1].open"
+
+
+def test_magnifier_closing_order_uses_chart_final_close_not_earlier_subbar_close():
+    from dataclasses import replace
+
+    parents = candles((100, 112, 99, 110))
+    lower = [
+        replace(candles((100, 101, 99, 100))[0], time_close=29_999),
+        replace(candles((100, 112, 100, 110))[0], time=30_000, time_close=59_999),
+    ]
+
+    def commands(ctx, i):
+        if i == 0:
+            ctx.entry("L", "long", qty=1)
+
+    engine, result = run(
+        commands,
+        parents,
+        process_orders_on_close=True,
+        use_bar_magnifier=True,
+        bar_magnifier_lower_tf="30s",
+        bar_magnifier_bars={0: lower},
+    )
+    assert [t.entry_price for t in result.open_trades] == [110]
+    assert engine.fills[0].intrabar_point == "lower[1].close"

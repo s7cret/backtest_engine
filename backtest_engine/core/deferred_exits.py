@@ -1,9 +1,9 @@
-"""Explicit exits waiting for an already-created market entry.
+"""Explicit exits waiting for an already-created entry.
 
 Templates belong to the entry order instance: cancellation/replacement cannot
 attach them to a later unrelated order which happens to reuse the same ID.
-Only market-entry deferral is admitted until continuous price-segment activation
-is implemented for limit/stop entries. This is not all-entry exit persistence.
+Activation follows the actual parent fill on the historical price path, including
+limit/stop/stop-limit entries. This is not all-entry exit persistence.
 """
 
 from __future__ import annotations
@@ -37,11 +37,6 @@ def defer_exit(engine: Any, payload: ExitPayload, bar: Bar, bar_index: int) -> b
         and not order.reduce_only
         and order.status in {"active", "pending"}
     ]
-    if any(order.order_type != "market" for order in entries):
-        raise StrategyRuntimeError(
-            "deferred strategy.exit for price-based entries requires continuous fill activation; "
-            "only pending market entries are supported"
-        )
     # Redefining the same public exit ID replaces its previous pending binding.
     remove_deferred_exits(engine, payload.id)
     for entry in entries:

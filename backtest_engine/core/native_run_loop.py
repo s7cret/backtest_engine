@@ -228,20 +228,12 @@ def run_native_strategy(
         engine._call_strategy(strategy, bar, i)
         if allow_broker:
             engine._flush(ctx, bar, i)
-            if (
-                engine.config.process_orders_on_close
-                or engine.config.calc_on_order_fills
-            ):
-                engine._process_bar_fills(strategy, ctx, bar, i, skip_open=True)
-            else:
-                engine._process_bar_fills(
-                    strategy,
-                    ctx,
-                    bar,
-                    i,
-                    skip_open=True,
-                    close_activation_only=True,
-                )
+            # The historical OHLC path was consumed before the close callback.
+            # Only closing-tick eligible orders may execute now; do not replay
+            # an earlier high/low for a bracket attached halfway through the bar.
+            engine._process_bar_fills(
+                strategy, ctx, bar, i, skip_open=True, close_activation_only=True,
+            )
         elif decision is not None and not decision.broker_execution_allowed:
             discard_command_buffer(engine, ctx, i, bar.time)
         stamp_phase(engine, getattr(engine, "_current_phase", None))
