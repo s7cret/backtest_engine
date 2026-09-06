@@ -197,7 +197,8 @@ def _apply_exit_command(
     if register_pending and payload.from_entry is not None:
         engine._all_entry_exits.pop(payload.id, None)
     waiting = defer_exit(engine, payload, bar, bar_index) if register_pending else False
-    if target_trade is None and (payload.from_entry is None or payload.profit is not None or payload.loss is not None):
+    if target_trade is None and (payload.from_entry is None or payload.profit is not None or payload.loss is not None or any(
+        v is not None for v in (payload.trail_price, payload.trail_points, payload.trail_offset))):
         apply_scoped_exit(engine, payload, bar, bar_index, recalc_after_fill, limit, stop)
         return
     if waiting and not engine._matching_open_trades(payload.from_entry):
@@ -270,11 +271,13 @@ def _apply_exit_command(
         limit=limit, stop=stop, profit=payload.profit, loss=payload.loss,
         policy=payload.price_pair_policy,
     )
-    has_trail = (
-        payload.trail_price is not None
-        or payload.trail_points is not None
-        or payload.trail_offset is not None
+    from backtest_engine.core.exit_prices import resolve_trailing_prices
+    trailing = resolve_trailing_prices(
+        direction=direction, entry_price=base, mintick=tick,
+        trail_price=payload.trail_price, trail_points=payload.trail_points,
+        trail_offset=payload.trail_offset, policy=payload.price_pair_policy,
     )
+    has_trail = trailing is not None
     if limit is None and stop is None and not has_trail:
         engine._diag(
             "ORDER_REJECTED_EMPTY_EXIT",
@@ -344,24 +347,11 @@ def _apply_exit_command(
             bar,
             bar_index,
         )
-    if has_trail:
-        points = payload.trail_points
-        activation = payload.trail_price
-        tick = getattr(engine, "_effective_mintick", 1.0) or 1.0
-        points_price = float(points) * tick if points is not None else None
-        if activation is None and points_price is not None:
-            activation = (
-                base + points_price if direction == "long" else base - points_price
-            )
-        offset = (
-            float(
-                payload.trail_offset
-                if payload.trail_offset is not None
-                else (points if points is not None else 0.0)
-            )
-            * tick
-        )
-        engine._add_order(
+    if trailing is not None:
+        activation, offset = trailing
+        points_price = None  # Already resolved at this specific entry fill.
+        _add_or_modify_exit_order(
+            engine,
             Order(
                 id=prefix + ":T",
                 kind="exit",
@@ -447,6 +437,21 @@ def _add_or_modify_exit_order(
         return
     if not engine._risk_allows_order(new, bar, bar_index, existing):
         return
+    was_trailing = existing.trail_offset is not None
+    is_trailing = new.trail_offset is not None
+    if was_trailing and is_trailing:
+        new.trail_activated = existing.trail_activated
+        new.trail_best_price = existing.trail_best_price
+        if new.trail_best_price is None and existing.stop_price is not None:
+            new.trail_best_price = (existing.stop_price + existing.trail_offset
+                                   if existing.direction == "long"
+                                   else existing.stop_price - existing.trail_offset)
+        if new.trail_activated and new.trail_best_price is not None:
+            new.stop_price = (new.trail_best_price - new.trail_offset
+                              if new.direction == "long"
+                              else new.trail_best_price + new.trail_offset)
+    existing.trail_activated = new.trail_activated
+    existing.trail_best_price = new.trail_best_price
     existing.qty = new.qty
     existing.reserved_qty = new.reserved_qty
     existing.limit_price = new.limit_price

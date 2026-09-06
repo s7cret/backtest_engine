@@ -11,7 +11,7 @@ from typing import Any
 
 
 def next_price_event(engine: Any, start: float, end: float, bar_index: int) -> float:
-    """Choose the nearest strictly-forward plain-order trigger, or the endpoint."""
+    """Choose the nearest strictly-forward order or trail-activation trigger, or the endpoint."""
     if start == end:
         return end
     ascending = end > start
@@ -21,11 +21,6 @@ def next_price_event(engine: Any, start: float, end: float, bar_index: int) -> f
             continue
         if engine.config.process_orders_on_close and order.created_bar_index == bar_index:
             continue  # Closing-tick orders cannot see earlier path crossings.
-        if any(
-            value is not None
-            for value in (order.trail_price, order.trail_points, order.trail_offset)
-        ):
-            continue  # Trailing evolution remains owned by the existing scanner.
         if (
             order.kind == "exit"
             and order.from_entry is not None
@@ -39,7 +34,15 @@ def next_price_event(engine: Any, start: float, end: float, bar_index: int) -> f
             order.order_type == "stop_limit" and not order.stop_limit_activated
         )
         trigger = None
-        if is_limit and order.limit_price is not None:
+        trailing = any(v is not None for v in
+                       (order.trail_price, order.trail_points, order.trail_offset))
+        if trailing and not order.trail_activated:
+            # Activation, not a fill. The scanner evolves the trail at this exact
+            # point before asking for the next strictly-forward boundary.
+            trigger = order.trail_price
+            if ascending != (order.direction == "long"):
+                continue
+        elif is_limit and order.limit_price is not None:
             # Verification penetration changes the trigger, not the execution price.
             penetration = (
                 engine.config.mintick or 0.0

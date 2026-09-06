@@ -33,6 +33,7 @@ class Order:
     trail_points: float | None = None
     trail_offset: float | None = None
     trail_activated: bool = False
+    trail_best_price: float | None = None
     qty_is_default: bool = False
     phase: str | None = None
     # Plain data survives broker deepcopy/checkpoint and JSON result export.

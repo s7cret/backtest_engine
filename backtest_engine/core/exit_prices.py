@@ -64,3 +64,29 @@ def resolve_exit_prices(
         return min(absolute, relative) if lower_first else max(absolute, relative)
 
     return choose(limit, profit, "profit"), choose(stop, loss, "loss")
+
+
+def resolve_trailing_prices(
+    *, direction: str, entry_price: float, mintick: float,
+    trail_price: float | None, trail_points: float | None,
+    trail_offset: float | None, policy: str = "absolute_first",
+) -> tuple[float, float] | None:
+    """Resolve activation and offset at one real fill; no guessed missing offset."""
+    absolute = _optional_number(trail_price, "trail_price")
+    points = _optional_number(trail_points, "trail_points")
+    offset = _optional_number(trail_offset, "trail_offset")
+    if absolute is None and points is None and offset is None:
+        return None
+    if offset is None or (absolute is None and points is None):
+        raise ValueError("trailing exit requires trail_offset and an activation level")
+    if offset < 0:
+        raise ValueError("trail_offset must be nonnegative")
+    activation, _ = resolve_exit_prices(
+        direction=direction, entry_price=entry_price, mintick=mintick,
+        limit=absolute, profit=points, stop=None, loss=None, policy=policy,
+    )
+    distance = offset * mintick
+    if not math.isfinite(distance) or (offset != 0 and distance == 0):
+        raise ValueError("trail_offset is outside the finite runtime range")
+    assert activation is not None
+    return activation, distance

@@ -18,26 +18,20 @@ def update_trailing_order(order: Order, price: float) -> None:
     ):
         return
     offset = float(order.trail_offset or 0.0)
-    if order.direction == "long":
-        if not order.trail_activated and (
-            order.trail_price is None or price >= order.trail_price
+    favorable = order.direction == "long"
+    if not order.trail_activated:
+        if order.trail_price is not None and (
+            price < order.trail_price if favorable else price > order.trail_price
         ):
-            order.trail_activated = True
-        if order.trail_activated:
-            order.stop_price = max(
-                order.stop_price if order.stop_price is not None else float("-inf"),
-                price - offset,
-            )
-    else:
-        if not order.trail_activated and (
-            order.trail_price is None or price <= order.trail_price
-        ):
-            order.trail_activated = True
-        if order.trail_activated:
-            order.stop_price = min(
-                order.stop_price if order.stop_price is not None else float("inf"),
-                price + offset,
-            )
+            return
+        order.trail_activated = True
+    best = order.trail_best_price
+    # Old broker checkpoints did not store best-price explicitly.
+    if best is None and order.stop_price is not None:
+        best = order.stop_price + offset if favorable else order.stop_price - offset
+    best = price if best is None else (max(best, price) if favorable else min(best, price))
+    order.trail_best_price = best
+    order.stop_price = best - offset if favorable else best + offset
 
 
 def process_bar_fills(
@@ -88,7 +82,7 @@ def process_bar_fills(
                 restart, recalc, _ = _scan_orders_at_path_point(
                     engine, strategy, ctx, bar, bar_index, price, point,
                     is_open and at_endpoint, path_index, recalc, False,
-                    close_activation_only, skip_trailing or not at_endpoint,
+                    close_activation_only, skip_trailing,
                     trailing_only, tick_phase, activation_ids,
                 )
                 if not restart:
@@ -163,6 +157,7 @@ def _scan_orders_at_path_point(
         if fill_price is None:
             continue
         had_deferred_exits = bool(order.pending_exits)
+        order_count = len(engine.orders)
         engine._fill(order, bar, bar_index, fill_price, point)
         if order.status != "filled":
             continue
@@ -177,7 +172,10 @@ def _scan_orders_at_path_point(
                 engine, strategy, ctx, bar, bar_index, fill_price, recalc
             )
             return True, recalc, filled
-        if had_deferred_exits:
+        if had_deferred_exits or any(
+            child.status == "active" for child in engine.orders[order_count:]
+        ):
+            # Persistent all-entry policies also attach new brackets here.
             # Their commands predate this entry fill. Newly materialized brackets
             # must be considered at this same price point, even when script fill
             # recalculation is disabled (e.g. entry opens beyond an absolute TP).

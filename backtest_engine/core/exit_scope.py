@@ -146,7 +146,8 @@ def activate_persistent_exits(engine: Any, entry: Order, bar: Bar, bar_index: in
 
 def reconcile_exit_scope(engine: Any, payload: ExitPayload, bar: Bar, bar_index: int) -> None:
     """A replacement public ID cannot leave an obsolete target or price leg live."""
-    scoped = payload.from_entry is None or payload.profit is not None or payload.loss is not None
+    scoped = payload.from_entry is None or payload.profit is not None or payload.loss is not None or any(
+        v is not None for v in (payload.trail_price, payload.trail_points, payload.trail_offset))
     for order in engine.orders:
         if (
             order.kind != "exit"

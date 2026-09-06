@@ -35,6 +35,19 @@ class ExitPayload:
     def __post_init__(self) -> None:
         if self.price_pair_policy not in ("absolute_first", "first_trigger"):
             raise ValueError("invalid exit price_pair_policy")
+        from backtest_engine.core.exit_prices import _optional_number
+        names = ("trail_price", "trail_points", "trail_offset")
+        values = {name: _optional_number(getattr(self, name), name) for name in names}
+        for name, value in values.items():
+            object.__setattr__(self, name, value)
+        if any(value is not None for value in values.values()):
+            if values["trail_offset"] is None or (
+                values["trail_price"] is None and values["trail_points"] is None
+            ):
+                raise ValueError("trailing exit requires trail_offset and an activation level")
+            if values["trail_offset"] < 0:
+                raise ValueError("trail_offset must be nonnegative")
+
 
 
 @dataclass(frozen=True, slots=True)
