@@ -1,0 +1,255 @@
+diff --git a/backtest_engine/core/delegated_strategy_intents.py b/backtest_engine/core/delegated_strategy_intents.py
+index c31e4a8cb17b2ea7355e222e4fb338fa57e118fc..e8d0967f556ccd1a09bae114d5f558e83085ee7c 100644
+--- a/backtest_engine/core/delegated_strategy_intents.py
++++ b/backtest_engine/core/delegated_strategy_intents.py
+@@ -248,9 +248,15 @@ class DelegatedStrategyIntentHandler:
+             raise ValueError("strategy intent when must be a bool or historical numeric/na")
+         if not when:
+             return MappingProxyType({"draft_schema_id": DRAFT_SCHEMA_ID, "payload": None})
+-        kind = spec.name.removeprefix("strategy.")
++        kind = (
++            "risk"
++            if spec.name.startswith("strategy.risk.")
++            else spec.name.removeprefix("strategy.")
++        )
+         if kind == "exit":
+-            validate_exit_shape({key for key, value in arguments.items() if _optional(value) is not None})
++            validate_exit_shape(
++                {key for key, value in arguments.items() if _optional(value) is not None}
++            )
+         bar_time = self.bar_open_time_utc_ms.get(invocation.bar_index)
+         if bar_time is None:
+             raise ValueError("delegated strategy bar identity is unavailable")
+@@ -258,8 +264,11 @@ class DelegatedStrategyIntentHandler:
+         if kind == "close":
+             command_id = "close:" + command_id
+         if kind == "exit":
+-            entry_id = (None if arguments.get("from_entry", "") == "" else
+-                        _nonempty_string(arguments["from_entry"], "from_entry"))
++            entry_id = (
++                None
++                if arguments.get("from_entry", "") == ""
++                else _nonempty_string(arguments["from_entry"], "from_entry")
++            )
+             # Entry/exit commands in one callback are committed together. The
+             # broker owns binding to open trades or already-created market orders;
+             # a pre-callback position snapshot cannot decide whether an exit is valid.
+@@ -295,7 +304,34 @@ class DelegatedStrategyIntentHandler:
+             "source_span": MappingProxyType(_source_span(invocation)),
+             "idempotency_key": f"intent-delivery:{invocation.invocation_id}",
+         }
+-        if kind in {"entry", "order"}:
++        if kind == "risk":
++            rule = spec.name.removeprefix("strategy.risk.")
++            if rule == "allow_entry_in":
++                direction = arguments["value"]
++                if type(direction) is not str or direction not in {
++                    "strategy.direction.long",
++                    "strategy.direction.short",
++                    "strategy.direction.all",
++                }:
++                    raise ValueError("risk direction requires a strategy.direction constant")
++                value, unit = "0", direction.removeprefix("strategy.direction.")
++            else:
++                from backtest_engine.core.risk_rules import validate_position_limit
++
++                validate_position_limit(arguments["contracts"])
++                value, unit = _decimal(arguments["contracts"], "contracts"), "fixed"
++                number = Decimal(value)
++                validate_position_limit(float(number))
++                if number != 0 and float(number) == 0:
++                    raise ValueError("risk limit is outside the runtime range")
++            payload.update(
++                command_id=spec.name,
++                risk_rule=rule,
++                risk_value=value,
++                risk_unit=unit,
++                risk_scope="strategy",
++            )
++        elif kind in {"entry", "order"}:
+             payload.update(
+                 {
+                     "order_id": command_id,
+@@ -330,7 +366,17 @@ class DelegatedStrategyIntentHandler:
+                 payload.update(schema_version="2.3.0", exit_scope="all_entries")
+             else:
+                 payload["from_entry"] = entry_id
+-            for field in ("qty", "qty_percent", "profit", "limit", "loss", "stop", "trail_price", "trail_points", "trail_offset"):
++            for field in (
++                "qty",
++                "qty_percent",
++                "profit",
++                "limit",
++                "loss",
++                "stop",
++                "trail_price",
++                "trail_points",
++                "trail_offset",
++            ):
+                 value = _optional(arguments.get(field))
+                 if value is not None:
+                     payload[field] = _decimal(value, field)
+@@ -341,12 +387,18 @@ class DelegatedStrategyIntentHandler:
+                 payload.update(schema_version="2.4.0", price_pair_policy="first_trigger")
+             trailing = set(payload).intersection({"trail_price", "trail_points", "trail_offset"})
+             if trailing:
+-                if "trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"}):
++                if "trail_offset" not in trailing or not trailing.intersection(
++                    {"trail_price", "trail_points"}
++                ):
+                     raise ValueError("trailing exit requires active trail_offset and activation")
+                 if Decimal(payload["trail_offset"]) < 0:
+                     raise ValueError("trail_offset must be nonnegative")
+-                payload.update(schema_version="2.5.0", price_pair_policy=(
+-                    "first_trigger" if self.pine_version == 6 else "absolute_first"))
++                payload.update(
++                    schema_version="2.5.0",
++                    price_pair_policy=(
++                        "first_trigger" if self.pine_version == 6 else "absolute_first"
++                    ),
++                )
+ 
+         elif kind in {"close", "close_all"}:
+             immediate = _optional(arguments.get("immediately"))
+@@ -371,13 +423,19 @@ class DelegatedStrategyIntentHandler:
+                 raise ValueError("strategy intent disable_alert must be a bool")
+             payload["disable_alert"] = arguments["disable_alert"]
+         if kind == "exit":
+-            metadata = {name: _optional_string(arguments[name], name)
+-                        for name in EXIT_METADATA_FIELDS
+-                        if _optional(arguments.get(name)) is not None}
++            metadata = {
++                name: _optional_string(arguments[name], name)
++                for name in EXIT_METADATA_FIELDS
++                if _optional(arguments.get(name)) is not None
++            }
+             if metadata:
+-                payload.update(schema_version="2.6.0",
+-                               price_pair_policy="first_trigger" if self.pine_version == 6 else "absolute_first",
+-                               **metadata)
++                payload.update(
++                    schema_version="2.6.0",
++                    price_pair_policy="first_trigger"
++                    if self.pine_version == 6
++                    else "absolute_first",
++                    **metadata,
++                )
+         return MappingProxyType(
+             {
+                 "draft_schema_id": DRAFT_SCHEMA_ID,
+diff --git a/backtest_engine/core/intent_replay.py b/backtest_engine/core/intent_replay.py
+index ba2f697519a11fbe3d70963da62e0735c4a4ff34..d99686dc210666b737d3e62a4008bfe71d4699e4 100644
+--- a/backtest_engine/core/intent_replay.py
++++ b/backtest_engine/core/intent_replay.py
+@@ -334,7 +334,7 @@ def decimal_to_engine_number(value: object, *, field: str, ctx: Any) -> float |
+         }[mode]
+         number = (number / step).to_integral_value(rounding=rounding) * step
+     result = float(number)
+-    if not math.isfinite(result):
++    if not math.isfinite(result) or (number != 0 and result == 0):
+         raise IntentDecimalConversionError(f"intent {field} is outside engine float range")
+     return result
+ 
+diff --git a/backtest_engine/core/strategy_capabilities.py b/backtest_engine/core/strategy_capabilities.py
+index a558b8ed74d373e3a240ff59f44c76f020544b65..fa4e05bbcfdde11d4fb4cbae58eb676919e0652f 100644
+--- a/backtest_engine/core/strategy_capabilities.py
++++ b/backtest_engine/core/strategy_capabilities.py
+@@ -46,12 +46,20 @@ class StrategyCommandSpec:
+             "strategy.close_all": 0,
+             "strategy.cancel": 1,
+             "strategy.cancel_all": 0,
+-        }[self.name]
++        }.get(self.name, len(self.parameters))
+         if pine_version < 6 and len(positional) > safe_prefix:
+             raise ValueError(f"{self.name}: historical tail arguments must be named")
+         if len(positional) > len(self.parameters):
+             raise ValueError("delegated strategy invocation has too many positional arguments")
+-        allowed = set(self.parameters) | self.unsupported_parameters | ({"when"} if pine_version < 6 else set())
++        allowed = (
++            set(self.parameters)
++            | self.unsupported_parameters
++            | (
++                {"when"}
++                if pine_version < 6 and not self.name.startswith("strategy.risk.")
++                else set()
++            )
++        )
+         if any(type(key) is not str or key not in allowed for key in named):
+             raise ValueError(f"{self.name}: unknown named argument (when is unavailable in v6)")
+         bound = dict(zip(self.parameters, positional))
+@@ -64,6 +72,7 @@ class StrategyCommandSpec:
+             raise ValueError(f"{self.name}: unsupported host parameters {sorted(rejected)}")
+         if self.name == "strategy.exit":
+             from backtest_engine.core.order_metadata import EXIT_METADATA_FIELDS
++
+             if pine_version < 5 and set(bound).intersection(EXIT_METADATA_FIELDS):
+                 raise ValueError("per-leg metadata requires Pine v5 or v6")
+         return bound
+@@ -118,6 +127,8 @@ _EXIT = (
+     "disable_alert",
+ )
+ _COMMANDS = (
++    StrategyCommandSpec("strategy.risk.allow_entry_in", ("value",), ("value",)),
++    StrategyCommandSpec("strategy.risk.max_position_size", ("contracts",), ("contracts",)),
+     StrategyCommandSpec("strategy.entry", _ENTRY, ("id", "direction")),
+     StrategyCommandSpec("strategy.order", _ENTRY, ("id", "direction")),
+     StrategyCommandSpec(
+diff --git a/tests/unit/test_entry_risk_intents.py b/tests/unit/test_entry_risk_intents.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..16597ed5842808d1a81faea59407d8c07feba939
+--- /dev/null
++++ b/tests/unit/test_entry_risk_intents.py
+@@ -0,0 +1,53 @@
++"""Canonical entry risk intents use the existing RiskIntent wire, without order fallbacks."""
++
++import pytest
++from pinelib.errors import PineRuntimeError
++from tests.unit.test_strategy_host_surface import handler, transaction, dispatch, seal
++
++
++@pytest.mark.parametrize(
++    "name,value,rule,unit,amount",
++    [
++        ("strategy.risk.max_position_size", 0, "max_position_size", "fixed", "0"),
++        ("strategy.risk.max_position_size", 2.5, "max_position_size", "fixed", "2.5"),
++        ("strategy.risk.allow_entry_in", "strategy.direction.long", "allow_entry_in", "long", "0"),
++        (
++            "strategy.risk.allow_entry_in",
++            "strategy.direction.short",
++            "allow_entry_in",
++            "short",
++            "0",
++        ),
++        ("strategy.risk.allow_entry_in", "strategy.direction.all", "allow_entry_in", "all", "0"),
++    ],
++)
++def test_entry_risk_seals_exact_scope_and_units(name, value, rule, unit, amount):
++    h = handler()
++    tx = transaction(h)
++    dispatch(tx, name, (value,))
++    (event,) = seal(h, tx)
++    assert event["kind"] == "risk" and event["schema_version"] == "2.2.0"
++    assert (event["risk_rule"], event["risk_unit"], event["risk_value"], event["risk_scope"]) == (
++        rule,
++        unit,
++        amount,
++        "strategy",
++    )
++    assert event["command_id"] == name
++
++
++@pytest.mark.parametrize("value", [None, True, -1, float("inf"), float("nan"), "3"])
++def test_invalid_risk_values_never_become_zero_size_orders(value):
++    h = handler()
++    tx = transaction(h)
++    with pytest.raises((PineRuntimeError, ValueError)):
++        dispatch(tx, "strategy.risk.max_position_size", (value,))
++        seal(h, tx)
++
++
++@pytest.mark.parametrize("version", range(1, 7))
++def test_risk_calls_never_accept_historical_when(version):
++    from backtest_engine.core.strategy_capabilities import STRATEGY_COMMANDS
++
++    with pytest.raises(ValueError):
++        STRATEGY_COMMANDS["strategy.risk.max_position_size"].bind([2], {"when": False}, version)

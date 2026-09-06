@@ -1,0 +1,113 @@
+name: Verify actual-fill entry risk and broker snapshot preservation
+'on':
+  push:
+    branches: ['ops/rc6-entry-risk-20260906']
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: rc6-entry-risk-publication
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: s7cret/pine2ast
+          ref: 66d107310fcd9a8868667906f47de5fb5737ee93
+          path: publisher-source
+          sparse-checkout: .github/entry-risk/restore.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - run: cp publisher-source/.github/entry-risk/restore.py "$RUNNER_TEMP/restore.py"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Reassemble readable patches and restore exact reviewed commits
+        run: |
+          python - <<'PY'
+          import os, pathlib, shutil
+          source=pathlib.Path('.github/entry-risk')
+          out=pathlib.Path(os.environ['RUNNER_TEMP'])/'submission'
+          out.mkdir()
+          for name in ('plan.json','02.patch'):
+              shutil.copy(source/name,out/name)
+          # Normalize only a transport indentation on diff headers; the restore
+          # helper still requires the original patch, tree and raw commit hashes.
+          parts=[(source/f'01-{i}.patch').read_bytes() for i in (1,2,3)]
+          (out/'01.patch').write_bytes(b''.join(parts).replace(b'\n diff --git ',b'\ndiff --git '))
+          PY
+          python "$RUNNER_TEMP/restore.py" restore "$RUNNER_TEMP/submission/plan.json" "$RUNNER_TEMP/evidence"
+          cp "$RUNNER_TEMP/restore.py" "$RUNNER_TEMP/evidence/restore.py"
+      - name: Install clean engine and exact sibling source revisions
+        run: |
+          python -m pip install setuptools==84.0.0 wheel==0.48.0 hatchling==1.32.0 build==1.6.0
+          python - <<'PY'
+          import json, os, pathlib, subprocess
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'dependencies'
+          root.mkdir()
+          pins={'openpine-contracts':'5950e0f99214e60b64162d074ed47f1e4bbc7141','pinelib':'cddaa0bf2324db36b4cd29e944a251032658c59d','marketdata-provider':'4e269bb7e3d389cae6214da9e17898c32c7ead15'}
+          sources=[]
+          for name,sha in pins.items():
+              path=root/name
+              subprocess.run(['git','clone','--quiet','https://github.com/s7cret/'+name+'.git',str(path)],check=True)
+              subprocess.run(['git','-C',str(path),'checkout','--detach',sha],check=True)
+              if subprocess.check_output(['git','-C',str(path),'rev-parse','HEAD'],text=True).strip()!=sha:
+                  raise SystemExit('Source identity mismatch')
+              sources.append(str(path))
+          clean=root/'engine';clean.mkdir()
+          subprocess.run(['tar','-x','-C',str(clean)],input=subprocess.check_output(['git','archive','HEAD']),check=True)
+          subprocess.run(['python','-m','pip','install',*sources,str(clean)+'[dev]'],check=True)
+          (root.parent/'evidence/source-pins.json').write_text(json.dumps(pins,indent=2)+'\n')
+          PY
+      - name: Complete broker functional suite
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: python -m pytest -q --junitxml="$RUNNER_TEMP/evidence/backtest_engine.xml"
+      - name: Changed source lint and real distribution builds
+        run: |
+          git diff --name-only d5d9c8e6cd1cad40dd5402bcf4521519a1de522e HEAD -- '*.py' | xargs python -m ruff check
+          python -m compileall -q backtest_engine
+          python -m build --no-isolation --outdir "$RUNNER_TEMP/evidence/dist" "$RUNNER_TEMP/dependencies/engine"
+          python -m pip freeze > "$RUNNER_TEMP/evidence/environment.txt"
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: entry-risk-${{ matrix.python }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence/
+          retention-days: 30
+          if-no-files-found: error
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: entry-risk-3.13-${{ github.run_id }}
+          path: evidence
+      - name: Fast-forward verified RC6 and preserve maintenance history
+        run: python evidence/restore.py publish evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: entry-risk-publication-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
