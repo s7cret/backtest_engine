@@ -62,6 +62,12 @@ class StrategyCommandSpec:
             raise ValueError(f"{self.name} requires {', '.join(sorted(missing))}")
         if rejected := self.unsupported_parameters.intersection(bound):
             raise ValueError(f"{self.name}: unsupported host parameters {sorted(rejected)}")
+        if self.name == "strategy.exit":
+            trailing = set(bound).intersection({"trail_price", "trail_points", "trail_offset"})
+            if trailing and ("trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"})):
+                raise ValueError("trailing exit requires trail_offset and an activation level")
+            if trailing and set(bound).intersection({"stop", "loss"}):
+                raise ValueError("fixed stop plus trailing arbitration is not yet supported by this host")
         return bound
 
 
@@ -123,9 +129,6 @@ _COMMANDS = (
         ("id",),
         frozenset(
             {
-                "trail_price",
-                "trail_points",
-                "trail_offset",
                 "oca_type",
                 "comment_profit",
                 "comment_loss",

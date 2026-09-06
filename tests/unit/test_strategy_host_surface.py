@@ -112,7 +112,7 @@ def test_historical_when_suppresses_and_preserves_contiguous_sequence(version, n
 @pytest.mark.parametrize(
     "named,message",
     [
-        ({"trail_price": 101, "trail_offset": 2}, "unsupported host parameters"),
+        ({"trail_price": 101}, "requires trail_offset"),
         ({"comment_profit": "TP"}, "unsupported host parameters"),
         ({}, "active price leg"),
     ],

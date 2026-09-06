@@ -261,7 +261,7 @@ class DelegatedStrategyIntentHandler:
             # a pre-callback position snapshot cannot decide whether an exit is valid.
             if not any(
                 _optional(arguments.get(key)) is not None
-                for key in ("limit", "stop", "profit", "loss")
+                for key in ("limit", "stop", "profit", "loss", "trail_price", "trail_points")
             ):
                 raise ValueError("strategy.exit requires a supported active price leg")
         payload: dict[str, Any] = {
@@ -326,7 +326,7 @@ class DelegatedStrategyIntentHandler:
                 payload.update(schema_version="2.3.0", exit_scope="all_entries")
             else:
                 payload["from_entry"] = entry_id
-            for field in ("qty", "qty_percent", "profit", "limit", "loss", "stop"):
+            for field in ("qty", "qty_percent", "profit", "limit", "loss", "stop", "trail_price", "trail_points", "trail_offset"):
                 value = _optional(arguments.get(field))
                 if value is not None:
                     payload[field] = _decimal(value, field)
@@ -335,6 +335,15 @@ class DelegatedStrategyIntentHandler:
                 for relative, absolute in (("profit", "limit"), ("loss", "stop"))
             ):
                 payload.update(schema_version="2.4.0", price_pair_policy="first_trigger")
+            trailing = set(payload).intersection({"trail_price", "trail_points", "trail_offset"})
+            if trailing:
+                if "trail_offset" not in trailing or not trailing.intersection({"trail_price", "trail_points"}):
+                    raise ValueError("trailing exit requires active trail_offset and activation")
+                if Decimal(payload["trail_offset"]) < 0:
+                    raise ValueError("trail_offset must be nonnegative")
+                payload.update(schema_version="2.5.0", price_pair_policy=(
+                    "first_trigger" if self.pine_version == 6 else "absolute_first"))
+
         elif kind in {"close", "close_all"}:
             immediate = _optional(arguments.get("immediately"))
             if immediate is not None and type(immediate) is not bool:
