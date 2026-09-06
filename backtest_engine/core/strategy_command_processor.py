@@ -232,7 +232,7 @@ def _apply_exit_command(
     else:
         qty = engine._qty_from_args(
             _qty_args(payload.qty, payload.qty_percent),
-            engine.position.size,
+            sum(trade.entry_qty for trade in engine._matching_open_trades(from_entry)),
             bar.close,
         )
     qty = min(qty, available)
@@ -411,8 +411,8 @@ def _add_or_modify_exit_order(
         return
     if not engine._risk_allows_order(new, bar, bar_index, existing):
         return
-    existing.qty = max(existing.qty, new.qty)
-    existing.reserved_qty = max(existing.reserved_qty, new.reserved_qty)
+    existing.qty = new.qty
+    existing.reserved_qty = new.reserved_qty
     existing.limit_price = new.limit_price
     existing.stop_price = new.stop_price
     existing.trail_price = new.trail_price

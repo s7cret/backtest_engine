@@ -438,28 +438,30 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                 if prev is None or qty > prev[1]:
                     groups[key] = (o.from_entry, qty)
         reserved: dict[str, float] = {}
-        unreserved = {id(t): t.qty for t in self.open_trades}
-        by_entry = {t.entry_id: t for t in self.open_trades}
+        # Several pyramid entries can share an entry ID. A dict of only the
+        # last trade undercounts their capacity and lets later exits overreserve.
+        unreserved: dict[str, float] = {}
+        for trade in self.open_trades:
+            unreserved[trade.entry_id] = unreserved.get(trade.entry_id, 0.0) + trade.qty
         for entry, qty in groups.values():
             if entry is not None:
-                tr = by_entry.get(entry)
-                if tr is None:
+                q = min(qty, unreserved.get(entry, 0.0))
+                if q <= 0:
                     continue
-                q = min(qty, unreserved.get(id(tr), 0.0))
                 reserved[entry] = reserved.get(entry, 0.0) + q
-                unreserved[id(tr)] = max(0.0, unreserved.get(id(tr), 0.0) - q)
+                unreserved[entry] = max(0.0, unreserved.get(entry, 0.0) - q)
         for entry, qty in groups.values():
             if entry is not None:
                 continue
             remaining = qty
-            for tr in self.open_trades:
+            for entry_id in unreserved:
                 if remaining <= 0:
                     break
-                q = min(remaining, unreserved.get(id(tr), 0.0))
+                q = min(remaining, unreserved[entry_id])
                 if q <= 0:
                     continue
-                reserved[tr.entry_id] = reserved.get(tr.entry_id, 0.0) + q
-                unreserved[id(tr)] -= q
+                reserved[entry_id] = reserved.get(entry_id, 0.0) + q
+                unreserved[entry_id] -= q
                 remaining -= q
         return reserved
 

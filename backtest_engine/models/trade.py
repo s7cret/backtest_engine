@@ -29,3 +29,9 @@ class Trade:
     stop_price: float | None = None
     take_profit_price: float | None = None
     phase: str | None = None
+    # Entry size is stable when qty becomes the remaining quantity after partial exits.
+    entry_qty: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.entry_qty is None:
+            self.entry_qty = self.qty
