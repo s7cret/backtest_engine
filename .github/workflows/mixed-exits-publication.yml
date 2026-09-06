@@ -1,0 +1,86 @@
+name: Verify mixed TP and SL broker policy before publication
+'on':
+  push:
+    branches: ['ops/rc6-mixed-exits-20260906']
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+concurrency:
+  group: rc6-mixed-exits-publication
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: s7cret/openpine-contracts
+          ref: 3a9a56c5f1cd613a2bacd3f12f260447bdf1f6c5
+          path: publisher-source
+          sparse-checkout: .github/mixed-exits/restore.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - run: cp publisher-source/.github/mixed-exits/restore.py "$RUNNER_TEMP/restore.py"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Restore reviewed source with exact hashes
+        run: |
+          python "$RUNNER_TEMP/restore.py" restore .github/mixed-exits/plan.json "$RUNNER_TEMP/evidence"
+          cp "$RUNNER_TEMP/restore.py" "$RUNNER_TEMP/evidence/restore.py"
+      - name: Install clean broker and pinned sources
+        run: |
+          python -m pip install setuptools==84.0.0 wheel==0.48.0 hatchling==1.32.0 build==1.6.0
+          mkdir -p "$RUNNER_TEMP/build-source"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/build-source"
+          python -m pip install 'git+https://github.com/s7cret/openpine-contracts.git@db372bc7b135a084667d3c726eca0465d21f008b' 'git+https://github.com/s7cret/pinelib.git@cddaa0bf2324db36b4cd29e944a251032658c59d' 'git+https://github.com/s7cret/marketdata-provider.git@4e269bb7e3d389cae6214da9e17898c32c7ead15' "$RUNNER_TEMP/build-source[dev]"
+      - name: Full broker functional suite
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: python -m pytest -q --junitxml="$RUNNER_TEMP/evidence/backtest_engine.xml"
+      - name: Lint and clean distribution builds
+        run: |
+          python -m ruff check backtest_engine/context/command_buffer.py backtest_engine/context/strategy_context.py backtest_engine/core/delegated_strategy_intents.py backtest_engine/core/exit_prices.py backtest_engine/core/intent_replay.py backtest_engine/core/strategy_command_processor.py tests/unit/test_exit_price_pairs.py tests/unit/test_strategy_host_surface.py
+          python -m compileall -q backtest_engine
+          python -m build --no-isolation --outdir "$RUNNER_TEMP/evidence/dist" "$RUNNER_TEMP/build-source"
+          python -m pip freeze > "$RUNNER_TEMP/evidence/environment.txt"
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mixed-exits-${{ matrix.python }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence/
+          retention-days: 30
+          if-no-files-found: error
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: mixed-exits-3.13-${{ github.run_id }}
+          path: evidence
+      - name: Publish verified RC6 and archive this delivery branch
+        run: python evidence/restore.py publish evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mixed-exits-publication-${{ github.run_id }}
+          path: evidence/
+          retention-days: 30
