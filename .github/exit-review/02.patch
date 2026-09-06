@@ -1,0 +1,164 @@
+diff --git a/backtest_engine/core/engine.py b/backtest_engine/core/engine.py
+index 7ffb35790a44541b0c5fec57d41e424eb27befe3..bbb2bbff5b3b6fff64259fa62a274bae9ba1e45f 100644
+--- a/backtest_engine/core/engine.py
++++ b/backtest_engine/core/engine.py
+@@ -438,28 +438,30 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
+                 if prev is None or qty > prev[1]:
+                     groups[key] = (o.from_entry, qty)
+         reserved: dict[str, float] = {}
+-        unreserved = {id(t): t.qty for t in self.open_trades}
+-        by_entry = {t.entry_id: t for t in self.open_trades}
++        # Several pyramid entries can share an entry ID. A dict of only the
++        # last trade undercounts their capacity and lets later exits overreserve.
++        unreserved: dict[str, float] = {}
++        for trade in self.open_trades:
++            unreserved[trade.entry_id] = unreserved.get(trade.entry_id, 0.0) + trade.qty
+         for entry, qty in groups.values():
+             if entry is not None:
+-                tr = by_entry.get(entry)
+-                if tr is None:
++                q = min(qty, unreserved.get(entry, 0.0))
++                if q <= 0:
+                     continue
+-                q = min(qty, unreserved.get(id(tr), 0.0))
+                 reserved[entry] = reserved.get(entry, 0.0) + q
+-                unreserved[id(tr)] = max(0.0, unreserved.get(id(tr), 0.0) - q)
++                unreserved[entry] = max(0.0, unreserved.get(entry, 0.0) - q)
+         for entry, qty in groups.values():
+             if entry is not None:
+                 continue
+             remaining = qty
+-            for tr in self.open_trades:
++            for entry_id in unreserved:
+                 if remaining <= 0:
+                     break
+-                q = min(remaining, unreserved.get(id(tr), 0.0))
++                q = min(remaining, unreserved[entry_id])
+                 if q <= 0:
+                     continue
+-                reserved[tr.entry_id] = reserved.get(tr.entry_id, 0.0) + q
+-                unreserved[id(tr)] -= q
++                reserved[entry_id] = reserved.get(entry_id, 0.0) + q
++                unreserved[entry_id] -= q
+                 remaining -= q
+         return reserved
+ 
+diff --git a/backtest_engine/core/strategy_command_processor.py b/backtest_engine/core/strategy_command_processor.py
+index abc80ffb31b555057deef668e5d2cc75541f2662..b99526206ddc35c083faafb0b2ea6c533ac28ef8 100644
+--- a/backtest_engine/core/strategy_command_processor.py
++++ b/backtest_engine/core/strategy_command_processor.py
+@@ -232,7 +232,7 @@ def _apply_exit_command(
+     else:
+         qty = engine._qty_from_args(
+             _qty_args(payload.qty, payload.qty_percent),
+-            engine.position.size,
++            sum(trade.entry_qty for trade in engine._matching_open_trades(from_entry)),
+             bar.close,
+         )
+     qty = min(qty, available)
+@@ -411,8 +411,8 @@ def _add_or_modify_exit_order(
+         return
+     if not engine._risk_allows_order(new, bar, bar_index, existing):
+         return
+-    existing.qty = max(existing.qty, new.qty)
+-    existing.reserved_qty = max(existing.reserved_qty, new.reserved_qty)
++    existing.qty = new.qty
++    existing.reserved_qty = new.reserved_qty
+     existing.limit_price = new.limit_price
+     existing.stop_price = new.stop_price
+     existing.trail_price = new.trail_price
+diff --git a/backtest_engine/models/trade.py b/backtest_engine/models/trade.py
+index 0334b72e344d9d02a93ef9d9ff7be0c64a025630..a1e6e09aed18e16fd6bb68aea5965ccde08a1549 100644
+--- a/backtest_engine/models/trade.py
++++ b/backtest_engine/models/trade.py
+@@ -29,3 +29,9 @@ class Trade:
+     stop_price: float | None = None
+     take_profit_price: float | None = None
+     phase: str | None = None
++    # Entry size is stable when qty becomes the remaining quantity after partial exits.
++    entry_qty: float | None = None
++
++    def __post_init__(self) -> None:
++        if self.entry_qty is None:
++            self.entry_qty = self.qty
+diff --git a/tests/unit/test_exit_replacement_scope.py b/tests/unit/test_exit_replacement_scope.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6bd91dabe56c983eeedb655dff2df79c99a68db7
+--- /dev/null
++++ b/tests/unit/test_exit_replacement_scope.py
+@@ -0,0 +1,75 @@
++"""Named exit sizing and replacement do not keep stale larger reservations."""
++
++from tests.unit.test_deferred_market_exits import candles, run
++
++
++def test_exit_percent_uses_only_matching_entry_quantity():
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", "long", qty=2)
++            ctx.entry("B", "long", qty=8)
++        if i == 1:
++            ctx.exit("X", "A", limit=105, qty_percent=50)
++
++    _, result = run(
++        commands,
++        candles((100, 101, 99, 100), (100, 101, 99, 100), (100, 106, 99, 100)),
++        pyramiding=2,
++    )
++    assert [(t.entry_id, t.qty) for t in result.closed_trades] == [("A", 1)]
++    assert [(t.entry_id, t.qty) for t in result.open_trades] == [("A", 1), ("B", 8)]
++
++
++def test_reducing_exit_quantity_releases_reservation_for_second_exit():
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", "long", qty=10)
++        if i == 1:
++            ctx.exit("X", "A", limit=110, qty=8)
++        if i == 2:
++            ctx.exit("X", "A", limit=110, qty=3)
++            ctx.exit("Y", "A", limit=105, qty=7)
++
++    engine, result = run(
++        commands,
++        candles(
++            (100, 101, 99, 100),
++            (100, 101, 99, 100),
++            (100, 101, 99, 100),
++            (100, 106, 99, 100),
++            (100, 111, 99, 100),
++        ),
++    )
++    assert result.status == "completed", result.errors
++    assert [(t.exit_id, t.qty, t.exit_price) for t in result.closed_trades] == [
++        ("Y:L", 7, 105),
++        ("X:L", 3, 110),
++    ]
++    assert not result.open_trades
++
++
++def test_reservations_sum_repeated_entry_ids_instead_of_only_last_trade():
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("A", "long", qty=2)
++        if i == 1:
++            ctx.entry("A", "long", qty=3)
++        if i == 2:
++            ctx.exit("X", "A", qty=4, limit=110)
++            ctx.exit("Y", "A", qty=4, limit=105)
++
++    engine, result = run(
++        commands,
++        candles(
++            (100, 101, 99, 100),
++            (100, 101, 99, 100),
++            (100, 101, 99, 100),
++            (100, 106, 99, 100),
++            (100, 111, 99, 100),
++        ),
++        pyramiding=2,
++    )
++    assert result.status == "completed", result.errors
++    fills = [(f.order_id, f.qty) for f in engine.fills if f.order_id.startswith(("X:", "Y:"))]
++    assert fills == [("Y:L", 1), ("X:L", 4)]
++    assert sum(t.qty for t in result.closed_trades) == 5 and not result.open_trades

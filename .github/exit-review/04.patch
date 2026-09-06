@@ -1,0 +1,57 @@
+diff --git a/backtest_engine/core/delegated_strategy_intents.py b/backtest_engine/core/delegated_strategy_intents.py
+index 9be8e66ccac5cfcd016ced8c932f2c93b0bae29b..f8802fcc94f20dd62268e1181ea4058e1721c583 100644
+--- a/backtest_engine/core/delegated_strategy_intents.py
++++ b/backtest_engine/core/delegated_strategy_intents.py
+@@ -255,10 +255,9 @@ class DelegatedStrategyIntentHandler:
+             command_id = "close:" + command_id
+         if kind == "exit":
+             entry_id = _nonempty_string(arguments["from_entry"], "from_entry")
+-            if self.open_entry_ids is None or entry_id not in self.open_entry_ids:
+-                raise ValueError(
+-                    "strategy.exit requires an already-open matching entry in this RC6 host; pending-entry exits are not admitted"
+-                )
++            # Entry/exit commands in one callback are committed together. The
++            # broker owns binding to open trades or already-created market orders;
++            # a pre-callback position snapshot cannot decide whether an exit is valid.
+             for relative, absolute in (("profit", "limit"), ("loss", "stop")):
+                 if (
+                     self.pine_version == 6
+diff --git a/backtest_engine/core/strategy_capabilities.py b/backtest_engine/core/strategy_capabilities.py
+index 69246ba7655e6c4b78f747805fdbe7d688df3261..df8f8f7b2b2a1a8def1be54f4eea9ea57c7e9c76 100644
+--- a/backtest_engine/core/strategy_capabilities.py
++++ b/backtest_engine/core/strategy_capabilities.py
+@@ -114,8 +114,8 @@ _COMMANDS = (
+     ),
+     StrategyCommandSpec("strategy.cancel", ("id",), ("id",)),
+     StrategyCommandSpec("strategy.cancel_all", (), ()),
+-    # Current intent schema requires a concrete entry ID. Trailing and per-leg
+-    # metadata are not yet faithfully supported by the native bridge.
++    # The broker admits exits for open trades and pending market entries.
++    # A concrete entry ID is required; trailing/per-leg metadata remain unsupported.
+     StrategyCommandSpec(
+         "strategy.exit",
+         _EXIT,
+diff --git a/tests/unit/test_strategy_host_surface.py b/tests/unit/test_strategy_host_surface.py
+index 004016b92202fb6830e1e8500599e19b01def3d9..9c8257171a8062773e1a54e3e0bc80f3d8f27449 100644
+--- a/tests/unit/test_strategy_host_surface.py
++++ b/tests/unit/test_strategy_host_surface.py
+@@ -127,14 +127,15 @@ def test_unsupported_exits_fail_without_silent_parameter_loss(named, message):
+     assert message in str(exc.value.__cause__)
+ 
+ 
+-def test_pending_entry_exit_is_explicitly_rejected():
++def test_pending_entry_exit_is_committed_for_broker_owned_binding():
+     h = handler(open_entry_ids=())
+     tx = transaction(h)
+     dispatch(tx, "strategy.entry", ("L", "strategy.long"))
+     dispatch(tx, "strategy.exit", ("X", "L"), {"stop": 99}, line=2)
+-    with pytest.raises(PineRuntimeError) as exc:
+-        seal(h, tx)
+-    assert "pending-entry exits" in str(exc.value.__cause__)
++    events = seal(h, tx)
++    assert [event["kind"] for event in events] == ["entry", "exit"]
++    assert events[1]["from_entry"] == "L"
++    assert [event["sequence"] for event in events] == [0, 1]
+ 
+ 
+ def test_v5_absolute_exit_parameter_takes_precedence_in_existing_engine():

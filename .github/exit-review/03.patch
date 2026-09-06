@@ -1,0 +1,66 @@
+diff --git a/backtest_engine/core/fill_scanner.py b/backtest_engine/core/fill_scanner.py
+index 88c82d6f42504afbe4b83505f7f7225f7290a8be..9edf76f9accff9f66ab0b83405be314d8f28e02a 100644
+--- a/backtest_engine/core/fill_scanner.py
++++ b/backtest_engine/core/fill_scanner.py
+@@ -158,6 +158,7 @@ def _scan_orders_at_path_point(
+         )
+         if fill_price is None:
+             continue
++        had_deferred_exits = bool(order.pending_exits)
+         engine._fill(order, bar, bar_index, fill_price, point)
+         if order.status != "filled":
+             continue
+@@ -172,6 +173,12 @@ def _scan_orders_at_path_point(
+                 engine, strategy, ctx, bar, bar_index, fill_price, recalc
+             )
+             return True, recalc, filled
++        if had_deferred_exits:
++            # Their commands predate this entry fill. Newly materialized brackets
++            # must be considered at this same price point, even when script fill
++            # recalculation is disabled (e.g. entry opens beyond an absolute TP).
++            # The filled parent is terminal, so it cannot restart the scan twice.
++            return True, recalc, filled
+     if engine._maybe_margin_call(price, bar, bar_index, point):
+         filled = True
+         if engine.config.calc_on_order_fills:
+diff --git a/tests/unit/test_deferred_market_exits.py b/tests/unit/test_deferred_market_exits.py
+index fcfbc5722665e6dfb238e92ce8e78b854d832d86..7af6d5af74171943d2e274aaa748af9d30e9aced 100644
+--- a/tests/unit/test_deferred_market_exits.py
++++ b/tests/unit/test_deferred_market_exits.py
+@@ -175,3 +175,36 @@ def test_deferred_instructions_survive_broker_snapshot_without_aliasing():
+     n = len(e.orders)
+     activate_deferred_exits(e, e.orders[0], rows[1], 1)
+     assert len(e.orders) == n
++
++
++@pytest.mark.parametrize(
++    "direction,entry_price,leg,level",
++    [
++        ("long", 110, "limit", 105),
++        ("long", 90, "stop", 95),
++        ("short", 90, "limit", 95),
++        ("short", 110, "stop", 105),
++    ],
++)
++@pytest.mark.parametrize("recalc", [False, True])
++def test_gap_beyond_waiting_bracket_uses_entry_open_not_next_ohlc_point(
++    direction, entry_price, leg, level, recalc
++):
++    def commands(ctx, i):
++        if i == 0:
++            ctx.entry("L", direction, qty=1)
++            ctx.exit("X", "L", **{leg: level})
++
++    engine, result = run(
++        commands,
++        candles(
++            (100, 101, 99, 100),
++            (entry_price, entry_price + 2, entry_price - 1, entry_price),
++        ),
++        calc_on_order_fills=recalc,
++    )
++    assert result.status == "completed", result.errors
++    assert [(t.entry_price, t.exit_price, t.qty) for t in result.closed_trades] == [
++        (entry_price, entry_price, 1)
++    ]
++    assert [fill.intrabar_point for fill in engine.fills] == ["open", "open"]
