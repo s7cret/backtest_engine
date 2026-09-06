@@ -371,6 +371,7 @@ def _apply_validated_intent(ctx: Any, event: Mapping[str, Any]) -> None:
     if kind == "exit":
         ctx.exit(
             order_id,
+            **({"price_pair_policy": event["price_pair_policy"]} if "price_pair_policy" in event else {}),
             from_entry=(None if event.get("exit_scope") == "all_entries" else event["from_entry"]),
             qty=qty,
             qty_percent=qty_percent,

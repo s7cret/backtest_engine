@@ -259,15 +259,6 @@ class DelegatedStrategyIntentHandler:
             # Entry/exit commands in one callback are committed together. The
             # broker owns binding to open trades or already-created market orders;
             # a pre-callback position snapshot cannot decide whether an exit is valid.
-            for relative, absolute in (("profit", "limit"), ("loss", "stop")):
-                if (
-                    self.pine_version == 6
-                    and _optional(arguments.get(relative)) is not None
-                    and _optional(arguments.get(absolute)) is not None
-                ):
-                    raise ValueError(
-                        "strategy.exit v6 relative/absolute parameter pairs are not yet supported by this host"
-                    )
             if not any(
                 _optional(arguments.get(key)) is not None
                 for key in ("limit", "stop", "profit", "loss")
@@ -339,6 +330,11 @@ class DelegatedStrategyIntentHandler:
                 value = _optional(arguments.get(field))
                 if value is not None:
                     payload[field] = _decimal(value, field)
+            if self.pine_version == 6 and any(
+                relative in payload and absolute in payload
+                for relative, absolute in (("profit", "limit"), ("loss", "stop"))
+            ):
+                payload.update(schema_version="2.4.0", price_pair_policy="first_trigger")
         elif kind in {"close", "close_all"}:
             immediate = _optional(arguments.get("immediately"))
             if immediate is not None and type(immediate) is not bool:

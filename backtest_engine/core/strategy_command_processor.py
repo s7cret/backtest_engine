@@ -263,12 +263,13 @@ def _apply_exit_command(
     ):
         prefix = f"{payload.id}:entry:{lot}"
     tick = getattr(engine, "_effective_mintick", 1.0) or 1.0
-    if payload.profit is not None and limit is None:
-        profit_price = float(payload.profit) * tick
-        limit = base + profit_price if direction == "long" else base - profit_price
-    if payload.loss is not None and stop is None:
-        loss_price = float(payload.loss) * tick
-        stop = base - loss_price if direction == "long" else base + loss_price
+    from backtest_engine.core.exit_prices import resolve_exit_prices
+
+    limit, stop = resolve_exit_prices(
+        direction=direction, entry_price=base, mintick=tick,
+        limit=limit, stop=stop, profit=payload.profit, loss=payload.loss,
+        policy=payload.price_pair_policy,
+    )
     has_trail = (
         payload.trail_price is not None
         or payload.trail_points is not None

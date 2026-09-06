@@ -114,7 +114,6 @@ def test_historical_when_suppresses_and_preserves_contiguous_sequence(version, n
     [
         ({"trail_price": 101, "trail_offset": 2}, "unsupported host parameters"),
         ({"comment_profit": "TP"}, "unsupported host parameters"),
-        ({"limit": 101, "profit": 2}, "parameter pairs"),
         ({}, "active price leg"),
     ],
 )

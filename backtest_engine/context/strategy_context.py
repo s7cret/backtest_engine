@@ -82,6 +82,8 @@ class StrategyContext:
         oca_name: str | None = None,
         oca_type: str | None = None,
         comment: str | None = None,
+        *,
+        price_pair_policy: str = "absolute_first",
     ) -> None:
         self.buffer.add(
             "exit",
@@ -96,6 +98,7 @@ class StrategyContext:
             trail_price=trail_price,
             trail_points=trail_points,
             trail_offset=trail_offset,
+            price_pair_policy=price_pair_policy,
             oca_name=oca_name,
             oca_type=oca_type,
             comment=comment,

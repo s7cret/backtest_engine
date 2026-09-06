@@ -30,6 +30,11 @@ class ExitPayload:
     oca_name: str | None = None
     oca_type: str | None = None
     comment: str | None = None
+    price_pair_policy: str = "absolute_first"
+
+    def __post_init__(self) -> None:
+        if self.price_pair_policy not in ("absolute_first", "first_trigger"):
+            raise ValueError("invalid exit price_pair_policy")
 
 
 @dataclass(frozen=True, slots=True)
