@@ -38,7 +38,11 @@ def test_ci_uses_authoritative_release_gate_without_duplicate_weaker_checks() ->
 def test_ci_runs_feature_branches_once_via_pull_request_with_concurrency() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
-    assert "push:\n    branches: [main]" in workflow
-    assert "pull_request:\n    branches: [main]" in workflow
-    assert "group: ci-${{ github.event.pull_request.number || github.ref }}" in workflow
+    assert "push:\n    branches: [main, release/5.0.0rc6]" in workflow
+    assert "pull_request:\n    branches: [main, release/5.0.0rc6]" in workflow
+    assert (
+        "group: ${{ github.workflow }}-${{ github.event_name }}-"
+        "${{ github.event.pull_request.number || github.ref }}"
+    ) in workflow
     assert "cancel-in-progress: true" in workflow
+    assert "name: Test (Python ${{ matrix.python-version }})" in workflow

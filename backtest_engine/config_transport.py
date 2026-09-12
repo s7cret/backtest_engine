@@ -120,31 +120,33 @@ def _normalized_layer(layer: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _build_config(values: Mapping[str, Any]) -> BacktestConfig:
-    values = deepcopy(dict(values))
-    if isinstance(values.get("instrument_model"), Mapping):
+    mutable_values = deepcopy(dict(values))
+    if isinstance(mutable_values.get("instrument_model"), Mapping):
         try:
-            values["instrument_model"] = InstrumentModel(**values["instrument_model"])
+            mutable_values["instrument_model"] = InstrumentModel(**mutable_values["instrument_model"])
         except (TypeError, ValueError) as error:
             raise ConfigError("invalid instrument_model") from error
     for name in ("required_outputs", "required_metrics"):
-        if name in values:
-            items = values[name]
+        if name in mutable_values:
+            items = mutable_values[name]
             if not isinstance(items, (list, tuple, set, frozenset)) or any(
                 type(x) is not str for x in items
             ):
                 raise ConfigError(f"{name} must be a collection of strings")
-            values[name] = set(items)
+            mutable_values[name] = set(items)
     try:
-        config = BacktestConfig(**{key: value for key, value in values.items() if key in _FIELDS})
+        config = BacktestConfig(**{key: value for key, value in mutable_values.items() if key in _FIELDS})
     except (TypeError, ValueError) as error:
         raise ConfigError(f"invalid execution configuration: {error}") from error
     for key in _HOST_IDENTITY:
-        if key in values:
-            setattr(config, key, values[key])
+        if key in mutable_values:
+            setattr(config, key, mutable_values[key])
     return config
 
 
 def _freeze(value: Any) -> Any:
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        value = dataclasses.asdict(value)
     if isinstance(value, Mapping):
         return MappingProxyType({key: _freeze(item) for key, item in value.items()})
     if isinstance(value, (list, tuple, set, frozenset)):

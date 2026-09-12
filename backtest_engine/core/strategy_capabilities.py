@@ -234,7 +234,7 @@ def strategy_values_from_projection(projection: Mapping, config: Any) -> dict[st
         "max_drawdown": "max_drawdown",
         "max_runup": "max_runup",
     }
-    values = {"strategy." + name: float(projection[field]) for name, field in fields.items()}
+    values: dict[str, object] = {"strategy." + name: float(projection[field]) for name, field in fields.items()}
     counts = {
         "wintrades": projection["winning_trades"],
         "losstrades": projection["losing_trades"],

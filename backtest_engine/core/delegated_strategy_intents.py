@@ -52,7 +52,7 @@ def build_delegated_strategy_dispatcher(
     unknown_values = set(supplied_values).difference(_DELEGATED_STRATEGY_STATE_VALUES)
     if unknown_values:
         raise ValueError("delegated strategy value target is unsupported")
-    values = {
+    values: dict[tuple[str, str, str], object] = {
         (OWNER, DELEGATION_SCHEMA_ID, capability_id): capability_id
         for capability_id in _DELEGATED_STRATEGY_VALUES
     }
@@ -377,9 +377,9 @@ class DelegatedStrategyIntentHandler:
                 "trail_points",
                 "trail_offset",
             ):
-                value = _optional(arguments.get(field))
-                if value is not None:
-                    payload[field] = _decimal(value, field)
+                optional_value = _optional(arguments.get(field))
+                if optional_value is not None:
+                    payload[field] = _decimal(optional_value, field)
             if self.pine_version == 6 and any(
                 relative in payload and absolute in payload
                 for relative, absolute in (("profit", "limit"), ("loss", "stop"))
@@ -411,9 +411,9 @@ class DelegatedStrategyIntentHandler:
             if kind == "close":
                 payload["from_entry"] = _nonempty_string(arguments["id"], "id")
                 for field in ("qty", "qty_percent"):
-                    value = _optional(arguments.get(field))
-                    if value is not None:
-                        payload[field] = _decimal(value, field)
+                    optional_value = _optional(arguments.get(field))
+                    if optional_value is not None:
+                        payload[field] = _decimal(optional_value, field)
         elif kind == "cancel":
             payload["order_id"] = command_id
         if _optional(arguments.get("alert_message")) is not None:
