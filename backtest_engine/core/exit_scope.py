@@ -32,7 +32,7 @@ def reserved_by_trade(engine: Any, exclude_order: Order | None = None) -> dict[i
     Object identities are temporary keys in this one calculation only, never
     persisted or used as checkpoint/run identities.
     """
-    groups = {}
+    groups: dict[tuple[str, int | None], tuple[Order, float]] = {}
     excluded = reservation_key(exclude_order) if exclude_order is not None else None
     for order in engine.orders:
         key = reservation_key(order)
@@ -46,9 +46,9 @@ def reserved_by_trade(engine: Any, exclude_order: Order | None = None) -> dict[i
     # have concrete named lot targets and are allocated in command creation order.
     for order, amount in sorted(groups.values(), key=lambda item: item[0].from_entry is None):
         for trade in matching_trades(engine, order.from_entry, order.entry_fill_index):
-            key = id(trade)
-            used = min(amount, max(0.0, trade.qty - result.get(key, 0.0)))
-            result[key] = result.get(key, 0.0) + used
+            trade_key = id(trade)
+            used = min(amount, max(0.0, trade.qty - result.get(trade_key, 0.0)))
+            result[trade_key] = result.get(trade_key, 0.0) + used
             amount -= used
             if amount <= 0:
                 break

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from backtest_engine.models import Order
+
 EXIT_METADATA_FIELDS = (
     "comment_profit",
     "comment_loss",
@@ -50,7 +52,7 @@ def copy_order_metadata(target: Any, source: Any) -> None:
         setattr(target, name, getattr(source, name))
 
 
-def filled_order_context(order: object, fill_index: int) -> dict:
+def filled_order_context(order: Order, fill_index: int) -> dict:
     """Audit data on the fill event; a suppressed alert never suppresses the fill."""
     return {
         "schema_id": "backtest_engine.order_fill_metadata.v1",

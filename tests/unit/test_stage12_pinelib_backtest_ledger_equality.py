@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pinelib
 from pinelib import CallbackFrame, RuntimeLanguageContext, RuntimeSession
 from pinelib.events import SourceSpan
 

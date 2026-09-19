@@ -261,7 +261,7 @@ def _apply_exit_command(
     else:
         qty = engine._qty_from_args(
             _qty_args(payload.qty, payload.qty_percent),
-            sum(trade.entry_qty for trade in matching_trades(engine, from_entry, lot)),
+            sum(cast(float, trade.entry_qty) for trade in matching_trades(engine, from_entry, lot)),
             bar.close,
         )
     qty = min(qty, available)
@@ -457,9 +457,7 @@ def _add_or_modify_exit_order(
         return
     if not engine._risk_allows_order(new, bar, bar_index, existing):
         return
-    was_trailing = existing.trail_offset is not None
-    is_trailing = new.trail_offset is not None
-    if was_trailing and is_trailing:
+    if existing.trail_offset is not None and new.trail_offset is not None:
         new.trail_activated = existing.trail_activated
         new.trail_best_price = existing.trail_best_price
         if new.trail_best_price is None and existing.stop_price is not None:

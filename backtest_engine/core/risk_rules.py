@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 import math
 from decimal import Decimal, ROUND_FLOOR
 
@@ -81,7 +81,7 @@ def validate_position_limit(value: object) -> float:
     if type(value) not in (int, float):
         raise ValueError("max_position_size requires a finite nonnegative number")
     try:
-        number = float(value)
+        number = float(cast(int | float, value))
     except OverflowError as exc:
         raise ValueError("max_position_size is outside the runtime range") from exc
     if not math.isfinite(number) or number < 0:

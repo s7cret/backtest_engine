@@ -70,7 +70,7 @@ def process_bar_fills(
         interpolate = (previous_price is not None and not is_open and not open_only
                        and not close_activation_only and tick_phase is None
                        and not getattr(engine, "_realtime_tick_execution", False))
-        cursor = previous_price if interpolate else destination
+        cursor = previous_price if interpolate and previous_price is not None else destination
         while True:
             price = (next_price_event(engine, cursor, destination, bar_index)
                      if interpolate else destination)
