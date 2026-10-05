@@ -15,6 +15,9 @@ def apply_oca(engine: Any, order: Order, bar: Bar, bar_index: int) -> None:
             other is not order
             and other.status in ("pending", "active")
             and other.oca_name == order.oca_name
+            # A shared label does not merge distinct OCA policies. In
+            # particular, an oca.none order must never be a group target.
+            and other.oca_type == order.oca_type
             and (order.oca_explicit or other.oca_explicit
                  or other.entry_fill_index == order.entry_fill_index)
         ):

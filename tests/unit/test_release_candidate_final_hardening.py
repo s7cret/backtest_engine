@@ -310,17 +310,6 @@ def test_price_path_bar_magnifier_edges_and_margin_oca_helpers() -> None:
     with pytest.raises(BarMagnifierUnavailableError, match="invalid OHLC high"):
         validate_supplied_bar_magnifier_bars(engine, BarSeries.from_bars([_bar(0)]))
 
-    order = _order("a", oca_name="grp", oca_type="reduce", qty=1)
-    other = _order("b", oca_name="grp", qty=3)
-    events: list[str] = []
-    oca_engine = types.SimpleNamespace(
-        orders=[order, other],
-        _cb=lambda *a: None,
-        _event=lambda code, *a: events.append(code),
-    )
-    apply_oca(oca_engine, order, _bar(), 0)
-    assert other.qty == 2 and events == ["ORDER_MODIFIED"]
-
     margin_engine = types.SimpleNamespace(
         position=Position(size=1.0, avg_price=10.0, direction="long"),
         config=BacktestConfig(
@@ -330,6 +319,28 @@ def test_price_path_bar_magnifier_edges_and_margin_oca_helpers() -> None:
          ),
     )
     assert maybe_margin_call(margin_engine, 10, _bar(), 0, "open") is False
+
+
+@pytest.mark.parametrize(
+    "other_policy, expected_qty, expected_events",
+    [("reduce", 2, ["ORDER_MODIFIED"]), ("none", 3, []), ("cancel", 3, [])],
+)
+def test_oca_reduce_helper_respects_policy_group_identity(
+    other_policy, expected_qty, expected_events
+) -> None:
+    # Split from the price-path/margin test: its old default oca.none sibling
+    # incorrectly pinned cross-policy reduction. Keep the original same-group
+    # quantity/event regression and explicitly test the nonparticipating groups.
+    order = _order("a", oca_name="grp", oca_type="reduce", qty=1)
+    other = _order("b", oca_name="grp", oca_type=other_policy, qty=3)
+    events: list[str] = []
+    oca_engine = types.SimpleNamespace(
+        orders=[order, other],
+        _cb=lambda *a: None,
+        _event=lambda code, *a: events.append(code),
+    )
+    apply_oca(oca_engine, order, _bar(), 0)
+    assert other.qty == expected_qty and events == expected_events
 
 
 def test_result_and_reporting_remaining_branches() -> None:
