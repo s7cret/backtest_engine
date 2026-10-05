@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import pickle
 from dataclasses import asdict, dataclass, field, is_dataclass
@@ -53,17 +54,46 @@ class PickleStateSerializer:
 
 
 class JsonStateSerializer:
-    """JSON serializer for primitive/dict/list dataclass snapshots."""
+    """Primitive JSON snapshots with fail-closed numeric/object admission.
+
+    Dataclasses are exported as mappings, not reconstructed on load. Typed
+    broker/runtime reconstruction remains the consuming adapter's obligation.
+    """
 
     serializer_id = "json-v1"
 
     def dumps(self, state: object) -> bytes:
-        return json.dumps(_plain(state), sort_keys=True, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        return json.dumps(
+            _plain(state), sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
 
     def loads(self, payload: bytes) -> object:
-        return json.loads(payload.decode("utf-8"))
+        return json.loads(
+            payload.decode("utf-8"),
+            parse_constant=_reject_json_constant,
+            parse_float=_finite_json_float,
+            object_pairs_hook=_unique_json_object,
+        )
+
+
+def _reject_json_constant(token: str) -> Any:
+    raise ValueError(f"non-finite JSON constant: {token}")
+
+
+def _finite_json_float(token: str) -> float:
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError(f"non-finite JSON number: {token}")
+    return value
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        value[key] = item
+    return value
 
 
 @dataclass(frozen=True)
