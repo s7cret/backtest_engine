@@ -366,8 +366,11 @@ def _validate_state(state: BacktestResumeState) -> None:
             _fail("statistics point index outside checkpoint")
         if indices != sorted(set(indices)):
             _fail("statistics point indices must be increasing and unique")
-        if name == "equity_curve" and points and indices != list(range(cursor + 1)):
-            _fail("partial equity history")
+        if name == "equity_curve" and points:
+            if len(points) != cursor + 1 or any(
+                point.bar_index != expected for expected, point in enumerate(points)
+            ):
+                _fail("partial equity history")
     for name in ("events", "warnings", "errors"):
         if any(type(item) is not Diagnostic for item in statistics[name]):
             _fail("statistics diagnostics must be typed Diagnostic values")
@@ -398,20 +401,21 @@ def admit_resume_input(
     fingerprint = state.metadata.get("bar_prefix_fingerprint")
     if fingerprint is None:
         _fail("strict resume state is missing bar prefix fingerprint")
-    if fingerprint != bar_prefix_fingerprint(series, state.bar_index + 1):
-        _fail("bar prefix fingerprint does not match processed bars")
     statistics = _validate_strict_statistics_state(state, label="typed JSON resume")
     collect_equity = "equity_curve" in config.required_outputs or config.collect_equity_curve
     if collect_equity and len(statistics["equity_curve"]) != state.bar_index + 1:
         _fail("partial equity history")
     indices = [point.bar_index for point in statistics["score_equity_points"]]
-    expected = (
-        list(range(max(0, plan.score_start_index), state.bar_index + 1))
-        if plan.score_mode and collect_equity
-        else []
+    score_start = max(0, plan.score_start_index)
+    expected_count = (
+        max(0, state.bar_index - score_start + 1) if plan.score_mode and collect_equity else 0
     )
-    if indices != expected:
+    if len(indices) != expected_count or any(
+        index != score_start + ordinal for ordinal, index in enumerate(indices)
+    ):
         _fail("score equity history does not match the processed score window")
+    if fingerprint != bar_prefix_fingerprint(series, state.bar_index + 1):
+        _fail("bar prefix fingerprint does not match processed bars")
     _validate_strict_statistics_against_broker(
         statistics,
         cast(BrokerSnapshot, state.broker_state),

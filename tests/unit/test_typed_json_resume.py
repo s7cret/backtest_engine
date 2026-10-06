@@ -405,6 +405,44 @@ def test_context_rejected_before_live_mutation(envelope, mutation, monkeypatch):
     assert_rejected_without_live_mutation(json.dumps(envelope).encode(), monkeypatch, **options)
 
 
+@pytest.mark.parametrize("cursor", [1_000_000_000, 1 << 4095], ids=["billion", "4096-bit"])
+def test_sparse_history_rejects_huge_cursor_without_cursor_sized_allocation(
+    envelope, cursor, monkeypatch
+):
+    import backtest_engine.core.resume_json as codec
+
+    def forbidden_range(*args):
+        raise AssertionError("untrusted cursor reached range allocation")
+
+    # Module-only guard catches the old list(range(cursor + 1)) before allocation.
+    monkeypatch.setattr(codec, "range", forbidden_range, raising=False)
+    set_path(envelope, ROOT + ("bar_index",), cursor)
+    assert_rejected_without_live_mutation(json.dumps(envelope).encode(), monkeypatch)
+
+
+@pytest.mark.parametrize("collect_history", [False, True])
+def test_context_rejects_huge_cursor_before_score_range(envelope, collect_history, monkeypatch):
+    import backtest_engine.core.resume_json as codec
+
+    def forbidden_range(*args):
+        raise AssertionError("unavailable input cursor reached score range allocation")
+
+    monkeypatch.setattr(codec, "range", forbidden_range, raising=False)
+    set_path(envelope, ROOT + ("bar_index",), 1_000_000_000)
+    set_path(envelope, STATS + ("equity_curve",), [])
+    config, bars = inputs(
+        score_start_time=60000,
+        collect_equity_curve=collect_history,
+        required_outputs=("equity_curve",) if collect_history else (),
+    )
+    engine = BacktestEngine(config)
+    assert engine.run(FixedOcaStrategy, bars=bars[:2], effective_pre_bars=1).status == "completed"
+    before = observe(engine)
+    with pytest.raises(ResumeUnsupportedError, match="available input bar"):
+        engine.run(FixedOcaStrategy, bars=bars, resume_state=json.dumps(envelope).encode())
+    assert observe(engine) == before
+
+
 def test_failed_context_admission_does_not_normalize_live_config(envelope):
     config, bars = inputs()
     config.required_outputs = ("equity_curve",)
