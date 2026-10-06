@@ -22,6 +22,7 @@ from .models import (
 )
 from .results import BacktestResult, JSONResultWriter, CSVTradeWriter
 from .context import StrategyContext, StrategyStateView
+from .core.resume_json import JsonResumeStateSerializer
 
 __all__ = [
     "__version__",
@@ -50,5 +51,6 @@ __all__ = [
     "EquityPoint",
     "BacktestCallbacks",
     "BacktestResumeState",
+    "JsonResumeStateSerializer",
     "BacktestJob",
 ]

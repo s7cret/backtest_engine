@@ -27,14 +27,19 @@ from backtest_engine.core.state_snapshot import (
 from backtest_engine.errors import ResumeUnsupportedError
 
 
+def config_snapshot_hash(config: BacktestConfig) -> str:
+    """Compute the shared resume identity without touching a live engine."""
+    snapshot = config.snapshot()
+    snapshot.pop("export_resume_state", None)
+    return sha256_obj(snapshot)
+
+
 class EngineRealtimeMixin:
     config: BacktestConfig
     _update_state: Callable[[], None]
 
     def _config_hash(self) -> str:
-        snapshot = self.config.snapshot()
-        snapshot.pop("export_resume_state", None)
-        return sha256_obj(snapshot)
+        return config_snapshot_hash(self.config)
 
     def _export_realtime_broker_state(self) -> RealtimeBrokerSnapshot:
         """Export a detached broker checkpoint for future realtime tick rollback."""
