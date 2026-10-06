@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: s7cret/marketdata-provider
-          ref: 27b70c361076cf2b6a1bea7cd2dea650ab791584
+          ref: 6ad408144ffcacfc3d0b3b4ac4d635949f6602e6
           path: stack/marketdata-provider
       - uses: actions/checkout@v4
         with:
