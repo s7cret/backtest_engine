@@ -1,8 +1,10 @@
 # Backtest Engine 5.0.0rc6
 
+The supported interpreter is ordinary CPython 3.13 (`>=3.13,<3.14`) with the GIL enabled. Free-threaded builds (`3.13t`), other Python minors, and other Python implementations are outside the supported runtime policy. This interpreter policy does not narrow functional requirements or acceptance gates.
+
 > Independent deterministic bar-by-bar strategy backtest engine for OpenPine-generated strategies and Python strategy classes.
 
-[![Version](https://img.shields.io/badge/version-5.0.0rc6-blue)](https://github.com/s7cret/backtest_engine) [![Python](https://img.shields.io/badge/python-%3E%3D3.11-blue)](https://github.com/s7cret/backtest_engine) [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/s7cret/backtest_engine)
+[![Version](https://img.shields.io/badge/version-5.0.0rc6-blue)](https://github.com/s7cret/backtest_engine) [![Python](https://img.shields.io/badge/python-3.13-blue)](https://github.com/s7cret/backtest_engine) [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/s7cret/backtest_engine)
 
 
 **GitHub description:** Backtest Engine is the deterministic broker, order, fill, position, trade, equity, and reporting authority for OpenPine backtests.

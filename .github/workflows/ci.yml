@@ -14,31 +14,42 @@ concurrency:
 jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12', '3.13']
+        python-version: ['3.13']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
           repository: s7cret/openpine-contracts
-          ref: 5950e0f99214e60b64162d074ed47f1e4bbc7141
+          ref: db1745756516b47466756c9c5d38fbbb95595a3b
           path: stack/openpine-contracts
       - uses: actions/checkout@v4
         with:
           repository: s7cret/marketdata-provider
-          ref: 4e269bb7e3d389cae6214da9e17898c32c7ead15
+          ref: 27b70c361076cf2b6a1bea7cd2dea650ab791584
           path: stack/marketdata-provider
       - uses: actions/checkout@v4
         with:
           repository: s7cret/pinelib
-          ref: 547620ee70e707532dbabd6026645e4d9abaf748
+          ref: f66c67f90a7f3428fe68267d41de9ae31202f775
           path: stack/pinelib
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Verify supported CPython and GIL
+        run: |
+          python - <<'PY'
+          import platform
+          import sys
+          import sysconfig
+          assert sys.version_info[:2] == (3, 13), sys.version
+          assert platform.python_implementation() == "CPython"
+          assert not sysconfig.get_config_var("Py_GIL_DISABLED"), "free-threaded builds are unsupported"
+          assert sys._is_gil_enabled(), "GIL must be enabled"
+          PY
       - name: Install
         run: |
           printf 'stack/\n' >> .git/info/exclude
