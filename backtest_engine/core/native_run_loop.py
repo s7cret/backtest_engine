@@ -18,6 +18,7 @@ from backtest_engine.models import (
 )
 from backtest_engine.core.state_snapshot import clone_state
 from backtest_engine.core.protocol_boundary import emit_protocol_bar_commit
+from backtest_engine.core.realtime import BarTickSlice
 from backtest_engine.results import BacktestResult, EquityExtremes
 
 BacktestStatus = Literal["completed", "failed", "early_stopped"]
@@ -130,12 +131,15 @@ def run_native_strategy(
     series: BarSeries,
     t0: float,
     resume_state: BacktestResumeState | None,
+    *,
+    admitted_tick_schedule: tuple[BarTickSlice, ...] | None = None,
 ) -> BacktestResult:
     if engine.config.calc_on_every_tick:
         from backtest_engine.core.realtime_run_loop import run_realtime_strategy
 
         return run_realtime_strategy(
-            engine, strategy_class, params, series, t0, resume_state
+            engine, strategy_class, params, series, t0, resume_state,
+            admitted_schedule=admitted_tick_schedule,
         )
     ctx = StrategyContext(engine.config, engine.state)
     runtime = cast(NativeRuntime, engine.config.runtime or NoopRuntime())

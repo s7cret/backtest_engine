@@ -13,6 +13,8 @@ import re
 from types import UnionType
 from typing import Any, Literal, NoReturn, Union, cast, get_args, get_origin, get_type_hints
 
+from openpine_contracts import Finality
+
 from backtest_engine.context.command_buffer import ExitPayload
 from backtest_engine.config import BacktestConfig
 from backtest_engine.core.position_accounting import quantity_epsilon
@@ -36,6 +38,7 @@ from backtest_engine.core.state_snapshot import BrokerSnapshot, JsonStateSeriali
 from backtest_engine.errors import ResumeUnsupportedError
 from backtest_engine.models import (
     BacktestResumeState,
+    Bar,
     BarSeries,
     Diagnostic,
     EquityPoint,
@@ -53,6 +56,7 @@ _MODELS: dict[str, type[Any]] = {
     cls.__name__: cls
     for cls in (
         BacktestResumeState,
+        Bar,
         BrokerSnapshot,
         Position,
         Order,
@@ -139,6 +143,8 @@ def _encode(value: Any, budget: _Budget, depth: int, ancestors: set[int]) -> Any
     ancestors.add(id(value))
     try:
         cls = type(value)
+        if cls is Finality:
+            return {"type": "Finality", "value": _encode(value.value, budget, depth + 1, ancestors)}
         if cls in _MODEL_NAMES:
             return {
                 "type": _MODEL_NAMES[cls],
@@ -220,6 +226,14 @@ def _decode(value: Any, budget: _Budget, depth: int) -> Any:
     if type(value) is not dict or type(value.get("type")) is not str:
         _fail("untyped object or missing registered type")
     name = value["type"]
+    if name == "Finality":
+        if set(value) != {"type", "value"} or type(value["value"]) is not str:
+            _fail("invalid Finality fields")
+        budget.touch(depth + 1, value["value"])
+        try:
+            return Finality(value["value"])
+        except ValueError:
+            _fail("unknown Finality value")
     if name == "tuple":
         if set(value) != {"type", "items"} or type(value["items"]) is not list:
             _fail("invalid tuple fields")
@@ -243,6 +257,13 @@ def _decode(value: Any, budget: _Budget, depth: int) -> Any:
     _check_fields(cls, values, name)
     if cls is Trade and values["entry_qty"] is None:
         _fail("trade entry_qty cannot be null in a complete checkpoint")
+    if cls is Bar and (
+        values["high"] < max(values["open"], values["close"], values["low"])
+        or values["low"] > min(values["open"], values["close"], values["high"])
+        or (values["volume"] is not None and values["volume"] < 0)
+        or (values["time_close"] is not None and values["time_close"] < values["time"])
+    ):
+        _fail("Bar OHLCV/time is outside its native domain")
     return cls(**values)
 
 
@@ -287,6 +308,13 @@ def _validate_state(state: BacktestResumeState) -> None:
             or re.fullmatch(r"[0-9a-f]{64}", state.metadata[key]) is None
         ):
             _fail("invalid " + key)
+    if "realtime_tick_schedule_fingerprint" in state.metadata:
+        if state.metadata.get("realtime_resume_boundary") != "committed-parent-bar-v1":
+            _fail("tick resume needs a committed parent-bar boundary")
+        if cursor < 0 or state.runtime_state is None or state.strategy_state is None:
+            _fail("committed tick resume needs cursor, runtime_state and strategy_state")
+    elif "realtime_resume_boundary" in state.metadata:
+        _fail("tick boundary is missing its schedule fingerprint")
     broker = cast(BrokerSnapshot, state.broker_state)
     validate_snapshot_risk(broker)
     position = broker.position

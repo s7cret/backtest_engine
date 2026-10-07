@@ -525,6 +525,10 @@ def export_resume_state(
         metadata["realtime_tick_schedule_fingerprint"] = realtime_tick_schedule_fingerprint(
             tick_schedule[: max(0, bar_index + 1)]
         )
+        if not getattr(engine, "_realtime_tick_execution", False) and not hasattr(
+            engine, "_realtime_script_runtime"
+        ):
+            metadata["realtime_resume_boundary"] = "committed-parent-bar-v1"
     return build_resume_state(
         bar_index=bar_index,
         config_snapshot_hash=engine._config_hash(),
