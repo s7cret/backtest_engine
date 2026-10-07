@@ -23,11 +23,32 @@ from backtest_engine.errors import ResumeUnsupportedError
 from backtest_engine.models import BacktestResumeState, BarSeries
 
 
+def admit_explicit_tick_schedule(
+    config: BacktestConfig, series: BarSeries
+) -> tuple[BarTickSlice, ...]:
+    """Freeze and validate all explicit input before consulting a live owner."""
+    if config.realtime_tick_provider is not None or type(config.realtime_ticks) not in (
+        list,
+        tuple,
+    ):
+        raise ResumeUnsupportedError("typed tick resume requires explicit list/tuple Tick input")
+    schedule_config = copy(config)
+    schedule_config.realtime_ticks = tuple(config.realtime_ticks)  # type: ignore[arg-type]
+    try:
+        return resolve_realtime_tick_schedule(schedule_config, series)
+    except Exception as error:
+        raise ResumeUnsupportedError(
+            "typed tick schedule admission failed: " + str(error)
+        ) from error
+
+
 def admit_realtime_resume(
     state: BacktestResumeState | None,
     config: BacktestConfig,
     strategy_class: type,
     series: BarSeries,
+    *,
+    admitted_schedule: tuple[BarTickSlice, ...] | None = None,
 ) -> tuple[BarTickSlice, ...]:
     """Admit complete owner graphs before scheduling or any live owner operation."""
     if config.resume_validation_policy != "strict":
@@ -44,15 +65,33 @@ def admit_realtime_resume(
         tuple,
     ):
         raise ResumeUnsupportedError("typed tick resume requires explicit list/tuple Tick input")
-    if getattr(strategy_class, "realtime_resume_runtime", None) != "config":
+    owner = getattr(strategy_class, "realtime_resume_runtime", None)
+    if owner not in ("config", "strategy"):
         raise ResumeUnsupportedError(
-            "typed tick strategy must declare realtime_resume_runtime='config'"
+            "typed tick strategy must declare its config or strategy runtime owner"
         )
-    runtime_class = type(config.runtime)
-    owners = (
-        ("runtime_state", runtime_class, None if state is None else state.runtime_state),
-        ("strategy_state", strategy_class, None if state is None else state.strategy_state),
-    )
+    owners = [("strategy_state", strategy_class, None if state is None else state.strategy_state)]
+    marker = None if state is None else state.metadata.get("realtime_runtime_owner")
+    if owner == "strategy":
+        if config.runtime is not None or (state is not None and state.runtime_state is not None):
+            raise ResumeUnsupportedError(
+                "strategy-owned tick runtime cannot have an external owner"
+            )
+        if state is not None and marker != "strategy-checkpoint-v1":
+            raise ResumeUnsupportedError(
+                "tick checkpoint runtime owner differs from selected strategy"
+            )
+        if not callable(getattr(strategy_class, "_commit_bar", None)):
+            raise ResumeUnsupportedError(
+                "strategy-owned tick runtime needs a required bar commit hook"
+            )
+    else:
+        if marker is not None:
+            raise ResumeUnsupportedError("tick checkpoint runtime owner differs from config owner")
+        owners.insert(
+            0,
+            ("runtime_state", type(config.runtime), None if state is None else state.runtime_state),
+        )
     validators: list[tuple[str, Any, object]] = []
     for label, cls, payload in owners:
         if state is not None and payload is None:
@@ -82,14 +121,11 @@ def admit_realtime_resume(
                 ) from error
     # Preserve the config identity's original list/tuple kind, then freeze input
     # only for resolution. Reuse this admitted immutable schedule during execution.
-    schedule_config = copy(config)
-    schedule_config.realtime_ticks = tuple(config.realtime_ticks)  # type: ignore[arg-type]
-    try:
-        schedule = resolve_realtime_tick_schedule(schedule_config, series)
-    except Exception as error:
-        raise ResumeUnsupportedError(
-            "typed tick schedule admission failed: " + str(error)
-        ) from error
+    schedule = (
+        admitted_schedule
+        if admitted_schedule is not None
+        else admit_explicit_tick_schedule(config, series)
+    )
     if state is not None:
         expected = state.metadata.get("realtime_tick_schedule_fingerprint")
         actual = realtime_tick_schedule_fingerprint(schedule[: state.bar_index + 1])

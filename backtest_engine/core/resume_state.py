@@ -73,14 +73,10 @@ def _validate_strict_statistics_state(
     }
     missing = sorted(required - statistics.keys())
     if missing:
-        raise ResumeUnsupportedError(
-            f"{label} statistics_state is missing fields: {missing}"
-        )
+        raise ResumeUnsupportedError(f"{label} statistics_state is missing fields: {missing}")
     for name in _STRICT_STATISTICS_LISTS:
         if not isinstance(statistics[name], list):
-            raise ResumeUnsupportedError(
-                f"{label} statistics_state.{name} must be a list"
-            )
+            raise ResumeUnsupportedError(f"{label} statistics_state.{name} must be a list")
     for name in _STRICT_STATISTICS_COUNTS:
         value = statistics[name]
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -126,8 +122,7 @@ def _validate_strict_statistics_against_broker(
         "closed_trade_stats_count": sum(
             1
             for trade in broker.closed_trades
-            if trade.exit_bar_index is not None
-            and trade.exit_bar_index >= score_start_index
+            if trade.exit_bar_index is not None and trade.exit_bar_index >= score_start_index
         ),
         "engine_closed_trade_stats_count": len(broker.closed_trades),
         "engine_gross_profit_total": gross_profit,
@@ -139,8 +134,7 @@ def _validate_strict_statistics_against_broker(
     for name, value in expected.items():
         if statistics[name] != value:
             raise ResumeUnsupportedError(
-                f"strict resume statistics_state.{name} does not match "
-                "broker_state.closed_trades"
+                f"strict resume statistics_state.{name} does not match broker_state.closed_trades"
             )
 
 
@@ -169,13 +163,12 @@ def prevalidate_strict_resume_before_external_state(
 
 def _validate_strict_tick_state(resume_state: BacktestResumeState) -> dict[str, Any]:
     if resume_state.strategy_state is None:
-        raise ResumeUnsupportedError(
-            "strict tick resume state is missing strategy_state"
-        )
-    if resume_state.runtime_state is None:
-        raise ResumeUnsupportedError(
-            "strict tick resume state is missing runtime_state"
-        )
+        raise ResumeUnsupportedError("strict tick resume state is missing strategy_state")
+    if (
+        resume_state.runtime_state is None
+        and resume_state.metadata.get("realtime_runtime_owner") != "strategy-checkpoint-v1"
+    ):
+        raise ResumeUnsupportedError("strict tick resume state is missing runtime_state")
     return _validate_strict_statistics_state(resume_state, label="strict tick resume")
 
 
@@ -522,6 +515,8 @@ def export_resume_state(
         metadata["bar_prefix_fingerprint"] = bar_prefix_fingerprint(series, max(0, bar_index + 1))
     tick_schedule = getattr(engine, "_realtime_tick_schedule", None)
     if tick_schedule is not None:
+        if getattr(strategy, "realtime_resume_runtime", None) == "strategy":
+            metadata["realtime_runtime_owner"] = "strategy-checkpoint-v1"
         metadata["realtime_tick_schedule_fingerprint"] = realtime_tick_schedule_fingerprint(
             tick_schedule[: max(0, bar_index + 1)]
         )

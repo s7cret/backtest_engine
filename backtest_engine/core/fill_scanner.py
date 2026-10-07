@@ -128,6 +128,7 @@ def _scan_orders_at_path_point(
         current_bar_close_activation = (
             engine.config.process_orders_on_close
             and order.created_bar_index == bar_index
+            and not order.immediately
         )
         if current_bar_close_activation and tick_phase == "non_final":
             continue

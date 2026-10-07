@@ -159,7 +159,11 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         admitted_tick_schedule = None
         native_backend = callable(getattr(execution_backend, "prepare_native_execution", None))
         native_backend_name = None
-        if isinstance(resume_state, bytes) or native_backend:
+        strategy_tick_owner = (
+            self.config.calc_on_every_tick
+            and getattr(strategy_class, "realtime_resume_runtime", None) == "strategy"
+        )
+        if isinstance(resume_state, bytes) or native_backend or strategy_tick_owner:
             from copy import copy
 
             from backtest_engine.core.engine_realtime import config_snapshot_hash
@@ -211,9 +215,20 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                     resume_plan,
                     mark_tick=self.config.mintick or infer_price_tick(resolved_resume_series),
                 )
+            if self.config.calc_on_every_tick:
+                from backtest_engine.core.resume_realtime import admit_explicit_tick_schedule
+
+                admitted_tick_schedule = admit_explicit_tick_schedule(
+                    admission_config, admitted_resume_series
+                )
             if native_backend:
                 from backtest_engine.core.state_snapshot import clone_state
 
+                tick_context = (
+                    {"tick_schedule": admitted_tick_schedule}
+                    if self.config.calc_on_every_tick
+                    else {}
+                )
                 prepared = prepare_native_backend(
                     execution_backend,
                     engine=self,
@@ -222,6 +237,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                     series=admitted_resume_series,
                     resume_state=clone_state(resume_state),
                     callbacks=callbacks,
+                    **tick_context,
                 )
                 native_backend_name = getattr(execution_backend, "name")
                 strategy_class, params, callbacks = (
@@ -230,11 +246,15 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                     prepared.callbacks,
                 )
                 execution_backend = None
-            if self.config.calc_on_every_tick and (resume_state is not None or native_backend):
+            if self.config.calc_on_every_tick:
                 from backtest_engine.core.resume_realtime import admit_realtime_resume
 
                 admitted_tick_schedule = admit_realtime_resume(
-                    resume_state, admission_config, strategy_class, admitted_resume_series
+                    resume_state,
+                    admission_config,
+                    strategy_class,
+                    admitted_resume_series,
+                    admitted_schedule=admitted_tick_schedule,
                 )
         t0 = time.perf_counter()
         params = params or {}

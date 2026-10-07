@@ -104,8 +104,9 @@ pure runtime/strategy preflight described below, after preparation selects the
 trusted strategy class. Fresh prepared tick runs also validate the complete
 explicit schedule and owner rollback/preflight contracts before live reset.
 Provider-driven streams, missing pure owner validators and provisional cuts are
-rejected. The RC6 generated historical adapter retains its own tick rejection
-until its existing complete owners support that lifecycle.
+rejected. For explicit tick preparation the backend also receives the immutable
+`tick_schedule` already admitted by the native scheduler. Historical preparation
+keeps its existing keyword context.
 It is a local owner adapter, not protected-worker or full-job resume acceptance.
 
 Committed explicit-tick restore is also available for callers that supply trusted
@@ -142,6 +143,38 @@ reconstruction and the processed tick prefix, then reuses that schedule once for
 execution. Unknown/partial schemas, generic mappings in required typed slots,
 provisional/abort state forbidden by the owner, and late nested corruption are
 rejected before live state changes.
+
+An owner that already implements transactional ordinary/varip rollback may declare
+`realtime_resume_runtime = "strategy"`. It must supply complete pure strategy
+preflight, export/restore, and the required `_commit_bar(index)` hook; configured
+runtime and external `runtime_state` must both be absent. The engine runs the same
+tick scheduler, cumulative OHLCV builder, callback events and broker fill loop,
+while each strategy callback transaction performs its own rollback. The native
+loop calls the required commit hook before protocol/bar-end publication, even
+when optional user callbacks have been disabled.
+
+These committed exports carry the closed discriminator
+`metadata.realtime_runtime_owner="strategy-checkpoint-v1"`. The complete runtime
+graph is owned by `strategy_state`. Unknown discriminators, a duplicate external
+runtime, a missing discriminator, or disagreement with the caller-selected class
+reject. The existing envelope version is unchanged; an older reader rejects the
+absent external runtime. JSON still cannot select a Python owner or skip its
+complete validator.
+
+The RC6 generated adapter uses the existing PineLib callback transactions and
+`finalize_bar`, preserving ordinary rollback and varip through non-final and
+fill-recalculation callbacks. Its existing whole-graph checkpoint owner admits
+the committed graph; primary histories and every callback receipt additionally
+bind to the native admitted bars/tick stream. Tick input stays owned by the native
+config/schedule fingerprints; the generated config identity excludes that local
+handle without changing protected worker transport. Provisional cuts refuse
+export. The existing experimental intrabar opt-in remains required. Compiled
+immutable-snapshot requests retain their historical-only guard; this tick slice
+does not admit live request revisions or full-job/protected worker recovery.
+
+Native immediate close commands use the existing closing-point scan on the
+current observed tick. Ordinary newly created orders remain first eligible on
+the next tick, with configured parent-close processing retained.
 
 Foreign generated checkpoints remain owned by their existing generated-session
 and PineLib checkpoint admission code. This codec does not fork those schemas or
