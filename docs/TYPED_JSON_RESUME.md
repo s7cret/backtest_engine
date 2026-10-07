@@ -89,7 +89,7 @@ dataclass mappings do not become typed restore checkpoints automatically. Existi
 in-memory typed resume remains available.
 
 A trusted caller-selected backend can implement `prepare_native_execution` for
-the historical native loop. Pass it through the existing
+the native broker loop. Pass it through the existing
 `BacktestEngine.run(..., execution_backend=backend, resume_state=bytes)` API.
 The engine first applies the same typed transport, accounting, config and bar
 prefix admission as native bytes restore, then calls the backend's complete
@@ -99,7 +99,13 @@ with the native strategy class, parameters and callbacks before any live reset.
 Incomplete results and owner failures reject before replacement. The prepared
 strategy uses the existing native loop and export/restore contracts. JSON cannot
 select this backend, a Python import or an alternate model registry. Execute-only
-foreign backends still reject bytes; this contract currently excludes ticks.
+foreign backends still reject bytes. Explicit-tick backends use the same native
+pure runtime/strategy preflight described below, after preparation selects the
+trusted strategy class. Fresh prepared tick runs also validate the complete
+explicit schedule and owner rollback/preflight contracts before live reset.
+Provider-driven streams, missing pure owner validators and provisional cuts are
+rejected. The RC6 generated historical adapter retains its own tick rejection
+until its existing complete owners support that lifecycle.
 It is a local owner adapter, not protected-worker or full-job resume acceptance.
 
 Committed explicit-tick restore is also available for callers that supply trusted

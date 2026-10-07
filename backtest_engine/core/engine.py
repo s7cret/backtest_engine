@@ -167,7 +167,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                 JsonResumeStateSerializer,
                 admit_resume_input,
             )
-            from backtest_engine.errors import ResumeUnsupportedError
+            from backtest_engine.errors import ConfigError, ResumeUnsupportedError
 
             if isinstance(resume_state, bytes):
                 resume_state = JsonResumeStateSerializer().loads(resume_state)
@@ -183,12 +183,13 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                     "typed JSON resume needs a matching native bar/tick execution owner; "
                     "foreign execution needs its owner codec"
                 )
-            if native_backend and self.config.calc_on_every_tick:
-                raise ResumeUnsupportedError(
-                    "native backend preparation currently requires historical bars"
-                )
             admission_config = copy(self.config)
-            validate_backtest_config(admission_config)
+            try:
+                validate_backtest_config(admission_config)
+            except ConfigError as error:
+                raise ResumeUnsupportedError(
+                    "execution config admission failed: " + str(error)
+                ) from error
             resolved_resume_series = self._resolve_bars(bars)
             admitted_resume_series = self._slice_range(resolved_resume_series)
             resume_plan = build_score_window_plan(
@@ -210,12 +211,6 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                     resume_plan,
                     mark_tick=self.config.mintick or infer_price_tick(resolved_resume_series),
                 )
-                if self.config.calc_on_every_tick:
-                    from backtest_engine.core.resume_realtime import admit_realtime_resume
-
-                    admitted_tick_schedule = admit_realtime_resume(
-                        resume_state, admission_config, strategy_class, admitted_resume_series
-                    )
             if native_backend:
                 from backtest_engine.core.state_snapshot import clone_state
 
@@ -235,6 +230,12 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                     prepared.callbacks,
                 )
                 execution_backend = None
+            if self.config.calc_on_every_tick and (resume_state is not None or native_backend):
+                from backtest_engine.core.resume_realtime import admit_realtime_resume
+
+                admitted_tick_schedule = admit_realtime_resume(
+                    resume_state, admission_config, strategy_class, admitted_resume_series
+                )
         t0 = time.perf_counter()
         params = params or {}
         self.callbacks = callbacks or BacktestCallbacks()
