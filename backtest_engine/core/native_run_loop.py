@@ -273,6 +273,9 @@ def run_native_strategy(
             engine._cb("on_equity", point)
         stop_now, status, early_reason = _early_stop_state(engine, i, extremes)
         runtime.end_bar()
+        commit_owner = getattr(strategy, "_commit_bar", None)
+        if callable(commit_owner):
+            commit_owner(i)
         emit_protocol_bar_commit(engine, strategy, bar, i)
         engine._cb("on_bar_end", bar, i, engine.state)
         last_processed_index = i
