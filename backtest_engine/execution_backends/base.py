@@ -1,7 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, Sequence
+from typing import Any, Protocol, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from backtest_engine.models import BacktestCallbacks
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedNativeExecution:
+    """Trusted local preparation; never a serialized checkpoint model."""
+
+    strategy_class: type
+    params: dict[str, Any]
+    callbacks: BacktestCallbacks | None = None
 
 
 @dataclass(slots=True)

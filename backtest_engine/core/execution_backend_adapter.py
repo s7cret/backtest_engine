@@ -5,14 +5,39 @@ from typing import Any, cast
 
 from backtest_engine.config import BacktestConfig
 from backtest_engine.core.backend_result import trade_from_backend_trade
-from backtest_engine.errors import ConfigError
+from backtest_engine.errors import ConfigError, ResumeUnsupportedError
 from backtest_engine.execution_backends.base import (
     BackendExecutionResult,
     ExecutionBackend,
+    PreparedNativeExecution,
 )
-from backtest_engine.models import BarSeries, Diagnostic, EquityPoint, Trade
+from backtest_engine.models import BacktestCallbacks, BarSeries, Diagnostic, EquityPoint, Trade
 from backtest_engine.results import equity_point, summarize_equity_curve
 from backtest_engine.results.result import BacktestResult
+
+
+def prepare_native_backend(execution_backend: Any, **context: Any) -> PreparedNativeExecution:
+    """Admit a caller-selected owner's complete state before native live changes."""
+    name = getattr(execution_backend, "name", None)
+    if type(name) is not str or not name:
+        raise ResumeUnsupportedError("native backend needs an explicit name")
+    try:
+        prepared = execution_backend.prepare_native_execution(**context)
+    except Exception as error:
+        raise ResumeUnsupportedError(
+            "execution backend owner preflight failed: " + str(error)
+        ) from error
+    if (
+        type(prepared) is not PreparedNativeExecution
+        or not isinstance(prepared.strategy_class, type)
+        or type(prepared.params) is not dict
+        or any(type(key) is not str for key in prepared.params)
+        or (
+            prepared.callbacks is not None and not isinstance(prepared.callbacks, BacktestCallbacks)
+        )
+    ):
+        raise ResumeUnsupportedError("native backend preparation contract is incomplete")
+    return prepared
 
 
 def resolve_execution_backend(
@@ -70,10 +95,7 @@ def backend_equity_curve(
 
 
 def backend_trades(backend_result: BackendExecutionResult) -> list[Trade]:
-    return [
-        trade_from_backend_trade(trade, idx)
-        for idx, trade in enumerate(backend_result.trades)
-    ]
+    return [trade_from_backend_trade(trade, idx) for idx, trade in enumerate(backend_result.trades)]
 
 
 def backend_runtime_warnings(
@@ -141,7 +163,7 @@ def run_execution_backend(
         params=params,
     )
     apply_backend_result(engine, backend_result, engine.config)
-    result = engine._result(
+    result: BacktestResult = engine._result(
         series,
         engine._backend_equity_curve,
         "completed",
