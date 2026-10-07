@@ -24,7 +24,7 @@ from backtest_engine.models import BacktestResumeState, BarSeries
 
 
 def admit_realtime_resume(
-    state: BacktestResumeState,
+    state: BacktestResumeState | None,
     config: BacktestConfig,
     strategy_class: type,
     series: BarSeries,
@@ -32,9 +32,12 @@ def admit_realtime_resume(
     """Admit complete owner graphs before scheduling or any live owner operation."""
     if config.resume_validation_policy != "strict":
         raise ResumeUnsupportedError("typed tick resume requires strict admission")
-    if state.metadata.get("realtime_resume_boundary") != "committed-parent-bar-v1":
+    if (
+        state is not None
+        and state.metadata.get("realtime_resume_boundary") != "committed-parent-bar-v1"
+    ):
         raise ResumeUnsupportedError("typed tick resume requires a committed parent-bar boundary")
-    if state.bar_index < 0 or state.bar_index >= len(series):
+    if state is not None and (state.bar_index < 0 or state.bar_index >= len(series)):
         raise ResumeUnsupportedError("typed tick cursor must reference a committed input bar")
     if config.realtime_tick_provider is not None or type(config.realtime_ticks) not in (
         list,
@@ -47,12 +50,12 @@ def admit_realtime_resume(
         )
     runtime_class = type(config.runtime)
     owners = (
-        ("runtime_state", runtime_class, state.runtime_state),
-        ("strategy_state", strategy_class, state.strategy_state),
+        ("runtime_state", runtime_class, None if state is None else state.runtime_state),
+        ("strategy_state", strategy_class, None if state is None else state.strategy_state),
     )
     validators: list[tuple[str, Any, object]] = []
     for label, cls, payload in owners:
-        if payload is None:
+        if state is not None and payload is None:
             raise ResumeUnsupportedError("typed tick resume is missing " + label)
         descriptor = inspect.getattr_static(cls, "validate_resume_state", None)
         if not isinstance(descriptor, (staticmethod, classmethod)):
@@ -64,18 +67,19 @@ def admit_realtime_resume(
         _require_rollback_state(strategy_class, config.runtime)
     except Exception as error:
         raise ResumeUnsupportedError("typed tick owner rollback contract is incomplete") from error
-    committed_bar = series.get_bar(state.bar_index)
-    for label, validate, payload in validators:
-        try:
-            result = validate(
-                clone_state(payload), bar_index=state.bar_index, committed_bar=committed_bar
-            )
-            if result is not None:
-                raise ValueError("pure owner validator must return None")
-        except Exception as error:
-            raise ResumeUnsupportedError(
-                label + " owner preflight failed: " + str(error)
-            ) from error
+    if state is not None:
+        committed_bar = series.get_bar(state.bar_index)
+        for label, validate, payload in validators:
+            try:
+                result = validate(
+                    clone_state(payload), bar_index=state.bar_index, committed_bar=committed_bar
+                )
+                if result is not None:
+                    raise ValueError("pure owner validator must return None")
+            except Exception as error:
+                raise ResumeUnsupportedError(
+                    label + " owner preflight failed: " + str(error)
+                ) from error
     # Preserve the config identity's original list/tuple kind, then freeze input
     # only for resolution. Reuse this admitted immutable schedule during execution.
     schedule_config = copy(config)
@@ -86,10 +90,11 @@ def admit_realtime_resume(
         raise ResumeUnsupportedError(
             "typed tick schedule admission failed: " + str(error)
         ) from error
-    expected = state.metadata.get("realtime_tick_schedule_fingerprint")
-    actual = realtime_tick_schedule_fingerprint(schedule[: state.bar_index + 1])
-    if expected != actual:
-        raise ResumeUnsupportedError(
-            "typed tick schedule fingerprint does not match processed ticks"
-        )
+    if state is not None:
+        expected = state.metadata.get("realtime_tick_schedule_fingerprint")
+        actual = realtime_tick_schedule_fingerprint(schedule[: state.bar_index + 1])
+        if expected != actual:
+            raise ResumeUnsupportedError(
+                "typed tick schedule fingerprint does not match processed ticks"
+            )
     return schedule
