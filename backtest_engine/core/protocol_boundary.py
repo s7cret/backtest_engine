@@ -279,7 +279,9 @@ def sealed_state_artifact(
     bar_index: int,
     recalc_iteration: int,
 ) -> dict[str, Any]:
-    export = getattr(strategy, "export_state", None)
+    export = getattr(strategy, "export_protocol_state", None)
+    if not callable(export):
+        export = getattr(strategy, "export_state", None)
     if not callable(export):
         raise ValueError("strategy must provide export_state for protocol callback")
     version, commit = _engine_identity(execution_context)
