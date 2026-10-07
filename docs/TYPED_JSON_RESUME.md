@@ -40,6 +40,21 @@ state, invalid indices and fill links, inconsistent trade statistics, and invali
 risk/exit-template data. Existing strict restore still checks the strategy/runtime
 contracts and restores their state through its rollback path.
 
+Native fill history is reconciled through durable opening fill indices and closing
+trade identities, quantities, and commission allocations. Terminal orders may have
+been pruned with `collect_order_lifecycle=False`; forced-close and margin-call
+orders can be ephemeral. These are supported without accepting an unknown fill
+identity disconnected from the trade graph. Position direction/quantity/average,
+cash/equity, realized/open profit, fees, and equity-point accounting are checked
+using the native instrument, commission, mark rounding, and dust-threshold owners.
+
+New exports include a closed `engine-accounting-v1` context under the reserved
+`metadata.native_accounting` key. It carries producer accounting parameters and
+the committed mark, and strict public restore binds it to the current config and
+bar prefix. Complete legacy checkpoints without this context are checked against
+the consuming config. History checks compare bounded input lengths/iterators;
+an untrusted cursor never allocates an expected array of that cursor's size.
+
 For bytes passed to `BacktestEngine.run`, decoding and complete payload admission
 occur before callbacks are replaced or the live engine is reset. Config identity,
 available cursor, processed bar fingerprint, required equity history, and score

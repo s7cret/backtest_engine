@@ -24,6 +24,12 @@ from backtest_engine.core.resume_state import (
     bar_prefix_fingerprint,
 )
 from backtest_engine.core.risk_rules import validate_snapshot_risk
+from backtest_engine.core.resume_accounting import (
+    native_accounting_inputs,
+    read_accounting_inputs,
+    validate_broker_ledger,
+    validate_broker_values,
+)
 from backtest_engine.core.score_window import ScoreWindowPlan
 from backtest_engine.core.state_snapshot import BrokerSnapshot, JsonStateSerializer
 from backtest_engine.errors import ResumeUnsupportedError
@@ -313,11 +319,6 @@ def _validate_state(state: BacktestResumeState) -> None:
         _index(fill.bar_index, cursor, "fill")
         if fill.qty <= 0 or fill.commission < 0:
             _fail("invalid fill quantity/commission")
-        if not any(
-            order.id == fill.order_id and order.created_bar_index <= fill.bar_index
-            for order in broker.orders
-        ):
-            _fail("fill refers to an unknown order")
     for open_state, trades in ((True, broker.open_trades), (False, broker.closed_trades)):
         for trade in trades:
             _index(trade.entry_bar_index, cursor, "trade entry")
@@ -350,6 +351,12 @@ def _validate_state(state: BacktestResumeState) -> None:
                 _fail("closed trade is incomplete")
     for key, row in broker.all_entry_exits.items():
         _exit_template(key, row, cursor, persistent=True)
+    accounting = (
+        read_accounting_inputs(state.metadata["native_accounting"])
+        if "native_accounting" in state.metadata
+        else None
+    )
+    validate_broker_ledger(broker, qty_epsilon=accounting.qty_epsilon if accounting else 1e-12)
     statistics = _validate_strict_statistics_state(state, label="typed JSON resume")
     if set(statistics) != {
         *_STRICT_STATISTICS_LISTS,
@@ -382,6 +389,17 @@ def _validate_state(state: BacktestResumeState) -> None:
     # Reuse its complete engine totals validation with the all-bars count here.
     all_bars = {**statistics, "closed_trade_stats_count": len(broker.closed_trades)}
     _validate_strict_statistics_against_broker(all_bars, broker, score_start_index=0)
+    if accounting:
+        validate_broker_values(
+            broker,
+            accounting,
+            mark_price=accounting.mark_price,
+            mark_tick=accounting.mintick,
+            equity_points=statistics["equity_curve"],
+            point_prices={cursor: accounting.mark_price}
+            if accounting.mark_price is not None
+            else None,
+        )
 
 
 def admit_resume_input(
@@ -390,14 +408,37 @@ def admit_resume_input(
     config_hash: str,
     series: BarSeries,
     plan: ScoreWindowPlan,
+    mark_tick: float | None = None,
 ) -> None:
     """Check contextual admission before replacing any live engine state."""
     if state.bar_index >= len(series):
         _fail("bar_index must reference an available input bar")
+    if "native_accounting" not in state.metadata:
+        legacy_statistics = cast(dict[str, Any], state.statistics_state)
+        validate_broker_values(
+            cast(BrokerSnapshot, state.broker_state),
+            config,
+            mark_price=series.close[state.bar_index] if state.bar_index >= 0 else None,
+            mark_tick=mark_tick,
+            equity_points=legacy_statistics["equity_curve"],
+        )
     if config.resume_validation_policy != "strict":
         return  # The existing consuming owner emits lenient mismatch diagnostics.
     if state.config_snapshot_hash != config_hash:
         _fail("config hash does not match current config snapshot")
+    if "native_accounting" in state.metadata:
+        accounting = read_accounting_inputs(state.metadata["native_accounting"])
+        expected = read_accounting_inputs(
+            native_accounting_inputs(
+                config,
+                accounting.mintick,
+                series.close[state.bar_index] if state.bar_index >= 0 else None,
+            )
+        )
+        if accounting != expected or (
+            config.mintick is not None and accounting.mintick != config.mintick
+        ):
+            _fail("accounting context does not match config/input identity")
     fingerprint = state.metadata.get("bar_prefix_fingerprint")
     if fingerprint is None:
         _fail("strict resume state is missing bar prefix fingerprint")
@@ -416,6 +457,18 @@ def admit_resume_input(
         _fail("score equity history does not match the processed score window")
     if fingerprint != bar_prefix_fingerprint(series, state.bar_index + 1):
         _fail("bar prefix fingerprint does not match processed bars")
+    if "native_accounting" in state.metadata:
+        validate_broker_values(
+            cast(BrokerSnapshot, state.broker_state),
+            accounting,
+            mark_price=accounting.mark_price,
+            mark_tick=accounting.mintick,
+            equity_points=statistics["equity_curve"],
+            point_prices={
+                point.bar_index: series.close[point.bar_index]
+                for point in statistics["equity_curve"]
+            },
+        )
     _validate_strict_statistics_against_broker(
         statistics,
         cast(BrokerSnapshot, state.broker_state),
@@ -453,7 +506,7 @@ class JsonResumeStateSerializer:
         decoded = _decode(encoded, _Budget(self.max_bytes, self.max_depth, self.max_items), 0)
         try:
             _validate_state(decoded)
-        except (ValueError, TypeError, OverflowError) as error:
+        except (ValueError, TypeError, ArithmeticError) as error:
             raise ResumeUnsupportedError(
                 "typed JSON resume: invalid state: " + str(error)
             ) from error
@@ -494,7 +547,7 @@ class JsonResumeStateSerializer:
             _fail("root must be BacktestResumeState")
         try:
             _validate_state(state)
-        except (ValueError, TypeError, OverflowError) as error:
+        except (ValueError, TypeError, ArithmeticError) as error:
             raise ResumeUnsupportedError(
                 "typed JSON resume: invalid state: " + str(error)
             ) from error

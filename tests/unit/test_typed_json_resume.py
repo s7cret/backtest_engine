@@ -10,7 +10,13 @@ import sys
 import pytest
 from openpine_contracts import Finality
 
-from backtest_engine import BacktestConfig, BacktestEngine, Bar, JsonResumeStateSerializer
+from backtest_engine import (
+    BacktestConfig,
+    BacktestEngine,
+    Bar,
+    InstrumentModel,
+    JsonResumeStateSerializer,
+)
 from backtest_engine.core.state_snapshot import JsonStateSerializer, StateSerializer
 from backtest_engine.errors import ResumeUnsupportedError
 
@@ -48,6 +54,38 @@ class PersistentExitStrategy(FixedOcaStrategy):
             self.ctx.exit("X", profit=5)
 
 
+class NativeEntryOnly(FixedOcaStrategy):
+    def run_bar(self, bar, index):
+        if index == 0:
+            self.ctx.entry("L", "long", qty=2)
+
+
+class NativeShortOnly(FixedOcaStrategy):
+    def run_bar(self, bar, index):
+        if index == 0:
+            self.ctx.entry("Short", "short", qty=80)
+
+
+class RepeatedOrders(FixedOcaStrategy):
+    def run_bar(self, bar, index):
+        self.ctx.order(str(index), "long", qty=1)
+
+
+class Reversal(FixedOcaStrategy):
+    def run_bar(self, bar, index):
+        if index == 0:
+            self.ctx.entry("A", "long", qty=2)
+        if index == 1:
+            self.ctx.entry("B", "short", qty=3)
+
+
+class PartialBracket(FixedOcaStrategy):
+    def run_bar(self, bar, index):
+        if index == 0:
+            self.ctx.entry("L", "long", qty=2)
+            self.ctx.exit("X", "L", profit=5, qty=1)
+
+
 def inputs(values=None, **options):
     values = values or [(100, 100, 100, 100), (100, 101, 97, 100), (100, 101, 89, 100)]
     bars = [
@@ -59,14 +97,16 @@ def inputs(values=None, **options):
         "1m",
         0,
         (len(bars) - 1) * 60000,
-        initial_capital=100000,
-        commission_type="none",
-        commission_value=0,
-        mintick=1,
-        force_close_on_end=False,
-        export_resume_state=True,
-        semantic_profile="strict_5x",
-        **options,
+        **{
+            "initial_capital": 100000,
+            "commission_type": "none",
+            "commission_value": 0,
+            "mintick": 1,
+            "force_close_on_end": False,
+            "export_resume_state": True,
+            "semantic_profile": "strict_5x",
+            **options,
+        },
     )
     return config, bars
 
@@ -253,6 +293,224 @@ def test_contextual_score_and_output_modes_retain_native_continuation(options, e
     assert fresh.position.size == 4 and fresh.equity == 100023
 
 
+def test_pruned_terminal_orders_restore_from_durable_trade_history():
+    config, bars = inputs(
+        [(100, 100, 100, 100)] * 45, collect_order_lifecycle=False, process_orders_on_close=True
+    )
+    old = BacktestEngine(config)
+    cut = old.run(RepeatedOrders, bars=bars[:36])
+    assert cut.status == "completed", cut.errors
+    assert len(old.fills) == 36 and len(old.orders) < 36
+    assert any(fill.order_id not in {order.id for order in old.orders} for fill in old.fills)
+    fresh = BacktestEngine(config)
+    result = fresh.run(
+        RepeatedOrders, bars=bars, resume_state=JsonResumeStateSerializer().dumps(cut.resume_state)
+    )
+    assert result.status == "completed", result.errors
+    assert [(fill.order_id, fill.bar_index, fill.price, fill.qty) for fill in fresh.fills] == [
+        (str(index), index, 100, 1) for index in range(45)
+    ]
+    assert len(fresh.open_trades) == 45
+    assert fresh.position.size == 45 and fresh.position.avg_price == 100
+    assert fresh.cash == fresh.equity == 100000
+
+
+def test_forced_close_ephemeral_order_roundtrip_refreshes_final_accounting():
+    config, bars = inputs(
+        [(100, 100, 100, 100), (100, 105, 100, 105), (110, 110, 110, 110)],
+        force_close_on_end=True,
+        commission_type="fixed_per_order",
+        commission_value=1,
+    )
+    old = BacktestEngine(config)
+    cut = old.run(NativeEntryOnly, bars=bars[:2])
+    assert cut.status == "completed", cut.errors
+    assert [(f.order_id, f.price, f.qty) for f in old.fills] == [
+        ("L", 100, 2),
+        ("forced_end_close", 105, 2),
+    ]
+    assert "forced_end_close" not in {order.id for order in old.orders}
+    assert old.cash == old.equity == 100008 and old.position.realized_profit == 8
+    fresh = BacktestEngine(config)
+    result = fresh.run(
+        NativeEntryOnly, bars=bars, resume_state=JsonResumeStateSerializer().dumps(cut.resume_state)
+    )
+    assert result.status == "completed", result.errors
+    assert fresh.cash == fresh.equity == 100008 and fresh.position.size == 0
+    assert len(fresh.closed_trades) == 1 and fresh.closed_trades[0].profit == 8
+    assert [(fill.order_id, fill.price, fill.qty) for fill in fresh.fills] == [
+        ("L", 100, 2),
+        ("forced_end_close", 105, 2),
+    ]
+
+
+def test_margin_call_ephemeral_order_roundtrip_continuation():
+    config, bars = inputs(
+        [(10, 10, 10, 10), (10, 12, 10, 12), (12, 12, 12, 12)],
+        initial_capital=1000,
+        margin_short=100,
+    )
+    old = BacktestEngine(config)
+    cut = old.run(NativeShortOnly, bars=bars[:2])
+    assert cut.status == "completed", cut.errors
+    assert [(f.order_id, f.price, f.qty) for f in old.fills] == [
+        ("Short", 10, 80),
+        ("Margin call", 12, 40),
+    ]
+    assert "Margin call" not in {order.id for order in old.orders}
+    fresh = BacktestEngine(config)
+    result = fresh.run(
+        NativeShortOnly, bars=bars, resume_state=JsonResumeStateSerializer().dumps(cut.resume_state)
+    )
+    assert result.status == "completed", result.errors
+    assert fresh.position.size == -40 and fresh.position.avg_price == 10
+    assert fresh.cash == 920 and fresh.equity == 840
+    assert [(t.qty, t.profit) for t in fresh.closed_trades] == [(40, -80)]
+
+
+@pytest.mark.parametrize(
+    "fee_type,fee_value,expected_cash,expected_profit",
+    [
+        ("none", 0, 100005, 5),
+        ("fixed_per_order", 1, 100003, 3.5),
+        ("fixed_per_contract", 1, 100002, 3),
+        ("percent", 1, 100001.95, 2.95),
+    ],
+)
+def test_partial_lot_commission_allocations_and_continuation(
+    fee_type, fee_value, expected_cash, expected_profit
+):
+    config, bars = inputs(
+        [(100, 100, 100, 100), (100, 100, 100, 100), (100, 106, 100, 100), (100, 110, 100, 110)],
+        commission_type=fee_type,
+        commission_value=fee_value,
+    )
+    old = BacktestEngine(config)
+    cut = old.run(PartialBracket, bars=bars[:3])
+    assert cut.status == "completed", cut.errors
+    fresh = BacktestEngine(config)
+    result = fresh.run(
+        PartialBracket, bars=bars, resume_state=JsonResumeStateSerializer().dumps(cut.resume_state)
+    )
+    assert result.status == "completed", result.errors
+    assert fresh.position.size == 1 and fresh.position.avg_price == 100
+    assert fresh.cash == pytest.approx(expected_cash)
+    assert fresh.equity == pytest.approx(expected_cash + 10)
+    assert len(fresh.closed_trades) == 1
+    assert fresh.closed_trades[0].profit == pytest.approx(expected_profit)
+
+
+def test_reversal_opening_and_closing_share_the_same_fill_without_double_count():
+    config, bars = inputs(
+        [(100, 100, 100, 100), (100, 100, 100, 100), (110, 110, 110, 110), (110, 110, 110, 110)],
+        commission_type="fixed_per_contract",
+        commission_value=1,
+    )
+    old = BacktestEngine(config)
+    cut = old.run(Reversal, bars=bars[:3])
+    assert cut.status == "completed", cut.errors
+    fresh = BacktestEngine(config)
+    result = fresh.run(
+        Reversal, bars=bars, resume_state=JsonResumeStateSerializer().dumps(cut.resume_state)
+    )
+    assert result.status == "completed", result.errors
+    assert [(f.order_id, f.price, f.qty, f.commission) for f in fresh.fills] == [
+        ("A", 100, 2, 2),
+        ("B", 110, 5, 5),
+    ]
+    assert fresh.position.size == -3 and fresh.position.avg_price == 110
+    assert fresh.cash == fresh.equity == 100013
+    assert [(t.qty, t.profit) for t in fresh.closed_trades] == [(2, 16)]
+    assert fresh.open_trades[0].commission_entry == 3
+
+
+def test_inverse_instrument_uses_its_native_pnl_for_checkpoint_admission():
+    config, bars = inputs(
+        [(100, 100, 100, 100), (100, 100, 100, 100), (100, 106, 100, 100), (100, 110, 100, 110)],
+        instrument_model=InstrumentModel(mode="inverse_futures"),
+    )
+    old = BacktestEngine(config)
+    cut = old.run(PartialBracket, bars=bars[:3])
+    assert cut.status == "completed", cut.errors
+    fresh = BacktestEngine(config)
+    result = fresh.run(
+        PartialBracket, bars=bars, resume_state=JsonResumeStateSerializer().dumps(cut.resume_state)
+    )
+    assert result.status == "completed", result.errors
+    assert fresh.closed_trades[0].profit == pytest.approx(1 / 100 - 1 / 105)
+    assert fresh.cash == pytest.approx(100000 + 1 / 100 - 1 / 105)
+    assert fresh.equity == pytest.approx(100000 + 1 / 100 - 1 / 105 + 1 / 100 - 1 / 110)
+
+
+def test_legacy_complete_native_checkpoint_without_accounting_metadata_still_restores(envelope):
+    del envelope["state"]["fields"]["metadata"]["items"]["native_accounting"]
+    config, bars = inputs()
+    engine = BacktestEngine(config)
+    result = engine.run(FixedOcaStrategy, bars=bars, resume_state=json.dumps(envelope).encode())
+    assert result.status == "completed", result.errors
+    assert observe(engine) == CONTINUATION_EXPECTED
+
+
+@pytest.mark.parametrize("origin", ["pruned", "forced", "margin"])
+def test_unknown_fill_identity_still_rejected_for_each_permitted_history_origin(
+    origin, monkeypatch
+):
+    if origin == "pruned":
+        config, bars = inputs(
+            [(100, 100, 100, 100)] * 36, collect_order_lifecycle=False, process_orders_on_close=True
+        )
+        strategy, index = RepeatedOrders, 0
+    elif origin == "forced":
+        config, bars = inputs([(100, 100, 100, 100), (100, 105, 100, 105)], force_close_on_end=True)
+        strategy, index = NativeEntryOnly, 1
+    else:
+        config, bars = inputs(
+            [(10, 10, 10, 10), (10, 12, 10, 12)], initial_capital=1000, margin_short=100
+        )
+        strategy, index = NativeShortOnly, 1
+    producer = BacktestEngine(config)
+    result = producer.run(strategy, bars=bars)
+    envelope = json.loads(JsonResumeStateSerializer().dumps(result.resume_state))
+    envelope["state"]["fields"]["broker_state"]["fields"]["fills"][index]["fields"]["order_id"] = (
+        "forged"
+    )
+    consumer = BacktestEngine(config)
+
+    def forbidden_reset():
+        raise AssertionError("forged fill identity reached reset")
+
+    monkeypatch.setattr(consumer, "_reset_state", forbidden_reset)
+    with pytest.raises(ResumeUnsupportedError, match="identity|link|fill"):
+        consumer.run(strategy, bars=bars, resume_state=json.dumps(envelope).encode())
+
+
+def test_invalid_inverse_price_has_a_defined_admission_error():
+    config, bars = inputs(instrument_model=InstrumentModel(mode="inverse_futures"))
+    producer = BacktestEngine(config)
+    result = producer.run(FixedOcaStrategy, bars=bars[:2])
+    envelope = json.loads(JsonResumeStateSerializer().dumps(result.resume_state))
+    context = envelope["state"]["fields"]["metadata"]["items"]["native_accounting"]["items"]
+    context["mark_price"] = 0
+    with pytest.raises(ResumeUnsupportedError, match="invalid state"):
+        JsonResumeStateSerializer().loads(json.dumps(envelope).encode())
+
+
+@pytest.mark.parametrize("fault", ["missing", "unknown", "bool", "instrument", "schema"])
+def test_accounting_context_rejects_partial_or_foreign_values(envelope, fault, monkeypatch):
+    context = envelope["state"]["fields"]["metadata"]["items"]["native_accounting"]["items"]
+    if fault == "missing":
+        del context["commission_value"]
+    elif fault == "unknown":
+        context["extra"] = 0
+    elif fault == "bool":
+        context["initial_capital"] = True
+    elif fault == "schema":
+        context["schema_id"] = "foreign"
+    else:
+        context["instrument_model"]["items"]["mode"] = "foreign"
+    assert_rejected_without_live_mutation(json.dumps(envelope).encode(), monkeypatch)
+
+
 @pytest.fixture
 def envelope():
     return json.loads(JsonResumeStateSerializer().dumps(checkpoint()))
@@ -288,6 +546,12 @@ CORRUPTIONS = [
     (ROOT + ("config_snapshot_hash",), "bad"),
     (ROOT + ("broker_state", "type"), "mapping"),
     (BROKER + ("position", "fields", "size"), -2),
+    (BROKER + ("position", "fields", "size"), 3),
+    (BROKER + ("position", "fields", "avg_price"), 97),
+    (BROKER + ("position", "fields", "open_profit"), 4),
+    (BROKER + ("position", "fields", "realized_profit"), 1),
+    (BROKER + ("cash",), 100001),
+    (BROKER + ("equity",), 100004),
     (BROKER + ("cash",), True),
     (BROKER + ("max_drawdown",), -1),
     (BROKER + ("last_trade_bar",), 2),
@@ -308,8 +572,13 @@ CORRUPTIONS = [
     (FILL + ("order_id",), "absent"),
     (FILL + ("qty",), 0),
     (FILL + ("commission",), -1),
+    (FILL + ("commission",), 1),
+    (FILL + ("qty",), 2),
+    (FILL + ("position_direction_after",), "short"),
     (TRADE + ("entry_fill_index",), 1),
     (TRADE + ("entry_qty",), None),
+    (TRADE + ("entry_qty",), 2),
+    (TRADE + ("commission_entry",), 1),
     (TRADE + ("exit_bar_index",), 1),
     (TRADE + ("is_open",), False),
     (STATS + ("equity_curve", 0, "fields", "bar_index"), 1),

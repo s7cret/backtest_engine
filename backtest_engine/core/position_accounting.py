@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Literal
 
+from backtest_engine.config import BacktestConfig
 from backtest_engine.models import Bar, Order, Position, Trade
 
 
@@ -376,7 +377,12 @@ def _closed_trade_exit_prices(engine: Any, order: Order) -> tuple[float | None, 
 
 
 def _qty_epsilon(engine: Any) -> float:
-    qty_step = getattr(getattr(engine, "config", None), "qty_step", None) or 0.0
+    return quantity_epsilon(getattr(engine, "config", None))
+
+
+def quantity_epsilon(config: BacktestConfig | None) -> float:
+    """The native accounting dust threshold, also used by checkpoint admission."""
+    qty_step = (config.qty_step or 0.0) if config is not None else 0.0
     return max(1e-12, float(qty_step) * 1e-6)
 
 

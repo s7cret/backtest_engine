@@ -190,6 +190,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                 config_snapshot_hash(admission_config),
                 admitted_resume_series,
                 resume_plan,
+                mark_tick=self.config.mintick or infer_price_tick(resolved_resume_series),
             )
         t0 = time.perf_counter()
         params = params or {}
@@ -602,6 +603,8 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             immediately=True,
         )
         self._fill(o, bar, i, bar.close, "close")
+        self._update_open_profit(bar.close)
+        self._update_state()
 
     def _update_open_profit(self, price: float) -> None:
         tick = getattr(self, "_effective_mintick", None) or self.config.mintick
