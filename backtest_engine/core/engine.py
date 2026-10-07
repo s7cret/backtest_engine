@@ -153,6 +153,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         bar_envelopes: list[dict[str, Any]] | None = None,
     ) -> BacktestResult:
         resolved_resume_series = None
+        admitted_tick_schedule = None
         if isinstance(resume_state, bytes):
             from copy import copy
 
@@ -163,12 +164,14 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             resume_state = JsonResumeStateSerializer().loads(resume_state)
             if (
                 execution_backend is not None
-                or self.config.calc_on_every_tick
-                or "realtime_tick_schedule_fingerprint" in resume_state.metadata
+                or (
+                    not self.config.calc_on_every_tick
+                    and "realtime_tick_schedule_fingerprint" in resume_state.metadata
+                )
             ):
                 raise ResumeUnsupportedError(
-                    "typed JSON resume supports native committed bar state; "
-                    "foreign/realtime execution needs its owner codec"
+                    "typed JSON resume needs a matching native bar/tick execution owner; "
+                    "foreign execution needs its owner codec"
                 )
             admission_config = copy(self.config)
             validate_backtest_config(admission_config)
@@ -192,6 +195,12 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                 resume_plan,
                 mark_tick=self.config.mintick or infer_price_tick(resolved_resume_series),
             )
+            if self.config.calc_on_every_tick:
+                from backtest_engine.core.resume_realtime import admit_realtime_resume
+
+                admitted_tick_schedule = admit_realtime_resume(
+                    resume_state, admission_config, strategy_class, admitted_resume_series
+                )
         t0 = time.perf_counter()
         params = params or {}
         self.callbacks = callbacks or BacktestCallbacks()
@@ -248,6 +257,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             series,
             t0,
             resume_state,
+            admitted_tick_schedule=admitted_tick_schedule,
         )
 
     def process_next_bar(

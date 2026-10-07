@@ -28,11 +28,16 @@ is resolved and no pickle loader is used.
 
 The envelope has exactly `schema`, `version`, and `state` fields. Its schema is
 `backtest-engine.resume`, version is integer `1`, and serializer ID is
-`json-resume-v1`. The closed model registry contains `BacktestResumeState`,
+`json-resume-v1`. The closed model registry contains `BacktestResumeState`, `Bar`,
 `BrokerSnapshot`, `Position`, `Order`, `Fill`, `Trade`, `EquityPoint`, and
 `Diagnostic`. Each model carries a `type` tag and all its `fields`; unknown or
 missing fields and types are rejected. User mappings have a separate `mapping`
 wrapper, so an ordinary user key named `type` never selects a model.
+`Finality` has its own fixed enum tag and only the statically imported `OPEN` and
+`FINAL` values. `Bar` requires all fields, exact integer timestamps, finite OHLCV,
+valid high/low bounds, nonnegative optional volume, and ordered optional close
+time. These additive tags are rejected by older readers that do not know them;
+the envelope version and existing native bar wire format remain unchanged.
 
 Admission rejects duplicate JSON keys, non-finite numbers, scalar coercions such
 as bool quantities or floating-point indices, invalid enums, incomplete nested
@@ -58,6 +63,10 @@ comparisons until public admission; those checks run before reset for both stric
 and lenient consumers. Strict restore binds the mark tick to the consumer's actual
 effective tick, including inference when `config.mintick` is absent, rather than
 using the checkpoint's own tick as its identity anchor.
+With `mintick=None`, adding more precise future prices can change inferred tick
+size and therefore reject strict continuation. Use an explicit stable `mintick`
+when the stream's future precision can differ. The checkpoint cannot choose its
+own rounding anchor to bypass that check.
 History checks compare bounded input lengths/iterators;
 an untrusted cursor never allocates an expected array of that cursor's size.
 
@@ -77,6 +86,45 @@ rejected.
 
 `JsonStateSerializer` remains the compatible primitive `json-v1` serializer; its
 dataclass mappings do not become typed restore checkpoints automatically. Existing
-in-memory typed resume remains available. Realtime tick snapshots, foreign
-execution backends, full-job atomic cuts, and protected-worker orchestration are
-outside this codec's native committed-bar scope.
+in-memory typed resume remains available.
+
+Committed explicit-tick restore is also available for callers that supply trusted
+owners with complete pure preflight. The checkpoint must carry
+`metadata.realtime_resume_boundary="committed-parent-bar-v1"`, a committed input
+cursor, runtime and strategy state, and the processed tick schedule fingerprint.
+The exporter stamps this boundary only outside an active tick/bar attempt.
+Public bytes restore requires strict policy and explicit list/tuple `Tick` input;
+provider-driven streams and provisional tick snapshots are not admitted.
+
+The strategy class declares `realtime_resume_runtime = "config"`. Both that class
+and the configured runtime class implement a static or class method:
+
+```python
+@staticmethod
+def validate_resume_state(state, *, bar_index, committed_bar):
+    # Fully check this owner's closed state schema, mandatory typed slots,
+    # committed cursor/bar identity and any late nested fields; raise on failure.
+    # Return None without mutating an owner or constructing/restoring live state.
+    ...
+```
+
+These are trusted application methods, selected from classes already supplied by
+the caller. JSON cannot select a class, add a validator, or import a module. The
+engine passes detached state to preflight before reset, baseline export/restore,
+strategy construction or callbacks. It does not infer a runtime schema from user
+mapping keys. An owner without this explicit contract fails closed. A successful
+preflight must guarantee the owner's restore accepts the admitted schema; the
+existing restore rollback path still handles unexpected owner restore errors.
+
+The consumer verifies config, effective tick, accounting and bar prefix before
+owner preflight, freezes the explicit tick input, verifies native OHLCV schedule
+reconstruction and the processed tick prefix, then reuses that schedule once for
+execution. Unknown/partial schemas, generic mappings in required typed slots,
+provisional/abort state forbidden by the owner, and late nested corruption are
+rejected before live state changes.
+
+Foreign generated checkpoints remain owned by their existing generated-session
+and PineLib checkpoint admission code. This codec does not fork those schemas or
+admit them merely because their contents are primitive mappings. Foreign
+execution backends, full-job atomic cuts, and protected-worker orchestration
+remain outside this bounded native scope.

@@ -9,6 +9,7 @@ from typing import Any, Literal
 from backtest_engine.context import StrategyContext
 from backtest_engine.core.protocol_boundary import emit_protocol_bar_commit
 from backtest_engine.core.realtime import (
+    BarTickSlice,
     realtime_tick_schedule_fingerprint,
     resolve_realtime_tick_schedule,
 )
@@ -36,10 +37,16 @@ def run_realtime_strategy(
     series: BarSeries,
     t0: float,
     resume_state: BacktestResumeState | None,
+    *,
+    admitted_schedule: tuple[BarTickSlice, ...] | None = None,
 ) -> BacktestResult:
     """Replay complete explicit tick streams, committing each parent bar once."""
 
-    schedule = resolve_realtime_tick_schedule(engine.config, series)
+    schedule = (
+        resolve_realtime_tick_schedule(engine.config, series)
+        if admitted_schedule is None
+        else admitted_schedule
+    )
     engine._realtime_tick_schedule = schedule
     engine._realtime_tick_schedule_fingerprint = realtime_tick_schedule_fingerprint(
         schedule

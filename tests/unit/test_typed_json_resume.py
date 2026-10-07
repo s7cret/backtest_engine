@@ -596,6 +596,42 @@ def test_consistently_forged_inferred_mark_tick_rejected_before_reset(monkeypatc
     )
 
 
+@pytest.mark.parametrize("mintick", [None, 1])
+def test_finer_future_prices_require_matching_effective_tick_or_explicit_stable_tick(
+    mintick, monkeypatch
+):
+    config, bars = inputs(
+        [(100, 100, 100, 100), (100, 101, 97, 100), (100, 101, 89, 100.1)],
+        mintick=mintick,
+    )
+    producer = BacktestEngine(config)
+    cut = producer.run(FixedOcaStrategy, bars=bars[:2])
+    assert observe(producer) == CUT_EXPECTED
+    payload = JsonResumeStateSerializer().dumps(cut.resume_state)
+    consumer = BacktestEngine(config)
+    if mintick is None:
+        owners = consumer.position, consumer.orders, consumer.fills, consumer.callbacks
+
+        def forbidden_reset():
+            raise AssertionError("changed inferred tick reached reset")
+
+        monkeypatch.setattr(consumer, "_reset_state", forbidden_reset)
+        with pytest.raises(ResumeUnsupportedError, match="accounting context"):
+            consumer.run(FixedOcaStrategy, bars=bars, resume_state=payload)
+        assert all(
+            old is new
+            for old, new in zip(
+                owners,
+                (consumer.position, consumer.orders, consumer.fills, consumer.callbacks),
+                strict=True,
+            )
+        )
+    else:
+        result = consumer.run(FixedOcaStrategy, bars=bars, resume_state=payload)
+        assert result.status == "completed", result.errors
+        assert observe(consumer) == CONTINUATION_EXPECTED
+
+
 @pytest.mark.parametrize("origin", ["pruned", "forced", "margin"])
 def test_unknown_fill_identity_still_rejected_for_each_permitted_history_origin(
     origin, monkeypatch
