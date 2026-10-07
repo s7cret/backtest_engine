@@ -48,14 +48,14 @@ def run_realtime_strategy(
         else admitted_schedule
     )
     engine._realtime_tick_schedule = schedule
-    engine._realtime_tick_schedule_fingerprint = realtime_tick_schedule_fingerprint(
-        schedule
-    )
+    engine._realtime_tick_schedule_fingerprint = realtime_tick_schedule_fingerprint(schedule)
     if resume_state is not None:
         prevalidate_strict_resume_before_external_state(engine, resume_state)
     ctx = StrategyContext(engine.config, engine.state)
     outer_runtime = engine.config.runtime
-    _prepare_runtime_for_run(engine, outer_runtime)
+    strategy_owned = getattr(strategy_class, "realtime_resume_runtime", None) == "strategy"
+    if not strategy_owned:
+        _prepare_runtime_for_run(engine, outer_runtime)
     try:
         strategy = strategy_class(params=params, runtime=outer_runtime, ctx=ctx)
     except TypeError:
@@ -63,7 +63,7 @@ def run_realtime_strategy(
         strategy.ctx = ctx
     script_runtime = getattr(strategy, "_pine_runtime", outer_runtime)
     _require_rollback_state(strategy, script_runtime)
-    if script_runtime is not outer_runtime:
+    if not strategy_owned and script_runtime is not outer_runtime:
         _prepare_runtime_for_run(engine, script_runtime)
 
     start_index = 0
@@ -100,7 +100,8 @@ def run_realtime_strategy(
                 volume=0.0,
                 time_close=parent.time_close,
             )
-            _begin_realtime_bar(script_runtime, initial, i)
+            if not strategy_owned:
+                _begin_realtime_bar(script_runtime, initial, i)
             engine._begin_realtime_script_bar(strategy, script_runtime)
 
             for tick_index, tick in enumerate(tick_slice.ticks):
@@ -116,9 +117,7 @@ def run_realtime_strategy(
                 )
                 current = engine._prepare_realtime_strategy_invocation(strategy)
                 fill_bar = _tick_fill_bar(parent, tick)
-                engine._process_bar_fills(
-                    strategy, ctx, fill_bar, i, tick_phase=tick_phase
-                )
+                engine._process_bar_fills(strategy, ctx, fill_bar, i, tick_phase=tick_phase)
 
                 # A fill recalculation has its own rollback.  The ordinary tick
                 # execution starts from the same committed prior-bar state.
@@ -130,13 +129,17 @@ def run_realtime_strategy(
                 # scan, and are therefore first eligible on the next explicit tick.
                 engine._flush(ctx, current, i, recalc_after_fill=True)
 
-                if (
-                    tick_index == len(tick_slice.ticks) - 1
-                    and engine.config.process_orders_on_close
-                ):
-                    engine._process_bar_fills(
-                        strategy, ctx, fill_bar, i, tick_phase=tick_phase
-                    )
+                # Reuse the native closing-point scan: immediate commands can
+                # execute on this observed tick. Ordinary newly created orders
+                # stay eligible on the next tick (or configured parent close).
+                engine._process_bar_fills(
+                    strategy,
+                    ctx,
+                    fill_bar,
+                    i,
+                    close_activation_only=True,
+                    tick_phase=tick_phase,
+                )
 
             engine._update_intrabar_drawdown(parent)
             engine._update_open_profit(parent.close)
@@ -151,11 +154,7 @@ def run_realtime_strategy(
                     engine.equity,
                     engine.cash,
                     engine.position.size,
-                    (
-                        engine.position.avg_price
-                        if engine.position.direction != "flat"
-                        else None
-                    ),
+                    (engine.position.avg_price if engine.position.direction != "flat" else None),
                     engine.position.open_profit,
                     engine.position.realized_profit,
                     extremes.drawdown,
@@ -168,7 +167,11 @@ def run_realtime_strategy(
                     engine._score_equity_points.append(point)
                 engine._cb("on_equity", point)
             stop_now, status, early_reason = _early_stop_state(engine, i, extremes)
-            script_runtime.end_bar()
+            if not strategy_owned:
+                script_runtime.end_bar()
+            commit_bar = getattr(strategy, "_commit_bar", None)
+            if callable(commit_bar):
+                commit_bar(i)
             emit_protocol_bar_commit(engine, strategy, parent, i)
             engine._cb("on_bar_end", parent, i, engine.state)
             engine._end_realtime_script_bar()
@@ -182,11 +185,7 @@ def run_realtime_strategy(
     finalize = getattr(strategy, "_finalize", None)
     if callable(finalize):
         finalize()
-    if (
-        engine.config.force_close_on_end
-        and engine.position.direction != "flat"
-        and len(series)
-    ):
+    if engine.config.force_close_on_end and engine.position.direction != "flat" and len(series):
         engine._force_close(series.get_bar(len(series) - 1), len(series) - 1)
     engine._resume_equity_curve_history = clone_state(equity_curve or [])
     engine._last_processed_bar_index = last_processed_index
@@ -212,7 +211,8 @@ def _require_rollback_state(strategy: Any, runtime: Any) -> None:
         raise TickReplayStateError(
             "calc_on_every_tick strategy must implement export_state() and restore_state(state)"
         )
-    _require_runtime_rollback_state(runtime)
+    if getattr(strategy, "realtime_resume_runtime", None) != "strategy":
+        _require_runtime_rollback_state(runtime)
 
 
 def _require_runtime_rollback_state(runtime: Any) -> tuple[Any, Any]:

@@ -14,6 +14,7 @@ from backtest_engine.core.realtime import (
     RealtimeTickAttempt,
     RealtimeTickCommitPolicy,
     RuntimeTickUpdate,
+    cumulative_tick_bar,
 )
 from backtest_engine.core.realtime_tick_loop import (
     guarded_realtime_strategy_tick_loop_skeleton,
@@ -128,12 +129,8 @@ class EngineRealtimeMixin:
     ) -> RealtimeExecutionCheckpoint:
         """Export combined broker/runtime/strategy checkpoint for tick rollback."""
 
-        runtime_export = (
-            getattr(runtime, "export_state", None) if runtime is not None else None
-        )
-        strategy_export = (
-            getattr(strategy, "export_state", None) if strategy is not None else None
-        )
+        runtime_export = getattr(runtime, "export_state", None) if runtime is not None else None
+        strategy_export = getattr(strategy, "export_state", None) if strategy is not None else None
         runtime_state = None
         if callable(runtime_export):
             try:
@@ -148,9 +145,7 @@ class EngineRealtimeMixin:
         return RealtimeExecutionCheckpoint(
             broker_state=self._export_realtime_broker_state(),
             runtime_state=clone_state(runtime_state),
-            strategy_state=(
-                clone_state(strategy_export()) if callable(strategy_export) else None
-            ),
+            strategy_state=(clone_state(strategy_export()) if callable(strategy_export) else None),
         )
 
     def _restore_realtime_execution_checkpoint(
@@ -169,20 +164,14 @@ class EngineRealtimeMixin:
             )
         self._restore_realtime_broker_state(checkpoint.broker_state, ctx)
         if checkpoint.runtime_state is not None:
-            restore = (
-                getattr(runtime, "restore_state", None) if runtime is not None else None
-            )
+            restore = getattr(runtime, "restore_state", None) if runtime is not None else None
             if not callable(restore):
                 raise ResumeUnsupportedError(
                     "runtime_state is present but runtime does not implement restore_state(state)"
                 )
             restore(clone_state(checkpoint.runtime_state))
         if checkpoint.strategy_state is not None:
-            restore = (
-                getattr(strategy, "restore_state", None)
-                if strategy is not None
-                else None
-            )
+            restore = getattr(strategy, "restore_state", None) if strategy is not None else None
             if not callable(restore):
                 raise ResumeUnsupportedError(
                     "strategy_state is present but strategy does not implement restore_state(state)"
@@ -192,6 +181,16 @@ class EngineRealtimeMixin:
     def _begin_realtime_script_bar(self, strategy: Any, runtime: Any) -> None:
         """Capture the committed prior-bar script state used by every tick."""
 
+        self._realtime_strategy_owns_rollback = (
+            getattr(strategy, "realtime_resume_runtime", None) == "strategy"
+        )
+        if self._realtime_strategy_owns_rollback:
+            self._realtime_script_runtime = None
+            self._realtime_tick_parent = None
+            self._realtime_tick_prefix = ()
+            self._realtime_tick_is_final = False
+            return
+
         strategy_export = cast(
             Any,
             getattr(strategy, "export_realtime_state", None)
@@ -199,9 +198,7 @@ class EngineRealtimeMixin:
         )
         runtime_export = cast(Any, getattr(runtime, "export_state", None))
         self._realtime_strategy_checkpoint = clone_state(strategy_export())
-        self._realtime_runtime_checkpoint = clone_state(
-            runtime_export(include_varip=False)
-        )
+        self._realtime_runtime_checkpoint = clone_state(runtime_export(include_varip=False))
         self._realtime_script_runtime = runtime
         self._realtime_tick_parent = None
         self._realtime_tick_prefix = ()
@@ -220,6 +217,13 @@ class EngineRealtimeMixin:
     def _prepare_realtime_strategy_invocation(self, strategy: Any) -> Any:
         """Rollback ordinary state, preserve varip, then rebuild cumulative OHLC."""
 
+        parent = cast(Any, self._realtime_tick_parent)
+        ticks = cast(tuple[Any, ...], self._realtime_tick_prefix)
+        if self._realtime_strategy_owns_rollback:
+            # The admitted strategy's callback transaction owns ordinary/varip
+            # rollback. A full committed checkpoint must never be restored here.
+            return cumulative_tick_bar(parent, ticks)
+
         runtime = cast(Any, self._realtime_script_runtime)
         strategy_restore = cast(
             Any,
@@ -230,7 +234,6 @@ class EngineRealtimeMixin:
         runtime.restore_state(clone_state(self._realtime_runtime_checkpoint))
         parent = cast(Any, self._realtime_tick_parent)
         ticks = cast(tuple[Any, ...], self._realtime_tick_prefix)
-        current = parent
         update = getattr(runtime, "update_realtime_tick", None)
         if not callable(update):
             raise ResumeUnsupportedError(
@@ -245,17 +248,7 @@ class EngineRealtimeMixin:
                     is_final=self._realtime_tick_is_final and index == len(ticks) - 1,
                 )
             )
-        prices = [tick.price for tick in ticks]
-        current = type(parent)(
-            time=parent.time,
-            open=parent.open,
-            high=max(prices),
-            low=min(prices),
-            close=prices[-1],
-            volume=sum(float(tick.volume or 0.0) for tick in ticks),
-            time_close=parent.time_close,
-        )
-        return current
+        return cumulative_tick_bar(parent, ticks)
 
     def _end_realtime_script_bar(self) -> None:
         for name in (
@@ -265,6 +258,7 @@ class EngineRealtimeMixin:
             "_realtime_tick_parent",
             "_realtime_tick_prefix",
             "_realtime_tick_is_final",
+            "_realtime_strategy_owns_rollback",
         ):
             if hasattr(self, name):
                 delattr(self, name)

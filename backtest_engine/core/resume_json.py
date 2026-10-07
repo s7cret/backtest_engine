@@ -311,9 +311,18 @@ def _validate_state(state: BacktestResumeState) -> None:
     if "realtime_tick_schedule_fingerprint" in state.metadata:
         if state.metadata.get("realtime_resume_boundary") != "committed-parent-bar-v1":
             _fail("tick resume needs a committed parent-bar boundary")
-        if cursor < 0 or state.runtime_state is None or state.strategy_state is None:
+        owner = state.metadata.get("realtime_runtime_owner")
+        if owner not in (None, "strategy-checkpoint-v1"):
+            _fail("unknown committed tick runtime owner")
+        if owner == "strategy-checkpoint-v1" and state.runtime_state is not None:
+            _fail("strategy-owned tick checkpoint cannot duplicate runtime_state")
+        if (
+            cursor < 0
+            or state.strategy_state is None
+            or (owner is None and state.runtime_state is None)
+        ):
             _fail("committed tick resume needs cursor, runtime_state and strategy_state")
-    elif "realtime_resume_boundary" in state.metadata:
+    elif "realtime_resume_boundary" in state.metadata or "realtime_runtime_owner" in state.metadata:
         _fail("tick boundary is missing its schedule fingerprint")
     broker = cast(BrokerSnapshot, state.broker_state)
     validate_snapshot_risk(broker)

@@ -24,6 +24,20 @@ class BarTickSlice:
     ticks: tuple[Tick, ...]
 
 
+def cumulative_tick_bar(parent: Bar, ticks: tuple[Tick, ...]) -> Bar:
+    """Rebuild the callback's OHLCV from the admitted explicit tick prefix."""
+    prices = [tick.price for tick in ticks]
+    return Bar(
+        time=parent.time,
+        open=parent.open,
+        high=max(prices),
+        low=min(prices),
+        close=prices[-1],
+        volume=sum(float(tick.volume or 0.0) for tick in ticks),
+        time_close=parent.time_close,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RealtimeTickAttempt:
     """One guarded realtime tick attempt checkpoint.
@@ -55,9 +69,7 @@ class RealtimeTickCommitPolicy:
     allow_intrabar_order_fills: bool = False
     intrabar_order_fill_oracle_proof: Mapping[str, object] | None = None
 
-    def action_for(
-        self, tick_index: int, total_ticks: int
-    ) -> Literal["discard", "commit_final"]:
+    def action_for(self, tick_index: int, total_ticks: int) -> Literal["discard", "commit_final"]:
         if self.commit_final_tick and total_ticks > 0 and tick_index == total_ticks - 1:
             return "commit_final"
         return "discard"
@@ -107,8 +119,7 @@ def validate_realtime_order_fill_oracle_proof(
     missing = [key for key in required_true if proof.get(key) is not True]
     if missing:
         raise ConfigError(
-            "TradingView intrabar order/fill oracle proof is incomplete: "
-            + ", ".join(missing)
+            "TradingView intrabar order/fill oracle proof is incomplete: " + ", ".join(missing)
         )
 
 
@@ -126,35 +137,25 @@ def _as_ticks(ticks: Iterable[Tick]) -> list[Tick]:
     out = list(ticks)
     for index, tick in enumerate(out):
         if not isinstance(tick, Tick):
-            raise ConfigError(
-                f"realtime_ticks[{index}] must be a Tick instance"
-            )
+            raise ConfigError(f"realtime_ticks[{index}] must be a Tick instance")
         if isinstance(tick.time, bool) or not isinstance(tick.time, int):
             raise ConfigError(f"realtime_ticks[{index}].time must be an integer")
         for field_name in ("price", "volume", "bid", "ask"):
             value = getattr(tick, field_name)
             if value is None:
                 if field_name == "price":
-                    raise ConfigError(
-                        f"realtime_ticks[{index}].price must be finite"
-                    )
+                    raise ConfigError(f"realtime_ticks[{index}].price must be finite")
                 continue
             canonical = _canonical_price(value)
             if canonical is None:
-                raise ConfigError(
-                    f"realtime_ticks[{index}].{field_name} must be finite"
-                )
+                raise ConfigError(f"realtime_ticks[{index}].{field_name} must be finite")
             if field_name == "volume" and canonical < 0:
-                raise ConfigError(
-                    f"realtime_ticks[{index}].volume must be non-negative"
-                )
+                raise ConfigError(f"realtime_ticks[{index}].volume must be non-negative")
         if tick.bid is not None and tick.ask is not None:
             bid = _canonical_price(tick.bid)
             ask = _canonical_price(tick.ask)
             if bid is not None and ask is not None and bid > ask:
-                raise ConfigError(
-                    f"realtime_ticks[{index}] bid must be less than or equal to ask"
-                )
+                raise ConfigError(f"realtime_ticks[{index}] bid must be less than or equal to ask")
     for prev, cur in zip(out, out[1:], strict=False):
         if cur.time < prev.time:
             raise ConfigError("realtime_ticks must be sorted by non-decreasing time")
@@ -189,17 +190,13 @@ def build_bar_tick_schedule(
             end = None
 
         if end is not None and end < bar.time:
-            raise ConfigError(
-                "bar time_close must be greater than or equal to bar time"
-            )
+            raise ConfigError("bar time_close must be greater than or equal to bar time")
 
         assigned: list[Tick] = []
         while tick_i < n_ticks:
             tick = tick_list[tick_i]
             if tick.time < bar.time:
-                raise ConfigError(
-                    "realtime_ticks contain a tick before the current bar window"
-                )
+                raise ConfigError("realtime_ticks contain a tick before the current bar window")
             if end is not None and tick.time >= end:
                 break
             assigned.append(tick)
@@ -231,9 +228,7 @@ def resolve_realtime_tick_schedule(
             last = series.get_bar(len(series) - 1)
             end = int(last.time_close if last.time_close is not None else last.time)
             try:
-                source = get_ticks(
-                    config.symbol, config.timeframe, int(series.time[0]), end
-                )
+                source = get_ticks(config.symbol, config.timeframe, int(series.time[0]), end)
             except Exception as exc:
                 raise TickReplayDataError(
                     f"realtime_tick_provider.get_ticks failed: {type(exc).__name__}: {exc}"
