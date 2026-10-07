@@ -86,6 +86,16 @@ class PartialBracket(FixedOcaStrategy):
             self.ctx.exit("X", "L", profit=5, qty=1)
 
 
+class NativeDustClose(FixedOcaStrategy):
+    def run_bar(self, bar, index):
+        if index == 0:
+            self.ctx.entry("L", "long", qty=1)
+        if index == 1:
+            self.ctx.close("L", qty=0.99999995, immediately=True)
+        if index == 2:
+            self.ctx.entry("After", "long", qty=2)
+
+
 def inputs(values=None, **options):
     values = values or [(100, 100, 100, 100), (100, 101, 97, 100), (100, 101, 89, 100)]
     bars = [
@@ -449,6 +459,141 @@ def test_legacy_complete_native_checkpoint_without_accounting_metadata_still_res
     result = engine.run(FixedOcaStrategy, bars=bars, resume_state=json.dumps(envelope).encode())
     assert result.status == "completed", result.errors
     assert observe(engine) == CONTINUATION_EXPECTED
+
+
+def legacy_dust_checkpoint():
+    config, bars = inputs(
+        [(100, 100, 100, 100)] * 3,
+        qty_step=0.1,
+        qty_rounding="none",
+        process_orders_on_close=True,
+    )
+    producer = BacktestEngine(config)
+    cut = producer.run(NativeDustClose, bars=bars[:2])
+    assert cut.status == "completed", cut.errors
+    assert [(fill.order_id, fill.qty) for fill in producer.fills] == [
+        ("L", 1),
+        ("L", 0.99999995),
+    ]
+    assert producer.position.size == 0 and producer.position.direction == "flat"
+    assert producer.open_trades == []
+    assert producer.closed_trades[0].entry_qty == 1
+    assert producer.closed_trades[0].qty == 0.99999995
+    assert producer.cash == producer.equity == 100000
+    wire = json.loads(JsonResumeStateSerializer().dumps(cut.resume_state))
+    del wire["state"]["fields"]["metadata"]["items"]["native_accounting"]
+    return config, bars, wire
+
+
+def test_legacy_native_dust_roundtrip_and_continuation():
+    config, bars, wire = legacy_dust_checkpoint()
+    codec = JsonResumeStateSerializer()
+    payload = codec.dumps(codec.loads(json.dumps(wire).encode()))
+    consumer = BacktestEngine(config)
+    result = consumer.run(NativeDustClose, bars=bars, resume_state=payload)
+    assert result.status == "completed", result.errors
+    assert [(fill.order_id, fill.qty) for fill in consumer.fills] == [
+        ("L", 1),
+        ("L", 0.99999995),
+        ("After", 2),
+    ]
+    assert consumer.position.size == 2 and consumer.position.avg_price == 100
+    assert consumer.cash == consumer.equity == 100000
+    assert [(trade.entry_id, trade.qty) for trade in consumer.open_trades] == [("After", 2)]
+    assert [(trade.qty, trade.profit) for trade in consumer.closed_trades] == [(0.99999995, 0)]
+    assert [(point.bar_index, point.equity) for point in consumer._resume_equity_curve_history] == [
+        (0, 100000),
+        (1, 100000),
+        (2, 100000),
+    ]
+
+
+@pytest.mark.parametrize("policy", ["strict", "lenient"])
+@pytest.mark.parametrize("fault", ["flat-quantity", "allocation", "identity", "average", "equity"])
+def test_legacy_dust_still_rejects_forged_ledger_before_reset(policy, fault, monkeypatch):
+    config, bars, wire = legacy_dust_checkpoint()
+    broker = wire["state"]["fields"]["broker_state"]["fields"]
+    if fault == "flat-quantity":
+        broker["fills"][1]["fields"]["qty"] = 0.9
+    elif fault == "allocation":
+        broker["closed_trades"][0]["fields"]["entry_qty"] = 2
+    elif fault == "identity":
+        broker["fills"][1]["fields"]["order_id"] = "forged"
+    elif fault == "average":
+        broker["position"]["fields"]["avg_price"] = 100
+    else:
+        broker["equity"] = 100001
+    consumer = BacktestEngine(replace(config, resume_validation_policy=policy))
+    before = consumer.position, consumer.orders, consumer.fills, consumer.callbacks
+
+    def forbidden_reset():
+        raise AssertionError("forged legacy ledger reached reset")
+
+    monkeypatch.setattr(consumer, "_reset_state", forbidden_reset)
+    with pytest.raises(ResumeUnsupportedError):
+        consumer.run(NativeDustClose, bars=bars, resume_state=json.dumps(wire).encode())
+    assert all(
+        old is new
+        for old, new in zip(
+            before,
+            (consumer.position, consumer.orders, consumer.fills, consumer.callbacks),
+            strict=True,
+        )
+    )
+
+
+@pytest.mark.parametrize("bar_count", [2, 3])
+def test_legitimate_inferred_mark_tick_restore_and_continuation(bar_count):
+    config, bars = inputs(mintick=None)
+    producer = BacktestEngine(config)
+    cut = producer.run(FixedOcaStrategy, bars=bars[:2])
+    assert cut.status == "completed", cut.errors
+    assert cut.resume_state.metadata["native_accounting"]["mintick"] == 1
+    consumer = BacktestEngine(config)
+    result = consumer.run(
+        FixedOcaStrategy,
+        bars=bars[:bar_count],
+        resume_state=JsonResumeStateSerializer().dumps(cut.resume_state),
+    )
+    assert result.status == "completed", result.errors
+    assert observe(consumer) == (CUT_EXPECTED if bar_count == 2 else CONTINUATION_EXPECTED)
+
+
+def test_consistently_forged_inferred_mark_tick_rejected_before_reset(monkeypatch):
+    config, bars = inputs(mintick=None)
+    producer = BacktestEngine(config)
+    cut = producer.run(FixedOcaStrategy, bars=bars[:2])
+    assert observe(producer) == CUT_EXPECTED
+    wire = json.loads(JsonResumeStateSerializer().dumps(cut.resume_state))
+    wire["state"]["fields"]["metadata"]["items"]["native_accounting"]["items"]["mintick"] = 3
+    broker = wire["state"]["fields"]["broker_state"]["fields"]
+    broker["position"]["fields"]["open_profit"] = 1
+    broker["equity"] = 100001
+    point = wire["state"]["fields"]["statistics_state"]["items"]["equity_curve"][1]["fields"]
+    point["open_profit"] = 1
+    point["equity"] = 100001
+    payload = json.dumps(wire).encode()
+    assert JsonResumeStateSerializer().loads(payload).broker_state.equity == 100001
+    consumer = BacktestEngine(config)
+    assert consumer.run(FixedOcaStrategy, bars=bars[:2]).status == "completed"
+    before = observe(consumer)
+    owners = consumer.position, consumer.orders, consumer.fills, consumer.callbacks
+
+    def forbidden_reset():
+        raise AssertionError("forged inferred tick reached reset")
+
+    monkeypatch.setattr(consumer, "_reset_state", forbidden_reset)
+    with pytest.raises(ResumeUnsupportedError, match="accounting context"):
+        consumer.run(FixedOcaStrategy, bars=bars[:2], resume_state=payload)
+    assert observe(consumer) == before
+    assert all(
+        old is new
+        for old, new in zip(
+            owners,
+            (consumer.position, consumer.orders, consumer.fills, consumer.callbacks),
+            strict=True,
+        )
+    )
 
 
 @pytest.mark.parametrize("origin", ["pruned", "forced", "margin"])

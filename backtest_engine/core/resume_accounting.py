@@ -28,12 +28,14 @@ def _same(actual: float, expected: float, label: str, *, tolerance: float = 1e-1
         _fail(label + " does not match the native ledger")
 
 
-def validate_broker_ledger(broker: BrokerSnapshot, *, qty_epsilon: float) -> None:
+def validate_broker_ledger(broker: BrokerSnapshot, *, qty_epsilon: float | None) -> None:
     """Terminal orders may be omitted; every fill still needs a durable trade link.
 
     Opening lots retain entry_fill_index after partial closes and order pruning.
     Closing allocations retain exit order/bar/time/price. Group identical closing
     identities because repeated native fills can legally share that identity.
+    Legacy payloads do not declare their dust threshold: None defers only those
+    quantity comparisons until public admission supplies the consuming config.
     """
     entries = [0.0] * len(broker.fills)
     originals: dict[int, float] = {}
@@ -60,7 +62,7 @@ def validate_broker_ledger(broker: BrokerSnapshot, *, qty_epsilon: float) -> Non
             key = (trade.exit_id, trade.exit_bar_index, trade.exit_time, trade.exit_price)
             exits[key] += trade.qty
     for index, quantity in enumerate(entries):
-        if index in originals:
+        if index in originals and qty_epsilon is not None:
             _same(
                 quantity, originals[index], "opening lot quantity allocation", tolerance=qty_epsilon
             )
@@ -74,7 +76,8 @@ def validate_broker_ledger(broker: BrokerSnapshot, *, qty_epsilon: float) -> Non
         sign = 1 if fill.side == "buy" else -1
         signed_position += sign * fill.qty
         if fill.position_direction_after == "flat":
-            _same(signed_position, 0.0, "flat fill quantity", tolerance=qty_epsilon)
+            if qty_epsilon is not None:
+                _same(signed_position, 0.0, "flat fill quantity", tolerance=qty_epsilon)
             signed_position = 0.0  # Native accounting discards only its configured dust.
         elif (fill.position_direction_after == "long" and signed_position <= 0) or (
             fill.position_direction_after == "short" and signed_position >= 0
@@ -84,7 +87,7 @@ def validate_broker_ledger(broker: BrokerSnapshot, *, qty_epsilon: float) -> Non
         key = (fill.order_id, fill.bar_index, fill.time, fill.price)
         opening = entries[index]
         closing = max(0.0, fill.qty - opening)
-        if opening > fill.qty + qty_epsilon:
+        if qty_epsilon is not None and opening > fill.qty + qty_epsilon:
             _fail("trade opening allocations exceed their fill")
         if opening:
             expected_direction = "long" if sign > 0 else "short"
@@ -95,10 +98,14 @@ def validate_broker_ledger(broker: BrokerSnapshot, *, qty_epsilon: float) -> Non
         closing_capacity[key] += closing
     if set(exits) - set(closing_capacity):
         _fail("closed trade refers to an unknown closing fill")
-    for key, quantity in closing_capacity.items():
-        _same(
-            exits.get(key, 0.0), quantity, "closing fill quantity allocation", tolerance=qty_epsilon
-        )
+    if qty_epsilon is not None:
+        for key, quantity in closing_capacity.items():
+            _same(
+                exits.get(key, 0.0),
+                quantity,
+                "closing fill quantity allocation",
+                tolerance=qty_epsilon,
+            )
     _same(broker.position.size, signed_position, "position signed fill quantity")
     if broker.position.direction != direction:
         _fail("position direction differs from the final fill")
@@ -106,9 +113,13 @@ def validate_broker_ledger(broker: BrokerSnapshot, *, qty_epsilon: float) -> Non
     if any(trade.direction != broker.position.direction for trade in lots):
         _fail("open trade direction differs from position")
     quantity = sum(trade.qty for trade in lots)
-    _same(
-        abs(broker.position.size), quantity, "position open trade quantity", tolerance=qty_epsilon
-    )
+    if qty_epsilon is not None:
+        _same(
+            abs(broker.position.size),
+            quantity,
+            "position open trade quantity",
+            tolerance=qty_epsilon,
+        )
     average = sum(trade.entry_price * trade.qty for trade in lots) / quantity if quantity else 0.0
     _same(broker.position.avg_price, average, "position average price")
     _same(broker.equity, broker.cash + broker.position.open_profit, "broker equity")

@@ -15,6 +15,7 @@ from typing import Any, Literal, NoReturn, Union, cast, get_args, get_origin, ge
 
 from backtest_engine.context.command_buffer import ExitPayload
 from backtest_engine.config import BacktestConfig
+from backtest_engine.core.position_accounting import quantity_epsilon
 from backtest_engine.core.resume_state import (
     _STRICT_STATISTICS_COUNTS,
     _STRICT_STATISTICS_LISTS,
@@ -356,7 +357,7 @@ def _validate_state(state: BacktestResumeState) -> None:
         if "native_accounting" in state.metadata
         else None
     )
-    validate_broker_ledger(broker, qty_epsilon=accounting.qty_epsilon if accounting else 1e-12)
+    validate_broker_ledger(broker, qty_epsilon=accounting.qty_epsilon if accounting else None)
     statistics = _validate_strict_statistics_state(state, label="typed JSON resume")
     if set(statistics) != {
         *_STRICT_STATISTICS_LISTS,
@@ -415,6 +416,9 @@ def admit_resume_input(
         _fail("bar_index must reference an available input bar")
     if "native_accounting" not in state.metadata:
         legacy_statistics = cast(dict[str, Any], state.statistics_state)
+        validate_broker_ledger(
+            cast(BrokerSnapshot, state.broker_state), qty_epsilon=quantity_epsilon(config)
+        )
         validate_broker_values(
             cast(BrokerSnapshot, state.broker_state),
             config,
@@ -431,13 +435,11 @@ def admit_resume_input(
         expected = read_accounting_inputs(
             native_accounting_inputs(
                 config,
-                accounting.mintick,
+                mark_tick,
                 series.close[state.bar_index] if state.bar_index >= 0 else None,
             )
         )
-        if accounting != expected or (
-            config.mintick is not None and accounting.mintick != config.mintick
-        ):
+        if accounting != expected:
             _fail("accounting context does not match config/input identity")
     fingerprint = state.metadata.get("bar_prefix_fingerprint")
     if fingerprint is None:

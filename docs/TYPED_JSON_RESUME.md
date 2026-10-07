@@ -52,7 +52,13 @@ New exports include a closed `engine-accounting-v1` context under the reserved
 `metadata.native_accounting` key. It carries producer accounting parameters and
 the committed mark, and strict public restore binds it to the current config and
 bar prefix. Complete legacy checkpoints without this context are checked against
-the consuming config. History checks compare bounded input lengths/iterators;
+the consuming config, including its native dust threshold. Without that context,
+decoding retains structural ledger checks and defers only dust-dependent quantity
+comparisons until public admission; those checks run before reset for both strict
+and lenient consumers. Strict restore binds the mark tick to the consumer's actual
+effective tick, including inference when `config.mintick` is absent, rather than
+using the checkpoint's own tick as its identity anchor.
+History checks compare bounded input lengths/iterators;
 an untrusted cursor never allocates an expected array of that cursor's size.
 
 For bytes passed to `BacktestEngine.run`, decoding and complete payload admission
