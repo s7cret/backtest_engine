@@ -145,13 +145,53 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         params: dict | None = None,
         bars: BarSeries | list[Bar] | None = None,
         callbacks: BacktestCallbacks | None = None,
-        resume_state: BacktestResumeState | None = None,
+        resume_state: BacktestResumeState | bytes | None = None,
         effective_pre_bars: int | None = None,
         execution_backend: Any | None = None,
         runtime_kwargs: dict[str, Any] | None = None,
         execution_context: dict[str, Any] | None = None,
         bar_envelopes: list[dict[str, Any]] | None = None,
     ) -> BacktestResult:
+        resolved_resume_series = None
+        if isinstance(resume_state, bytes):
+            from copy import copy
+
+            from backtest_engine.core.engine_realtime import config_snapshot_hash
+            from backtest_engine.core.resume_json import JsonResumeStateSerializer, admit_resume_input
+            from backtest_engine.errors import ResumeUnsupportedError
+
+            resume_state = JsonResumeStateSerializer().loads(resume_state)
+            if (
+                execution_backend is not None
+                or self.config.calc_on_every_tick
+                or "realtime_tick_schedule_fingerprint" in resume_state.metadata
+            ):
+                raise ResumeUnsupportedError(
+                    "typed JSON resume supports native committed bar state; "
+                    "foreign/realtime execution needs its owner codec"
+                )
+            admission_config = copy(self.config)
+            validate_backtest_config(admission_config)
+            resolved_resume_series = self._resolve_bars(bars)
+            admitted_resume_series = self._slice_range(resolved_resume_series)
+            resume_plan = build_score_window_plan(
+                series_len=len(admitted_resume_series),
+                score_start_time=self.config.score_start_time,
+                score_end_time=self.config.score_end_time,
+                effective_pre_bars=effective_pre_bars,
+            )
+            if self.config.validate_bars:
+                admitted_resume_series, _ = validate_bars(
+                    admitted_resume_series, self.config.duplicate_bar_policy
+                )
+            admit_resume_input(
+                resume_state,
+                admission_config,
+                config_snapshot_hash(admission_config),
+                admitted_resume_series,
+                resume_plan,
+                mark_tick=self.config.mintick or infer_price_tick(resolved_resume_series),
+            )
         t0 = time.perf_counter()
         params = params or {}
         self.callbacks = callbacks or BacktestCallbacks()
@@ -161,7 +201,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         from backtest_engine.core.warmup import admit_warmup_strategy
 
         admit_warmup_strategy(self.config.warmup_policy, strategy_class)
-        series = self._resolve_bars(bars)
+        series = self._resolve_bars(bars) if resolved_resume_series is None else resolved_resume_series
         self._effective_mintick = self.config.mintick or infer_price_tick(series)
         series = self._slice_range(series)
         prepare_protocol_run(self, execution_context, bar_envelopes, series)
@@ -563,6 +603,8 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             immediately=True,
         )
         self._fill(o, bar, i, bar.close, "close")
+        self._update_open_profit(bar.close)
+        self._update_state()
 
     def _update_open_profit(self, price: float) -> None:
         tick = getattr(self, "_effective_mintick", None) or self.config.mintick

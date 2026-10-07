@@ -511,6 +511,13 @@ def export_resume_state(
         1,
     )
     metadata: dict[str, Any] = {"resume_contract": "engine-broker-snapshot-v1"}
+    from backtest_engine.core.resume_accounting import native_accounting_inputs
+
+    metadata["native_accounting"] = native_accounting_inputs(
+        engine.config,
+        getattr(engine, "_effective_mintick", None) or engine.config.mintick,
+        series.close[bar_index] if series is not None and 0 <= bar_index < len(series) else None,
+    )
     if series is not None:
         metadata["bar_prefix_fingerprint"] = bar_prefix_fingerprint(series, max(0, bar_index + 1))
     tick_schedule = getattr(engine, "_realtime_tick_schedule", None)

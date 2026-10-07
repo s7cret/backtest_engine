@@ -30,6 +30,7 @@ The package is intentionally runtime-focused. It does not parse Pine, download m
 - Fill simulation and broker-like position/trade ledger ownership.
 - Commission, slippage, pyramiding, margin/risk diagnostics, and equity tracking.
 - Backtest windows, prehistory/warmup metadata, resume state, and batch execution helpers.
+- [Typed JSON resume](docs/TYPED_JSON_RESUME.md) for native committed-bar checkpoints.
 - Result export to JSON/CSV/Markdown-friendly structures.
 - TradingView comparison helpers for validating exported runs.
 
