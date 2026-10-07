@@ -10,7 +10,10 @@ from backtest_engine.context import StrategyContext, StrategyStateView
 from backtest_engine.core.engine_realtime import EngineRealtimeMixin
 from backtest_engine.core.engine_support import EngineSupportMixin
 from backtest_engine.core.engine_validation import validate_backtest_config
-from backtest_engine.core.execution_backend_adapter import run_execution_backend
+from backtest_engine.core.execution_backend_adapter import (
+    prepare_native_backend,
+    run_execution_backend,
+)
 from backtest_engine.core.fill_execution import execute_fill
 from backtest_engine.core.fill_scanner import process_bar_fills, update_trailing_order
 from backtest_engine.core.finality import admit_bars
@@ -154,24 +157,35 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
     ) -> BacktestResult:
         resolved_resume_series = None
         admitted_tick_schedule = None
-        if isinstance(resume_state, bytes):
+        native_backend = callable(getattr(execution_backend, "prepare_native_execution", None))
+        native_backend_name = None
+        if isinstance(resume_state, bytes) or native_backend:
             from copy import copy
 
             from backtest_engine.core.engine_realtime import config_snapshot_hash
-            from backtest_engine.core.resume_json import JsonResumeStateSerializer, admit_resume_input
+            from backtest_engine.core.resume_json import (
+                JsonResumeStateSerializer,
+                admit_resume_input,
+            )
             from backtest_engine.errors import ResumeUnsupportedError
 
-            resume_state = JsonResumeStateSerializer().loads(resume_state)
-            if (
-                execution_backend is not None
-                or (
-                    not self.config.calc_on_every_tick
-                    and "realtime_tick_schedule_fingerprint" in resume_state.metadata
-                )
+            if isinstance(resume_state, bytes):
+                resume_state = JsonResumeStateSerializer().loads(resume_state)
+            elif resume_state is not None:
+                codec = JsonResumeStateSerializer()
+                resume_state = codec.loads(codec.dumps(resume_state))
+            if (execution_backend is not None and not native_backend) or (
+                resume_state is not None
+                and not self.config.calc_on_every_tick
+                and "realtime_tick_schedule_fingerprint" in resume_state.metadata
             ):
                 raise ResumeUnsupportedError(
                     "typed JSON resume needs a matching native bar/tick execution owner; "
                     "foreign execution needs its owner codec"
+                )
+            if native_backend and self.config.calc_on_every_tick:
+                raise ResumeUnsupportedError(
+                    "native backend preparation currently requires historical bars"
                 )
             admission_config = copy(self.config)
             validate_backtest_config(admission_config)
@@ -187,20 +201,40 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                 admitted_resume_series, _ = validate_bars(
                     admitted_resume_series, self.config.duplicate_bar_policy
                 )
-            admit_resume_input(
-                resume_state,
-                admission_config,
-                config_snapshot_hash(admission_config),
-                admitted_resume_series,
-                resume_plan,
-                mark_tick=self.config.mintick or infer_price_tick(resolved_resume_series),
-            )
-            if self.config.calc_on_every_tick:
-                from backtest_engine.core.resume_realtime import admit_realtime_resume
-
-                admitted_tick_schedule = admit_realtime_resume(
-                    resume_state, admission_config, strategy_class, admitted_resume_series
+            if resume_state is not None:
+                admit_resume_input(
+                    resume_state,
+                    admission_config,
+                    config_snapshot_hash(admission_config),
+                    admitted_resume_series,
+                    resume_plan,
+                    mark_tick=self.config.mintick or infer_price_tick(resolved_resume_series),
                 )
+                if self.config.calc_on_every_tick:
+                    from backtest_engine.core.resume_realtime import admit_realtime_resume
+
+                    admitted_tick_schedule = admit_realtime_resume(
+                        resume_state, admission_config, strategy_class, admitted_resume_series
+                    )
+            if native_backend:
+                from backtest_engine.core.state_snapshot import clone_state
+
+                prepared = prepare_native_backend(
+                    execution_backend,
+                    engine=self,
+                    strategy_class=strategy_class,
+                    params=params,
+                    series=admitted_resume_series,
+                    resume_state=clone_state(resume_state),
+                    callbacks=callbacks,
+                )
+                native_backend_name = getattr(execution_backend, "name")
+                strategy_class, params, callbacks = (
+                    prepared.strategy_class,
+                    prepared.params,
+                    prepared.callbacks,
+                )
+                execution_backend = None
         t0 = time.perf_counter()
         params = params or {}
         self.callbacks = callbacks or BacktestCallbacks()
@@ -210,7 +244,9 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         from backtest_engine.core.warmup import admit_warmup_strategy
 
         admit_warmup_strategy(self.config.warmup_policy, strategy_class)
-        series = self._resolve_bars(bars) if resolved_resume_series is None else resolved_resume_series
+        series = (
+            self._resolve_bars(bars) if resolved_resume_series is None else resolved_resume_series
+        )
         self._effective_mintick = self.config.mintick or infer_price_tick(series)
         series = self._slice_range(series)
         prepare_protocol_run(self, execution_context, bar_envelopes, series)
@@ -232,12 +268,9 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             series, _ = validate_bars(series, self.config.duplicate_bar_policy)
         self._execution_last_bar_index = len(series) - 1
         if self.config.use_bar_magnifier and (
-            not self.config.bar_magnifier_lower_tf
-            or self.config.bar_magnifier_bars is None
+            not self.config.bar_magnifier_lower_tf or self.config.bar_magnifier_bars is None
         ):
-            raise BarMagnifierUnavailableError(
-                "bar magnifier lower timeframe bars unavailable"
-            )
+            raise BarMagnifierUnavailableError("bar magnifier lower timeframe bars unavailable")
         if self.config.use_bar_magnifier and self.config.bar_magnifier_bars is not None:
             self._validate_supplied_bar_magnifier_bars(series)
         if execution_backend is not None:
@@ -250,7 +283,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                 effective_pre_bars or 0,
                 runtime_kwargs,
             )
-        return run_native_strategy(
+        result = run_native_strategy(
             self,
             strategy_class,
             params,
@@ -259,6 +292,9 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             resume_state,
             admitted_tick_schedule=admitted_tick_schedule,
         )
+        if native_backend_name is not None:
+            result.performance["execution_backend"] = native_backend_name
+        return result
 
     def process_next_bar(
         self,
@@ -304,9 +340,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
     def _slice_range(self, series: BarSeries) -> BarSeries:
         start = self.config.start_time
         end = self.config.end_time
-        idx = [
-            i for i, t in enumerate(series.time) if int(t) >= start and int(t) <= end
-        ]
+        idx = [i for i, t in enumerate(series.time) if int(t) >= start and int(t) <= end]
         if not idx:
             return BarSeries([], [], [], [], [], [], [], [])
         first = max(0, idx[0] - max(0, self.config.max_bars_back))
@@ -324,9 +358,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
 
     def _resolve_bars(self, bars: BarSeries | list[Bar] | None) -> BarSeries:
         if bars is None:
-            raise ProviderError(
-                "No bars supplied; load market data outside BacktestEngine"
-            )
+            raise ProviderError("No bars supplied; load market data outside BacktestEngine")
         admitted = admit_bars(bars, policy=self.config.finality_policy)
         if isinstance(admitted, BarSeries):
             return admitted
@@ -378,9 +410,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             return False
         return True
 
-    def _qty_from_args(
-        self, kw: dict, current_size: float | None, price: float
-    ) -> float:
+    def _qty_from_args(self, kw: dict, current_size: float | None, price: float) -> float:
         if kw.get("qty") is not None:
             q = float(kw["qty"])
         elif kw.get("qty_percent") is not None and current_size is not None:
@@ -409,16 +439,12 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         existing_orders = sum(
             1
             for o in self.orders
-            if o.kind == "entry"
-            and o.direction == direction
-            and o.status in ("pending", "active")
+            if o.kind == "entry" and o.direction == direction and o.status in ("pending", "active")
         )
         active = sum(1 for t in self.open_trades if t.direction == direction)
         return active + existing_orders < max_same_direction_entries
 
-    def _pending_entry_position_delta(
-        self, exclude_order: Order | None = None
-    ) -> float:
+    def _pending_entry_position_delta(self, exclude_order: Order | None = None) -> float:
         return pending_entry_position_delta(self.orders, exclude_order=exclude_order)
 
     def _risk_allows_order(
@@ -462,15 +488,9 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         self._cb("on_order_created", o)
 
     def _matching_open_trades(self, from_entry: str | None) -> list[Trade]:
-        return [
-            t
-            for t in self.open_trades
-            if from_entry is None or t.entry_id == from_entry
-        ]
+        return [t for t in self.open_trades if from_entry is None or t.entry_id == from_entry]
 
-    def _reserved_qty_by_entry(
-        self, exclude_order: Order | None = None
-    ) -> dict[str, float]:
+    def _reserved_qty_by_entry(self, exclude_order: Order | None = None) -> dict[str, float]:
         from backtest_engine.core.exit_scope import reserved_by_trade
 
         allocation = reserved_by_trade(self, exclude_order)
@@ -487,22 +507,25 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         return sum(by_entry.values()) if from_entry is None else by_entry.get(from_entry, 0.0)
 
     def _available_exit_qty(
-        self, from_entry: str | None, exclude_order: Order | None = None,
-        *, entry_fill_index: int | None = None,
+        self,
+        from_entry: str | None,
+        exclude_order: Order | None = None,
+        *,
+        entry_fill_index: int | None = None,
     ) -> float:
         from backtest_engine.core.exit_scope import matching_trades, reserved_by_trade
 
         reserved = reserved_by_trade(self, exclude_order)
-        return sum(max(0.0, trade.qty - reserved.get(id(trade), 0.0))
-                   for trade in matching_trades(self, from_entry, entry_fill_index))
+        return sum(
+            max(0.0, trade.qty - reserved.get(id(trade), 0.0))
+            for trade in matching_trades(self, from_entry, entry_fill_index)
+        )
 
     def _exit_base_price(self, from_entry: str | None) -> float:
         trades = self._matching_open_trades(from_entry)
         qty = sum(t.qty for t in trades)
         return (
-            (sum(t.entry_price * t.qty for t in trades) / qty)
-            if qty
-            else self.position.avg_price
+            (sum(t.entry_price * t.qty for t in trades) / qty) if qty else self.position.avg_price
         )
 
     def _update_trailing_order(self, o: Order, price: float) -> None:
@@ -538,17 +561,13 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
     def _maybe_margin_call(self, price: float, bar: Bar, i: int, point: str) -> bool:
         return maybe_margin_call(self, price, bar, i, point)
 
-    def _limit_fill_price(
-        self, o: Order, path_price: float, is_open_point: bool
-    ) -> float:
+    def _limit_fill_price(self, o: Order, path_price: float, is_open_point: bool) -> float:
         return limit_fill_price(self, o, path_price, is_open_point)
 
     def _price_path(self, bar: Bar) -> list[tuple[float, str]]:
         return price_path(self, bar)
 
-    def _validate_lower_timeframe_bars(
-        self, lower_series: BarSeries, parent: Bar
-    ) -> None:
+    def _validate_lower_timeframe_bars(self, lower_series: BarSeries, parent: Bar) -> None:
         """Fail closed on malformed bar-magnifier data before using intrabars."""
         validate_lower_timeframe_bars(self, lower_series, parent)
 
@@ -578,18 +597,14 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         tick = getattr(self, "_effective_mintick", None) or self.config.mintick
         mark_close = round_to_step(bar.close, tick, "nearest") if tick else bar.close
         for tr in self.open_trades:
-            tr.mfe, tr.mae, tr.max_runup, tr.max_drawdown = (
-                self._trade_excursion_values(tr, bar)
-            )
+            tr.mfe, tr.mae, tr.max_runup, tr.max_drawdown = self._trade_excursion_values(tr, bar)
             tr.profit = (
                 self.instrument.pnl(tr.entry_price, mark_close, tr.qty, tr.direction)
                 - tr.commission_entry
             )
             self._cb("on_trade_update", tr)
 
-    def _trade_excursion_values(
-        self, tr: Trade, bar: Bar
-    ) -> tuple[float, float, float, float]:
+    def _trade_excursion_values(self, tr: Trade, bar: Bar) -> tuple[float, float, float, float]:
         return trade_excursion_values(tr, bar, self.instrument)
 
     def _apply_oca(self, o: Order, bar: Bar, i: int) -> None:
@@ -637,9 +652,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
                 self.config.commission_value,
             )
             trade.profit = (
-                self.instrument.pnl(
-                    trade.entry_price, mark_price, trade.qty, trade.direction
-                )
+                self.instrument.pnl(trade.entry_price, mark_price, trade.qty, trade.direction)
                 - trade.commission_entry
                 - exit_commission
             )
@@ -670,8 +683,6 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
             favorable_equity=favorable_equity,
         )
         self.max_drawdown = max(self.max_drawdown, move.drawdown)
-        self.max_drawdown_percent = max(
-            self.max_drawdown_percent, move.drawdown_percent
-        )
+        self.max_drawdown_percent = max(self.max_drawdown_percent, move.drawdown_percent)
         self.max_runup = max(self.max_runup, move.runup)
         self.max_runup_percent = max(self.max_runup_percent, move.runup_percent)

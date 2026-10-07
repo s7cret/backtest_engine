@@ -88,6 +88,20 @@ rejected.
 dataclass mappings do not become typed restore checkpoints automatically. Existing
 in-memory typed resume remains available.
 
+A trusted caller-selected backend can implement `prepare_native_execution` for
+the historical native loop. Pass it through the existing
+`BacktestEngine.run(..., execution_backend=backend, resume_state=bytes)` API.
+The engine first applies the same typed transport, accounting, config and bar
+prefix admission as native bytes restore, then calls the backend's complete
+owner preflight with a detached typed checkpoint, the admitted series, selected
+strategy class, parameters and callbacks. It must return `PreparedNativeExecution`
+with the native strategy class, parameters and callbacks before any live reset.
+Incomplete results and owner failures reject before replacement. The prepared
+strategy uses the existing native loop and export/restore contracts. JSON cannot
+select this backend, a Python import or an alternate model registry. Execute-only
+foreign backends still reject bytes; this contract currently excludes ticks.
+It is a local owner adapter, not protected-worker or full-job resume acceptance.
+
 Committed explicit-tick restore is also available for callers that supply trusted
 owners with complete pure preflight. The checkpoint must carry
 `metadata.realtime_resume_boundary="committed-parent-bar-v1"`, a committed input
