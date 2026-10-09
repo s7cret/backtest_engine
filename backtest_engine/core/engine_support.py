@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from backtest_engine.broker.commission import calculate_commission
+from backtest_engine.broker.rounding import round_to_step
 from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext, StrategyStateView
 from backtest_engine.core.resume_state import export_resume_state, restore_resume_state
@@ -13,6 +15,7 @@ from backtest_engine.models import (
     Diagnostic,
     EquityPoint,
     Position,
+    InstrumentModel,
     Trade,
 )
 from backtest_engine.results import BacktestResult, update_equity_extremes
@@ -22,6 +25,7 @@ class EngineSupportMixin:
     config: BacktestConfig
     callbacks: BacktestCallbacks
     position: Position
+    instrument: InstrumentModel
     state: StrategyStateView
     peak_equity: float
     trough_equity: float
@@ -179,3 +183,30 @@ class EngineSupportMixin:
         self.max_runup = extremes.max_runup
         self.max_runup_percent = extremes.max_runup_percent
         return extremes
+
+    def _update_open_profit(self, price: float) -> None:
+        tick = getattr(self, "_effective_mintick", None) or self.config.mintick
+        mark_price = round_to_step(price, tick, "nearest") if tick else price
+        self.position.open_profit = (
+            0.0
+            if self.position.direction == "flat"
+            else self.instrument.pnl(
+                self.position.avg_price,
+                mark_price,
+                abs(self.position.size),
+                self.position.direction,
+            )
+        )
+        for trade in self.open_trades:
+            exit_commission = calculate_commission(
+                mark_price,
+                trade.qty,
+                self.config.commission_type,
+                self.config.commission_value,
+            )
+            trade.profit = (
+                self.instrument.pnl(trade.entry_price, mark_price, trade.qty, trade.direction)
+                - trade.commission_entry
+                - exit_commission
+            )
+        self.equity = self.cash + self.position.open_profit
