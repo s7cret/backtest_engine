@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 from typing import Any, Literal, cast
 
-from backtest_engine.broker.commission import calculate_commission
 from backtest_engine.broker.rounding import round_to_step
 from backtest_engine.config import BacktestConfig
 from backtest_engine.context import StrategyContext, StrategyStateView
@@ -79,6 +78,7 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         self._reset_state()
 
     def _reset_state(self) -> None:
+        self._realtime_strategy_owns_rollback = False
         self.position = Position()
         self.cash = self.config.initial_capital
         self.equity = self.config.initial_capital
@@ -652,32 +652,6 @@ class BacktestEngine(EngineSupportMixin, EngineRealtimeMixin):
         self._update_open_profit(bar.close)
         self._update_state()
 
-    def _update_open_profit(self, price: float) -> None:
-        tick = getattr(self, "_effective_mintick", None) or self.config.mintick
-        mark_price = round_to_step(price, tick, "nearest") if tick else price
-        self.position.open_profit = (
-            0.0
-            if self.position.direction == "flat"
-            else self.instrument.pnl(
-                self.position.avg_price,
-                mark_price,
-                abs(self.position.size),
-                self.position.direction,
-            )
-        )
-        for trade in self.open_trades:
-            exit_commission = calculate_commission(
-                mark_price,
-                trade.qty,
-                self.config.commission_type,
-                self.config.commission_value,
-            )
-            trade.profit = (
-                self.instrument.pnl(trade.entry_price, mark_price, trade.qty, trade.direction)
-                - trade.commission_entry
-                - exit_commission
-            )
-        self.equity = self.cash + self.position.open_profit
 
     def _update_intrabar_drawdown(self, bar: Bar) -> None:
         if self.position.direction == "flat" or self.position.avg_price is None:

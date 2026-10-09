@@ -38,10 +38,12 @@ class EnterThenCloseOnSameBarFill:
     def __init__(self, params, runtime, ctx):
         del params, runtime
         self.ctx = ctx
+        self.entered = False
 
     def _process_bar(self, bar: Bar, bar_index: int) -> None:
         del bar
-        if bar_index == 0 and self.ctx.state.position_size == 0:
+        if bar_index == 0 and not self.entered:
+            self.entered = True
             self.ctx.entry("L", "long", qty=1)
         elif bar_index == 0 and self.ctx.state.position_size > 0:
             self.ctx.close("L", immediately=True)
@@ -209,11 +211,12 @@ def test_close_fill_can_trigger_one_same_bar_strategy_recalculation() -> None:
     )
 
     first_bar = [item for item in callbacks_seen if item["bar_index"] == 0]
-    assert [item["recalc_iteration"] for item in first_bar] == [0, 1]
-    assert [item["projection"]["position_size"] for item in first_bar] == [0.0, 1.0]
+    assert [item["recalc_iteration"] for item in first_bar] == [0, 1, 2]
+    assert [item["projection"]["position_size"] for item in first_bar] == [0.0, 1.0, 0.0]
     assert result.closed_trades is not None
     assert result.closed_trades[0].entry_bar_index == 0
     assert result.closed_trades[0].exit_bar_index == 0
+    assert len(result.closed_trades) == 1
 
 
 def test_callback_projection_is_refreshed_after_each_broker_transition() -> None:
